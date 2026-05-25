@@ -31,6 +31,7 @@
 #include "sparse_voxel_grid.hpp"
 #include "util.hpp"
 #include <optional>
+#include <string>
 
 /** Core namespace containing LIO data structures and state definitions. */
 namespace rko_lio::core {
@@ -77,6 +78,48 @@ public:
 
     /** Minimum weight for orientation regularization. */
     double min_beta = 200;
+
+    /** Maximum delta between adjacent LiDAR scan timestamps (s).
+     *  Frames whose stamp is further than this from the previous LiDAR
+     *  state time are dropped. Default 1.0 preserves the historic check;
+     *  raise it to tolerate kidnap-style recordings with longer scan gaps. */
+    double max_scan_delta_sec = 1.0;
+
+    /** Enable recovery after kidnap-style ICP failures. */
+    bool enable_kidnap_relocalization = false;
+
+    /** If relocalization fails, start a new local map at the last known pose. */
+    bool reset_on_registration_failure = false;
+
+    /** Consecutive registration failures required before recovery is attempted. */
+    int recovery_min_failures = 1;
+
+    /** Try global relocalization at the first valid scan after dropped scans. */
+    bool relocalize_after_scan_gap = false;
+
+    /** Minimum correspondences required for a relocalization candidate. */
+    int relocalization_min_correspondences = 30;
+
+    /** Minimum inlier ratio required for a relocalization candidate. */
+    double relocalization_min_inlier_ratio = 0.10;
+
+    /** Maximum accepted mean nearest-neighbor error for relocalization. */
+    double relocalization_max_mean_error = 1.5;
+
+    /** ICP correspondence distance used only during global relocalization. */
+    double relocalization_max_correspondance_distance = 2.0;
+
+    /** Number of coarse yaw hypotheses to evaluate around each historical pose. */
+    int relocalization_yaw_samples = 24;
+
+    /** Historical pose stride for global relocalization candidates. */
+    int relocalization_pose_stride = 10;
+
+    /** Recent historical poses to skip when relocalizing. */
+    int relocalization_min_pose_separation = 50;
+
+    /** Maximum ICP iterations for each relocalization hypothesis. */
+    int relocalization_max_iterations = 15;
   };
 
   /** Configuration parameters. */
@@ -84,6 +127,9 @@ public:
 
   /** Local map as sparse voxel grid (Bonxai). */
   SparseVoxelGrid map;
+
+  /** Global sparse map used for kidnap relocalization. This map is never pruned. */
+  SparseVoxelGrid relocalization_map;
 
   /** Current LiDAR state estimate. */
   State lidar_state;
@@ -101,7 +147,9 @@ public:
   IntervalStats interval_stats;
 
   explicit LIO(const Config& config_)
-      : config(config_), map(config_.voxel_size, config_.max_range, config_.max_points_per_voxel) {}
+      : config(config_),
+        map(config_.voxel_size, config_.max_range, config_.max_points_per_voxel),
+        relocalization_map(config_.voxel_size, config_.max_range, config_.max_points_per_voxel) {}
 
   /** Add an IMU measurement expressed in the base frame. */
   void add_imu_measurement(const ImuControl& base_imu);
@@ -148,6 +196,22 @@ private:
   /** get the convenience struct with accel mag variance and local gravity estimate. */
   std::optional<AccelInfo> get_accel_info(const Sophus::SO3d& rotation_estimate, const Secondsd& time);
 
+  /** Register a recovery scan at a chosen pose and start a fresh local map. */
+  Vector3dVector recover_with_scan(const Vector3dVector& filtered_frame,
+                                   const Vector3dVector& map_update_frame,
+                                   const Secondsd& current_lidar_time,
+                                   const Sophus::SE3d& recovery_pose,
+                                   const std::string& reason);
+
+  /** Drop an unusable scan while advancing the internal LiDAR timestamp. */
+  Vector3dVector drop_failed_scan(const Secondsd& current_lidar_time, const std::string& reason);
+
+  /** Try to align the current scan against the unpruned relocalization map. */
+  std::optional<Sophus::SE3d> try_global_relocalization(const Vector3dVector& keypoints) const;
+
+  /** Update both the sliding local map and the unpruned relocalization map. */
+  void update_maps(const Vector3dVector& map_update_frame, const Sophus::SE3d& pose);
+
   /** True if odometry initialization has been completed. */
   bool _initialized = false;
 
@@ -163,5 +227,8 @@ private:
 
   /** Angular velocity of last true IMU measurement expressed in base frame. */
   Eigen::Vector3d _last_real_base_imu_ang_vel = Eigen::Vector3d::Zero();
+
+  /** Consecutive scan registration failures since the last accepted scan. */
+  int _consecutive_registration_failures = 0;
 };
 } // namespace rko_lio::core

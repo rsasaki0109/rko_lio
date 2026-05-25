@@ -42,6 +42,7 @@ struct SparseVoxelGrid {
   void RemovePointsFarFromLocation(const Eigen::Vector3d& origin);
   std::vector<Eigen::Vector3d> Pointcloud() const;
   std::tuple<Eigen::Vector3d, double> GetClosestNeighbor(const Eigen::Vector3d& query) const;
+  std::tuple<Eigen::Vector3d, double> GetClosestNeighbor(const Eigen::Vector3d& query, int voxel_search_radius) const;
 
   double voxel_size_;
   double clipping_distance_;

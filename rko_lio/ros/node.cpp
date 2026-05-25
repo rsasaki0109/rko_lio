@@ -61,7 +61,20 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LIO::Config,
                                    initialization_phase,
                                    max_expected_jerk,
                                    double_downsample,
-                                   min_beta)
+                                   min_beta,
+                                   max_scan_delta_sec,
+                                   enable_kidnap_relocalization,
+                                   reset_on_registration_failure,
+                                   recovery_min_failures,
+                                   relocalize_after_scan_gap,
+                                   relocalization_min_correspondences,
+                                   relocalization_min_inlier_ratio,
+                                   relocalization_max_mean_error,
+                                   relocalization_max_correspondance_distance,
+                                   relocalization_yaw_samples,
+                                   relocalization_pose_stride,
+                                   relocalization_min_pose_separation,
+                                   relocalization_max_iterations)
 } // namespace rko_lio::core
 
 namespace rko_lio::ros {
@@ -127,6 +140,32 @@ Node::Node(const std::string& node_name, const rclcpp::NodeOptions& options) {
   lio_config.max_expected_jerk = node->declare_parameter<double>("max_expected_jerk", lio_config.max_expected_jerk);
   lio_config.double_downsample = node->declare_parameter<bool>("double_downsample", lio_config.double_downsample);
   lio_config.min_beta = node->declare_parameter<double>("min_beta", lio_config.min_beta);
+  lio_config.max_scan_delta_sec =
+      node->declare_parameter<double>("max_scan_delta_sec", lio_config.max_scan_delta_sec);
+  lio_config.enable_kidnap_relocalization =
+      node->declare_parameter<bool>("enable_kidnap_relocalization", lio_config.enable_kidnap_relocalization);
+  lio_config.reset_on_registration_failure =
+      node->declare_parameter<bool>("reset_on_registration_failure", lio_config.reset_on_registration_failure);
+  lio_config.recovery_min_failures =
+      node->declare_parameter<int>("recovery_min_failures", lio_config.recovery_min_failures);
+  lio_config.relocalize_after_scan_gap =
+      node->declare_parameter<bool>("relocalize_after_scan_gap", lio_config.relocalize_after_scan_gap);
+  lio_config.relocalization_min_correspondences =
+      node->declare_parameter<int>("relocalization_min_correspondences", lio_config.relocalization_min_correspondences);
+  lio_config.relocalization_min_inlier_ratio =
+      node->declare_parameter<double>("relocalization_min_inlier_ratio", lio_config.relocalization_min_inlier_ratio);
+  lio_config.relocalization_max_mean_error =
+      node->declare_parameter<double>("relocalization_max_mean_error", lio_config.relocalization_max_mean_error);
+  lio_config.relocalization_max_correspondance_distance = node->declare_parameter<double>(
+      "relocalization_max_correspondance_distance", lio_config.relocalization_max_correspondance_distance);
+  lio_config.relocalization_yaw_samples =
+      node->declare_parameter<int>("relocalization_yaw_samples", lio_config.relocalization_yaw_samples);
+  lio_config.relocalization_pose_stride =
+      node->declare_parameter<int>("relocalization_pose_stride", lio_config.relocalization_pose_stride);
+  lio_config.relocalization_min_pose_separation =
+      node->declare_parameter<int>("relocalization_min_pose_separation", lio_config.relocalization_min_pose_separation);
+  lio_config.relocalization_max_iterations =
+      node->declare_parameter<int>("relocalization_max_iterations", lio_config.relocalization_max_iterations);
   lio = std::make_unique<core::LIO>(lio_config);
 
   // Timestamp processing params - lts for lidar time stamps, without having 100 char param names
@@ -301,6 +340,7 @@ void Node::registration_loop() {
     }
     core::LidarFrame frame = std::move(lidar_buffer.front());
     lidar_buffer.pop();
+    atomic_registration_active = true;
     const auto& [timestamps, scan] = frame;
     const auto& [start_stamp, end_stamp, time_vector] = timestamps;
     for (; !imu_buffer.empty() && imu_buffer.front().time < end_stamp; imu_buffer.pop()) {
@@ -335,10 +375,14 @@ void Node::registration_loop() {
           publish_lidar_accel(lio->lidar_state.linear_acceleration, end_stamp);
         }
       }
-    } catch (const std::invalid_argument& ex) {
+    } catch (const std::exception& ex) {
+      // Catch both std::invalid_argument (Keypoints=0 / Δt) and std::runtime_error
+      // (Number of correspondences=0). Both are recoverable on kidnap-style bags.
       RCLCPP_ERROR_STREAM(node->get_logger(), "Encountered error, dropping frame. Error: " << ex.what());
     }
+    atomic_registration_active = false;
   }
+  atomic_registration_active = false;
   atomic_node_running = false;
 }
 

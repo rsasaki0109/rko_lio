@@ -85,16 +85,23 @@ public:
 
   void run() {
     while (rclcpp::ok() && !bag->finished()) {
+      bool throttle_bag_reading = false;
+      size_t current_lidar_buffer_size = 0;
       {
+        std::lock_guard<std::mutex> lock(buffer_mutex);
         if (lidar_buffer.size() >= 0.9 * max_lidar_buffer_size) {
-          RCLCPP_WARN_STREAM_ONCE(node->get_logger(),
-                                  "Lidar buffer size: " << lidar_buffer.size()
-                                                        << ", max_lidar_buffer_size: " << max_lidar_buffer_size
-                                                        << ", throttling the bag reading thread as it's too fast.\n");
-          // this is a hack. can be improved
-          std::this_thread::sleep_for(std::chrono::milliseconds(50));
-          continue;
+          throttle_bag_reading = true;
+          current_lidar_buffer_size = lidar_buffer.size();
         }
+      }
+      if (throttle_bag_reading) {
+        RCLCPP_WARN_STREAM_ONCE(node->get_logger(),
+                                "Lidar buffer size: " << current_lidar_buffer_size
+                                                      << ", max_lidar_buffer_size: " << max_lidar_buffer_size
+                                                      << ", throttling the bag reading thread as it's too fast.\n");
+        // this is a hack. can be improved
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        continue;
       }
       const rosbag2_storage::SerializedBagMessage serialized_bag_msg = bag->PopNextMessage();
       const auto& topic_name = serialized_bag_msg.topic_name;
@@ -114,9 +121,11 @@ public:
     }
     while (rclcpp::ok()) {
       {
-        // even if the bag finishes, we need to wait on the registration buffers to empty
+        // Even if the bag finishes, wait until every queued LiDAR frame has
+        // either been registered or dropped. Trailing IMU messages are expected
+        // in many bags and should not keep the offline run alive forever.
         std::lock_guard<std::mutex> lock(buffer_mutex);
-        if (imu_buffer.empty() && lidar_buffer.empty()) {
+        if (lidar_buffer.empty() && !atomic_registration_active) {
           break;
         }
       }

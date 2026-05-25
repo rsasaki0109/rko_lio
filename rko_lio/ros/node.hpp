@@ -95,6 +95,7 @@ public:
   std::condition_variable sync_condition_variable;
   std::atomic<bool> atomic_node_running = true;
   std::atomic<bool> atomic_can_process = false;
+  std::atomic<bool> atomic_registration_active = false;
   std::queue<core::ImuControl> imu_buffer;
   std::queue<core::LidarFrame> lidar_buffer;
   size_t max_lidar_buffer_size = 50;

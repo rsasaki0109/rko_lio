@@ -36,8 +36,10 @@
 #include <tbb/task_arena.h>
 // stl
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <stdexcept>
 
@@ -54,7 +56,8 @@ using LinearSystem = std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double>;
 LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                                      const rko_lio::core::Vector3dVector& frame,
                                      const rko_lio::core::SparseVoxelGrid& voxel_map,
-                                     const double& max_correspondance_distance) {
+                                     const double& max_correspondance_distance,
+                                     const int voxel_search_radius = 1) {
   auto linear_system_reduce = [](LinearSystem lhs, const LinearSystem& rhs) {
     auto& [lhs_H, lhs_b, lhs_chi] = lhs;
     const auto& [rhs_H, rhs_b, rhs_chi] = rhs;
@@ -87,7 +90,7 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
         return std::transform_reduce(r.begin(), r.end(), J, linear_system_reduce, [&](const auto& point) {
           // Compute data association and linear system
           const Eigen::Vector3d transformed_point = current_pose * point;
-          const auto& [closest_neighbor, distance] = voxel_map.GetClosestNeighbor(transformed_point);
+          const auto& [closest_neighbor, distance] = voxel_map.GetClosestNeighbor(transformed_point, voxel_search_radius);
           if (distance < max_correspondance_distance) {
             correspondances_counter++;
             return linear_system_for_one_point(transformed_point, closest_neighbor);
@@ -123,7 +126,8 @@ Sophus::SE3d icp(const Vector3dVector& frame,
                  const SparseVoxelGrid& voxel_map,
                  const Sophus::SE3d& initial_guess,
                  const LIO::Config& config,
-                 const std::optional<AccelInfo>& optional_accel_info) {
+                 const std::optional<AccelInfo>& optional_accel_info,
+                 const int voxel_search_radius = 1) {
   // in case config disables it, or we don't have valid IMU information for this icp loop, beta is -1
   const double beta = (config.min_beta > 0 && optional_accel_info.has_value())
                           ? (config.min_beta * (1 + optional_accel_info->accel_mag_variance))
@@ -134,7 +138,8 @@ Sophus::SE3d icp(const Vector3dVector& frame,
   for (size_t i = 0; i < config.max_iterations; ++i) {
     const auto& [H, b, chi] = std::invoke([&]() -> LinearSystem {
       const auto& [H_icp, b_icp, chi_icp] =
-          build_icp_linear_system(current_pose, frame, voxel_map, config.max_correspondance_distance);
+          build_icp_linear_system(
+              current_pose, frame, voxel_map, config.max_correspondance_distance, voxel_search_radius);
       if (beta >= 0) {
         const auto& [H_ori, b_ori, chi_ori] =
             build_orientation_linear_system(current_pose, optional_accel_info->local_gravity_estimate);
@@ -154,6 +159,50 @@ Sophus::SE3d icp(const Vector3dVector& frame,
     }
   }
   return current_pose;
+}
+
+struct AlignmentStats {
+  int correspondences = 0;
+  double inlier_ratio = 0.0;
+  double mean_error = std::numeric_limits<double>::max();
+};
+
+AlignmentStats evaluate_alignment(const Sophus::SE3d& pose,
+                                  const Vector3dVector& frame,
+                                  const SparseVoxelGrid& voxel_map,
+                                  const double max_correspondance_distance,
+                                  const int voxel_search_radius) {
+  if (frame.empty()) {
+    return {};
+  }
+  int correspondences = 0;
+  double error_sum = 0.0;
+  for (const Eigen::Vector3d& point : frame) {
+    const Eigen::Vector3d transformed_point = pose * point;
+    const auto& [closest_neighbor, distance] = voxel_map.GetClosestNeighbor(transformed_point, voxel_search_radius);
+    (void)closest_neighbor;
+    if (distance < max_correspondance_distance) {
+      ++correspondences;
+      error_sum += distance;
+    }
+  }
+  if (correspondences == 0) {
+    return {};
+  }
+  return {
+      .correspondences = correspondences,
+      .inlier_ratio = static_cast<double>(correspondences) / static_cast<double>(frame.size()),
+      .mean_error = error_sum / static_cast<double>(correspondences),
+  };
+}
+
+int voxel_search_radius_for_distance(const SparseVoxelGrid& voxel_map, const double max_correspondance_distance) {
+  const double voxel_size = std::max(1e-6, voxel_map.voxel_size_);
+  return std::max(1, static_cast<int>(std::ceil(max_correspondance_distance / voxel_size)) + 1);
+}
+
+Sophus::SO3d yaw_rotation(const double yaw_rad) {
+  return Sophus::SO3d::exp(Eigen::Vector3d(0.0, 0.0, yaw_rad));
 }
 
 inline Sophus::SO3d align_accel_to_z_world(const Eigen::Vector3d& accel) {
@@ -241,6 +290,116 @@ std::optional<AccelInfo> LIO::get_accel_info(const Sophus::SO3d& rotation_estima
   const Eigen::Vector3d local_gravity_estimate = avg_imu_accel - mean_body_acceleration; // points upwards
 
   return AccelInfo{.accel_mag_variance = accel_mag_variance, .local_gravity_estimate = local_gravity_estimate};
+}
+
+void LIO::update_maps(const Vector3dVector& map_update_frame, const Sophus::SE3d& pose) {
+  map.Update(map_update_frame, pose);
+
+  Vector3dVector points_transformed(map_update_frame.size());
+  std::transform(map_update_frame.cbegin(), map_update_frame.cend(), points_transformed.begin(),
+                 [&](const auto& point) { return pose * point; });
+  relocalization_map.AddPoints(points_transformed);
+}
+
+Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
+                                      const Vector3dVector& map_update_frame,
+                                      const Secondsd& current_lidar_time,
+                                      const Sophus::SE3d& recovery_pose,
+                                      const std::string& reason) {
+  map.Clear();
+  lidar_state.pose = recovery_pose;
+  lidar_state.time = current_lidar_time;
+  lidar_state.velocity.setZero();
+  lidar_state.angular_velocity.setZero();
+  lidar_state.linear_acceleration.setZero();
+  _imu_local_rotation = recovery_pose.so3();
+  _imu_local_rotation_time = current_lidar_time;
+  interval_stats.reset();
+  update_maps(map_update_frame, lidar_state.pose);
+  poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  _consecutive_registration_failures = 0;
+  std::cout << "[INFO] Kidnap recovery accepted scan at " << current_lidar_time.count() << "s via " << reason
+            << ".\n";
+  return filtered_frame;
+}
+
+Vector3dVector LIO::drop_failed_scan(const Secondsd& current_lidar_time, const std::string& reason) {
+  lidar_state.time = current_lidar_time;
+  _imu_local_rotation_time = current_lidar_time;
+  interval_stats.reset();
+  std::cerr << "[WARNING] Dropping scan during kidnap recovery: " << reason << "\n";
+  return {};
+}
+
+std::optional<Sophus::SE3d> LIO::try_global_relocalization(const Vector3dVector& keypoints) const {
+  if (!config.enable_kidnap_relocalization || relocalization_map.Empty() || keypoints.empty()) {
+    return std::nullopt;
+  }
+  const int usable_pose_count =
+      static_cast<int>(poses_with_timestamps.size()) - std::max(0, config.relocalization_min_pose_separation);
+  if (usable_pose_count <= 0) {
+    return std::nullopt;
+  }
+
+  LIO::Config relocalization_config = config;
+  relocalization_config.max_iterations = static_cast<size_t>(std::max(1, config.relocalization_max_iterations));
+  relocalization_config.max_correspondance_distance = config.relocalization_max_correspondance_distance;
+  relocalization_config.min_beta = -1.0;
+  const int pose_stride = std::max(1, config.relocalization_pose_stride);
+  const int yaw_samples = std::max(1, config.relocalization_yaw_samples);
+  const int voxel_search_radius =
+      voxel_search_radius_for_distance(relocalization_map, relocalization_config.max_correspondance_distance);
+  const double pi = std::acos(-1.0);
+
+  bool found = false;
+  Sophus::SE3d best_pose;
+  AlignmentStats best_stats;
+  for (int pose_index = 0; pose_index < usable_pose_count; pose_index += pose_stride) {
+    const Sophus::SE3d& historical_pose = poses_with_timestamps[static_cast<size_t>(pose_index)].second;
+    for (int yaw_index = 0; yaw_index < yaw_samples; ++yaw_index) {
+      const double yaw = (2.0 * pi * static_cast<double>(yaw_index)) / static_cast<double>(yaw_samples);
+      const Sophus::SE3d initial_guess(
+          yaw_rotation(yaw) * historical_pose.so3(),
+          historical_pose.translation());
+      Sophus::SE3d optimized_pose;
+      try {
+        optimized_pose = icp(
+            keypoints,
+            relocalization_map,
+            initial_guess,
+            relocalization_config,
+            std::nullopt,
+            voxel_search_radius);
+      } catch (const std::exception&) {
+        continue;
+      }
+      const AlignmentStats stats = evaluate_alignment(
+          optimized_pose,
+          keypoints,
+          relocalization_map,
+          relocalization_config.max_correspondance_distance,
+          voxel_search_radius);
+      if (stats.correspondences < config.relocalization_min_correspondences ||
+          stats.inlier_ratio < config.relocalization_min_inlier_ratio ||
+          stats.mean_error > config.relocalization_max_mean_error) {
+        continue;
+      }
+      if (!found || stats.mean_error < best_stats.mean_error ||
+          (std::abs(stats.mean_error - best_stats.mean_error) < 1e-6 &&
+           stats.correspondences > best_stats.correspondences)) {
+        found = true;
+        best_pose = optimized_pose;
+        best_stats = stats;
+      }
+    }
+  }
+
+  if (!found) {
+    return std::nullopt;
+  }
+  std::cout << "[INFO] Kidnap relocalization matched " << best_stats.correspondences << "/" << keypoints.size()
+            << " keypoints, mean error " << best_stats.mean_error << " m.\n";
+  return best_pose;
 }
 
 // ==========================
@@ -344,14 +503,14 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
     const auto& preproc_result = preprocess_scan(scan, config);
     if (!config.initialization_phase) {
       // use the first frame for the map only if we're not initializing
-      map.Update(preproc_result.map_update_frame(), lidar_state.pose);
+      update_maps(preproc_result.map_update_frame(), lidar_state.pose);
       poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
       std::cout << "[INFO] Odometry map frame initialized with first lidar scan.\n";
     }
     return preproc_result.filtered_frame;
   }
 
-  if (std::chrono::abs(current_lidar_time - lidar_state.time).count() > 1.0) {
+  if (std::chrono::abs(current_lidar_time - lidar_state.time).count() > config.max_scan_delta_sec) {
     const double diff_seconds = (current_lidar_time - lidar_state.time).count();
     // TODO: std::expected with tl::expected (because ros humble)
     throw std::invalid_argument("Received LiDAR scan with " + std::to_string(diff_seconds) +
@@ -399,12 +558,51 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
         ", this is too little for ICP and likely unintended. Input scan size = " + std::to_string(scan.size()) +
         ". Config voxel size = " + std::to_string(config.voxel_size) +
         ". Either the input scan is corrupt (empty) or the downsampling is too aggressive.";
+    ++_consecutive_registration_failures;
+    if (config.reset_on_registration_failure &&
+        _consecutive_registration_failures >= std::max(1, config.recovery_min_failures)) {
+      return drop_failed_scan(current_lidar_time, error_msg);
+    }
     throw std::invalid_argument(error_msg);
+  }
+
+  if (config.enable_kidnap_relocalization && config.relocalize_after_scan_gap &&
+      _consecutive_registration_failures >= std::max(1, config.recovery_min_failures)) {
+    if (const auto relocalized_pose = try_global_relocalization(preproc_result.keypoints)) {
+      return recover_with_scan(preproc_result.filtered_frame,
+                               preproc_result.map_update_frame(),
+                               current_lidar_time,
+                               relocalized_pose.value(),
+                               "global relocalization after scan gap");
+    }
   }
 
   if (!map.Empty()) {
     SCOPED_PROFILER("ICP");
-    const Sophus::SE3d optimized_pose = icp(preproc_result.keypoints, map, initial_guess, config, accel_filter_info);
+    Sophus::SE3d optimized_pose;
+    try {
+      optimized_pose = icp(preproc_result.keypoints, map, initial_guess, config, accel_filter_info);
+    } catch (const std::exception&) {
+      ++_consecutive_registration_failures;
+      if (_consecutive_registration_failures < std::max(1, config.recovery_min_failures)) {
+        throw;
+      }
+      if (const auto relocalized_pose = try_global_relocalization(preproc_result.keypoints)) {
+        return recover_with_scan(preproc_result.filtered_frame,
+                                 preproc_result.map_update_frame(),
+                                 current_lidar_time,
+                                 relocalized_pose.value(),
+                                 "global relocalization");
+      }
+      if (config.reset_on_registration_failure) {
+        return recover_with_scan(preproc_result.filtered_frame,
+                                 preproc_result.map_update_frame(),
+                                 current_lidar_time,
+                                 lidar_state.pose,
+                                 "local reset");
+      }
+      throw;
+    }
 
     // estimate velocities and accelerations from the new pose
     const double dt = (current_lidar_time - lidar_state.time).count();
@@ -428,9 +626,10 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
   // reset imu averages
   interval_stats.reset();
 
-  map.Update(preproc_result.map_update_frame(), lidar_state.pose);
+  update_maps(preproc_result.map_update_frame(), lidar_state.pose);
 
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  _consecutive_registration_failures = 0;
 
   return preproc_result.filtered_frame;
 }
