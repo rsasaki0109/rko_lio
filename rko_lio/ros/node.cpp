@@ -27,6 +27,8 @@
 #include "rko_lio/core/profiler.hpp"
 #include "rko_lio/ros/utils/utils.hpp"
 // other
+#include <algorithm>
+#include <array>
 #include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
@@ -42,6 +44,73 @@ rko_lio::core::ImuControl imu_msg_to_imu_data(const sensor_msgs::msg::Imu& imu_m
   imu_data.angular_velocity = rko_lio::ros::utils::ros_xyz_to_eigen_vector3d(imu_msg.angular_velocity);
   imu_data.acceleration = rko_lio::ros::utils::ros_xyz_to_eigen_vector3d(imu_msg.linear_acceleration);
   return imu_data;
+}
+
+// ============================================================================
+// [v0.8 Phase 1, diagnostic-only] anisotropic nav_msgs/Odometry.pose.covariance
+// fill, derived from LIO::State::icp_diagnostics (rko_lio/core/util.hpp).
+//
+// This does not change odom_msg.pose.pose or odom_msg.twist.twist in any
+// way -- those are still set exactly as before (see Node::publish_odometry
+// below). Only the covariance field, which this fork previously left at its
+// message-default (all zeros, i.e. "populated/unused" per
+// docs/roadmap/v0.8.md §2 candidate B), is filled here.
+//
+// Scale rationale: at a Gauss-Newton optimum, the accumulated Hessian `H`
+// (already averaged over correspondences by build_icp_linear_system, see
+// lio.cpp) is the standard asymptotic information matrix of the ICP solve;
+// its inverse is the corresponding pose-covariance approximation -- the same
+// H <-> information-matrix relationship Zhang & Singh ("On Degeneracy of
+// Optimization-based State Estimation Problems", ICRA 2016) use to define
+// per-direction degeneracy. `H`'s eigenvectors/eigenvalues are reused
+// directly from LocalizabilitySummary (already computed once in the fork
+// core, not recomputed here) to build Cov = V * diag(1/lambda) * V^T.
+//
+// Near-exactly-degenerate directions (eigenvalue ~ 0 -- e.g. the synthetic
+// corridor fixture's exact-zero along-axis eigenvalue, see
+// docs/research/hilti-degeneracy-baseline.md §4) would blow up to +inf under
+// a literal inverse; each eigenvalue is floored at
+// max(kMinEigenvalueFloor, kRelativeEigenvalueFloor * lambda_max) before
+// inverting, so the reported covariance stays finite while still reporting a
+// very large (i.e. "not informative") uncertainty along that direction,
+// rather than a numerically meaningless inf/nan on the wire.
+constexpr double kMinEigenvalueFloor = 1e-9;
+constexpr double kRelativeEigenvalueFloor = 1e-6;
+// Fallback diagonal covariance (m^2 on the translation block, rad^2 on the
+// rotation block) used when no ICP solve happened for this scan (first
+// frame, a dropped scan, or a kidnap-recovery/local-reset scan -- see
+// LIO::State::icp_diagnostics's doc comment): "no information available",
+// deliberately not "perfectly known" (which a covariance of all zeros would
+// imply to a consumer such as robot_localization).
+constexpr double kNoDiagnosticsFallbackVariance = 1e6;
+
+std::array<double, 36> pose_covariance_from_state(const rko_lio::core::State& state) {
+  std::array<double, 36> covariance{}; // zero-initialized
+  if (!state.icp_diagnostics.has_value()) {
+    for (int i = 0; i < 6; ++i) {
+      covariance[static_cast<size_t>(i * 6 + i)] = kNoDiagnosticsFallbackVariance;
+    }
+    return covariance;
+  }
+  const rko_lio::core::LocalizabilitySummary& localizability = state.icp_diagnostics->localizability;
+  const double lambda_max = localizability.eigenvalues.maxCoeff();
+  const double eigenvalue_floor = std::max(kMinEigenvalueFloor, kRelativeEigenvalueFloor * lambda_max);
+  Eigen::Vector6d inv_eigenvalues;
+  for (int i = 0; i < 6; ++i) {
+    inv_eigenvalues(i) = 1.0 / std::max(localizability.eigenvalues(i), eigenvalue_floor);
+  }
+  // Sophus::SE3d's se(3) tangent order (translation rho, then rotation phi)
+  // matches geometry_msgs/PoseWithCovariance's documented covariance order
+  // ([x, y, z, rot x, rot y, rot z]) exactly, so no axis permutation is
+  // needed between H's ordering and the wire covariance.
+  const Eigen::Matrix6d cov =
+      localizability.eigenvectors * inv_eigenvalues.asDiagonal() * localizability.eigenvectors.transpose();
+  for (int row = 0; row < 6; ++row) {
+    for (int col = 0; col < 6; ++col) {
+      covariance[static_cast<size_t>(row * 6 + col)] = cov(row, col);
+    }
+  }
+  return covariance;
 }
 
 } // namespace
@@ -409,6 +478,10 @@ void Node::publish_odometry(const core::State& state, const core::Secondsd& stam
   odom_msg.header.frame_id = to_frame;
   odom_msg.child_frame_id = from_frame;
   odom_msg.pose.pose = utils::sophus_to_pose(state.pose);
+  // [v0.8 Phase 1, diagnostic-only] anisotropic covariance from the final
+  // ICP Hessian; see pose_covariance_from_state's doc comment above. Only
+  // this field is new -- pose.pose and twist.twist are set exactly as before.
+  odom_msg.pose.covariance = pose_covariance_from_state(state);
   utils::eigen_vector3d_to_ros_xyz(state.velocity, odom_msg.twist.twist.linear);
   utils::eigen_vector3d_to_ros_xyz(state.angular_velocity, odom_msg.twist.twist.angular);
   odom_publisher->publish(odom_msg);
