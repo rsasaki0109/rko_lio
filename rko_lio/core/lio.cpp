@@ -122,18 +122,35 @@ LinearSystem build_orientation_linear_system(const Sophus::SE3d& current_pose,
   return LinearSystem{J_ori.transpose() * J_ori, J_ori.transpose() * residual, 0.5 * residual.squaredNorm()};
 }
 
-Sophus::SE3d icp(const Vector3dVector& frame,
-                 const SparseVoxelGrid& voxel_map,
-                 const Sophus::SE3d& initial_guess,
-                 const LIO::Config& config,
-                 const std::optional<AccelInfo>& optional_accel_info,
-                 const int voxel_search_radius = 1) {
+// [v0.8 Phase 1, diagnostic-only] icp()'s full result: the optimized pose
+// (bit-for-bit the same value this function has always returned/applied to
+// the pose estimate) plus the final iteration's Gauss-Newton linear system
+// (H, b). H/b are exposed purely so callers can thread them into
+// State::icp_diagnostics for downstream conditioning diagnostics -- they are
+// never read back into the solve, so this struct changes nothing about how
+// `pose` is computed.
+struct IcpResult {
+  Sophus::SE3d pose;
+  Eigen::Matrix6d H = Eigen::Matrix6d::Zero();
+  Eigen::Vector6d b = Eigen::Vector6d::Zero();
+};
+
+IcpResult icp(const Vector3dVector& frame,
+             const SparseVoxelGrid& voxel_map,
+             const Sophus::SE3d& initial_guess,
+             const LIO::Config& config,
+             const std::optional<AccelInfo>& optional_accel_info,
+             const int voxel_search_radius = 1) {
   // in case config disables it, or we don't have valid IMU information for this icp loop, beta is -1
   const double beta = (config.min_beta > 0 && optional_accel_info.has_value())
                           ? (config.min_beta * (1 + optional_accel_info->accel_mag_variance))
                           : -1;
 
   Sophus::SE3d current_pose = initial_guess;
+  // [v0.8 Phase 1, diagnostic-only] last iteration's linear system, kept
+  // around purely to hand back to the caller alongside the pose.
+  Eigen::Matrix6d last_H = Eigen::Matrix6d::Zero();
+  Eigen::Vector6d last_b = Eigen::Vector6d::Zero();
 
   for (size_t i = 0; i < config.max_iterations; ++i) {
     const auto& [H, b, chi] = std::invoke([&]() -> LinearSystem {
@@ -147,6 +164,8 @@ Sophus::SE3d icp(const Vector3dVector& frame,
       }
       return {H_icp, b_icp, chi_icp};
     });
+    last_H = H;
+    last_b = b;
 
     const Eigen::Vector6d dx = H.ldlt().solve(-b);
     current_pose = Sophus::SE3d::exp(dx) * current_pose;
@@ -158,7 +177,7 @@ Sophus::SE3d icp(const Vector3dVector& frame,
       break;
     }
   }
-  return current_pose;
+  return {current_pose, last_H, last_b};
 }
 
 struct AlignmentStats {
@@ -312,6 +331,10 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
   lidar_state.velocity.setZero();
   lidar_state.angular_velocity.setZero();
   lidar_state.linear_acceleration.setZero();
+  // [v0.8 Phase 1, diagnostic-only] the local map was just cleared and
+  // `recovery_pose` did not come from a normal incremental ICP solve against
+  // it, so any previously-recorded H/b would describe a now-irrelevant map.
+  lidar_state.icp_diagnostics = std::nullopt;
   _imu_local_rotation = recovery_pose.so3();
   _imu_local_rotation_time = current_lidar_time;
   interval_stats.reset();
@@ -325,6 +348,8 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
 
 Vector3dVector LIO::drop_failed_scan(const Secondsd& current_lidar_time, const std::string& reason) {
   lidar_state.time = current_lidar_time;
+  // [v0.8 Phase 1, diagnostic-only] no ICP solve happened for the dropped scan.
+  lidar_state.icp_diagnostics = std::nullopt;
   _imu_local_rotation_time = current_lidar_time;
   interval_stats.reset();
   std::cerr << "[WARNING] Dropping scan during kidnap recovery: " << reason << "\n";
@@ -363,13 +388,18 @@ std::optional<Sophus::SE3d> LIO::try_global_relocalization(const Vector3dVector&
           historical_pose.translation());
       Sophus::SE3d optimized_pose;
       try {
+        // [v0.8 Phase 1] icp() now returns IcpResult; relocalization only
+        // needs the pose, so the diagnostic H/b are discarded here (a fresh
+        // local map is about to replace the current one, see
+        // LIO::recover_with_scan, which invalidates any prior diagnostics
+        // anyway).
         optimized_pose = icp(
             keypoints,
             relocalization_map,
             initial_guess,
             relocalization_config,
             std::nullopt,
-            voxel_search_radius);
+            voxel_search_radius).pose;
       } catch (const std::exception&) {
         continue;
       }
@@ -577,11 +607,24 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
     }
   }
 
+  // [v0.8 Phase 1, diagnostic-only] reset before attempting a fresh ICP
+  // solve; overwritten below on success. Every early-return path above this
+  // point (drop_failed_scan / recover_with_scan) already resets this field
+  // itself, so this covers the remaining "about to attempt icp()" case.
+  lidar_state.icp_diagnostics = std::nullopt;
+
   if (!map.Empty()) {
     SCOPED_PROFILER("ICP");
     Sophus::SE3d optimized_pose;
+    // [v0.8 Phase 1, diagnostic-only] final ICP linear system, threaded into
+    // lidar_state.icp_diagnostics below on success.
+    Eigen::Matrix6d icp_H = Eigen::Matrix6d::Zero();
+    Eigen::Vector6d icp_b = Eigen::Vector6d::Zero();
     try {
-      optimized_pose = icp(preproc_result.keypoints, map, initial_guess, config, accel_filter_info);
+      const IcpResult icp_result = icp(preproc_result.keypoints, map, initial_guess, config, accel_filter_info);
+      optimized_pose = icp_result.pose;
+      icp_H = icp_result.H;
+      icp_b = icp_result.b;
     } catch (const std::exception&) {
       ++_consecutive_registration_failures;
       if (_consecutive_registration_failures < std::max(1, config.recovery_min_failures)) {
@@ -616,6 +659,11 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
     lidar_state.velocity = local_velocity.head<3>();
     lidar_state.angular_velocity = local_velocity.tail<3>();
     lidar_state.linear_acceleration = local_linear_acceleration;
+
+    // [v0.8 Phase 1, diagnostic-only] expose the final ICP linear system and
+    // its eigen-summary. Purely additive: nothing above this line (the pose/
+    // velocity/acceleration estimate) depends on this field.
+    lidar_state.icp_diagnostics = IcpDiagnostics{icp_H, icp_b, LocalizabilitySummary::from_hessian(icp_H)};
 
     _imu_local_rotation = optimized_pose.so3(); // correct the drift in imu integration
   }
