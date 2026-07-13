@@ -35,6 +35,7 @@ compat_target_sources(
   FILE_SET
   HEADERS
   FILES ../../rko_lio/core/lio.hpp
+        ../../rko_lio/core/degeneracy_aware_solve.hpp
         ../../rko_lio/core/preprocess_scan.hpp
         ../../rko_lio/core/process_timestamps.hpp
         ../../rko_lio/core/profiler.hpp

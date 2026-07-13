@@ -68,7 +68,13 @@ PYBIND11_MODULE(rko_lio_pybind, m) {
       .def_readwrite("initialization_phase", &LIO::Config::initialization_phase)
       .def_readwrite("max_expected_jerk", &LIO::Config::max_expected_jerk)
       .def_readwrite("double_downsample", &LIO::Config::double_downsample)
-      .def_readwrite("min_beta", &LIO::Config::min_beta);
+      .def_readwrite("min_beta", &LIO::Config::min_beta)
+      .def_readwrite("degeneracy_aware_solve", &LIO::Config::degeneracy_aware_solve)
+      .def_readwrite(
+          "degeneracy_well_conditioned_ratio", &LIO::Config::degeneracy_well_conditioned_ratio)
+      .def_readwrite(
+          "degeneracy_multiplicity_relative_gap", &LIO::Config::degeneracy_multiplicity_relative_gap)
+      .def_readwrite("degeneracy_prior_weight", &LIO::Config::degeneracy_prior_weight);
 
   py::class_<LIO>(m, "_LIO")
       .def(py::init<const LIO::Config&>(), "config"_a)

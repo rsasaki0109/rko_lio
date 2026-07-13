@@ -79,6 +79,18 @@ public:
     /** Minimum weight for orientation regularization. */
     double min_beta = 200;
 
+    /** Replace the legacy ICP solve with direction-aware prior blending. */
+    bool degeneracy_aware_solve = false;
+
+    /** Minimum normalized Hessian contribution considered well-conditioned. */
+    double degeneracy_well_conditioned_ratio = 1.0e-6;
+
+    /** Maximum contribution gap merged into one non-observable eigenspace. */
+    double degeneracy_multiplicity_relative_gap = 1.0e-8;
+
+    /** Motion-prior weight in an isolated degenerate direction. */
+    double degeneracy_prior_weight = 0.25;
+
     /** Maximum delta between adjacent LiDAR scan timestamps (s).
      *  Frames whose stamp is further than this from the previous LiDAR
      *  state time are dropped. Default 1.0 preserves the historic check;

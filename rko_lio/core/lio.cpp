@@ -23,6 +23,7 @@
  */
 
 #include "lio.hpp"
+#include "degeneracy_aware_solve.hpp"
 #include "preprocess_scan.hpp"
 #include "profiler.hpp"
 #include "util.hpp"
@@ -167,7 +168,21 @@ IcpResult icp(const Vector3dVector& frame,
     last_H = H;
     last_b = b;
 
-    const Eigen::Vector6d dx = H.ldlt().solve(-b);
+    Eigen::Vector6d dx;
+    if (config.degeneracy_aware_solve) {
+      const Eigen::Vector6d prior_update = (initial_guess * current_pose.inverse()).log();
+      DegeneracyAwareSolveConfig solve_config;
+      solve_config.well_conditioned_ratio = config.degeneracy_well_conditioned_ratio;
+      solve_config.multiplicity_relative_gap = config.degeneracy_multiplicity_relative_gap;
+      solve_config.degenerate_prior_weight = config.degeneracy_prior_weight;
+      const DegeneracyAwareSolveResult solve_result = solve_degeneracy_aware(H, b, prior_update, solve_config);
+      if (!solve_result.valid) {
+        throw std::runtime_error("Degeneracy-aware ICP solve failed.");
+      }
+      dx = solve_result.update;
+    } else {
+      dx = H.ldlt().solve(-b);
+    }
     current_pose = Sophus::SE3d::exp(dx) * current_pose;
 
     if (dx.norm() < config.convergence_criterion || i == (config.max_iterations - 1)) {

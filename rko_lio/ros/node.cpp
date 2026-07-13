@@ -131,6 +131,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LIO::Config,
                                    max_expected_jerk,
                                    double_downsample,
                                    min_beta,
+                                   degeneracy_aware_solve,
+                                   degeneracy_well_conditioned_ratio,
+                                   degeneracy_multiplicity_relative_gap,
+                                   degeneracy_prior_weight,
                                    max_scan_delta_sec,
                                    enable_kidnap_relocalization,
                                    reset_on_registration_failure,
@@ -209,6 +213,14 @@ Node::Node(const std::string& node_name, const rclcpp::NodeOptions& options) {
   lio_config.max_expected_jerk = node->declare_parameter<double>("max_expected_jerk", lio_config.max_expected_jerk);
   lio_config.double_downsample = node->declare_parameter<bool>("double_downsample", lio_config.double_downsample);
   lio_config.min_beta = node->declare_parameter<double>("min_beta", lio_config.min_beta);
+  lio_config.degeneracy_aware_solve =
+      node->declare_parameter<bool>("degeneracy_aware_solve", lio_config.degeneracy_aware_solve);
+  lio_config.degeneracy_well_conditioned_ratio = node->declare_parameter<double>(
+      "degeneracy_well_conditioned_ratio", lio_config.degeneracy_well_conditioned_ratio);
+  lio_config.degeneracy_multiplicity_relative_gap = node->declare_parameter<double>(
+      "degeneracy_multiplicity_relative_gap", lio_config.degeneracy_multiplicity_relative_gap);
+  lio_config.degeneracy_prior_weight =
+      node->declare_parameter<double>("degeneracy_prior_weight", lio_config.degeneracy_prior_weight);
   lio_config.max_scan_delta_sec =
       node->declare_parameter<double>("max_scan_delta_sec", lio_config.max_scan_delta_sec);
   lio_config.enable_kidnap_relocalization =
