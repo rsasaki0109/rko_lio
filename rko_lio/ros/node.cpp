@@ -458,6 +458,7 @@ Node::Node(const std::string& node_name, const rclcpp::NodeOptions& options) {
         "radar_min_inliers", static_cast<int>(radar_ego_velocity_config.min_inliers));
     radar_ego_velocity_config.min_inliers =
         static_cast<std::size_t>(radar_min_inliers > 0 ? radar_min_inliers : 1);
+    radar_velocity_scale = node->declare_parameter<double>("radar_velocity_scale", radar_velocity_scale);
   }
 
   // Timestamp processing params - lts for lidar time stamps, without having 100 char param names
@@ -1046,7 +1047,7 @@ void Node::radar_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& r
 
   core::RadarVelocityPrior prior;
   prior.time = utils::ros_time_to_seconds(radar_msg->header.stamp);
-  prior.velocity_base = extrinsic_radar2base.so3() * velocity_result.velocity;
+  prior.velocity_base = radar_velocity_scale * (extrinsic_radar2base.so3() * velocity_result.velocity);
   {
     std::lock_guard lock(radar_prior_mutex);
     radar_prior_queue.push_back(prior);

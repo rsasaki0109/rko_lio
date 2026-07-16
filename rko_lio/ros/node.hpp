@@ -127,6 +127,9 @@ public:
 
   std::string radar_topic = ""; // default: radar velocity fusion disabled
   core::RadarEgoVelocityConfig radar_ego_velocity_config;
+  // Corrects the systematic speed underestimate of sparse narrow-FOV radars
+  // (limited direction diversity biases the LSQ ego-velocity low).
+  double radar_velocity_scale = 1.0;
   // Estimates buffered by time: the offline reader runs far ahead of the
   // registration thread, so a latest-wins one-shot prior would always be
   // stale-gated. The registration loop picks the nearest estimate per scan.
