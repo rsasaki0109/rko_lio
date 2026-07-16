@@ -48,10 +48,6 @@ struct SparseVoxelGrid {
   double clipping_distance_;
   unsigned int max_points_per_voxel_;
   Bonxai::VoxelGrid<VoxelBlock> map_;
-
-private:
-  using AccessorType = typename Bonxai::VoxelGrid<VoxelBlock>::Accessor;
-  AccessorType accessor_;
 };
 
 } // namespace rko_lio::core

@@ -74,6 +74,12 @@ else()
     if(TARGET test_process_timestamps)
       target_link_libraries(test_process_timestamps rko_lio::core)
     endif()
+    ament_add_gtest(
+      test_sparse_voxel_grid
+      test/test_sparse_voxel_grid.cpp)
+    if(TARGET test_sparse_voxel_grid)
+      target_link_libraries(test_sparse_voxel_grid rko_lio::core)
+    endif()
   endif()
 
   # ament macros cannot be in a CMake subdirectory, even rclcpp

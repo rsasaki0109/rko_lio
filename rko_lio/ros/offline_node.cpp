@@ -141,6 +141,17 @@ public:
         if (lidar_buffer.empty() && !atomic_registration_active) {
           break;
         }
+        // A trailing frame whose sweep extends past the last IMU record can
+        // never satisfy the processing predicate once the bag is exhausted:
+        // no producer will ever set atomic_can_process again, so the pipeline
+        // is permanently idle. Drop the leftovers instead of hanging forever.
+        if (!atomic_can_process && !atomic_registration_active) {
+          RCLCPP_INFO_STREAM(node->get_logger(),
+                             "Bag exhausted with " << lidar_buffer.size()
+                                                   << " trailing LiDAR frame(s) that can no longer be matched with "
+                                                      "IMU data. Dropping them and finishing the run.");
+          break;
+        }
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
