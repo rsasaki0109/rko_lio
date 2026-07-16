@@ -42,6 +42,8 @@ namespace rko_lio::core {
  */
 struct TimestampProcessingConfig {
   double multiplier_to_seconds = 0;
+  /** Fixed sensor-time correction applied after conversion to absolute time. */
+  double offset_seconds = 0;
   bool force_absolute = false;
   bool force_relative = false;
 };

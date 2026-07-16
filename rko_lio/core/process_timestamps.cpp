@@ -66,10 +66,19 @@ Timestamps process_timestamps(const std::vector<double>& raw_timestamps,
                               const TimestampProcessingConfig& config) {
   Timestamps timestamps = timestamps_in_sec_from_raw(raw_timestamps, config.multiplier_to_seconds);
 
+  const auto apply_offset = [&config](Timestamps& values) {
+    const Secondsd offset(config.offset_seconds);
+    values.min += offset;
+    values.max += offset;
+    std::transform(values.times.cbegin(), values.times.cend(), values.times.begin(),
+                   [&offset](const Secondsd& time) { return time + offset; });
+  };
+
   const bool absolute_stamps = config.force_absolute || (std::chrono::abs(header_stamp - timestamps.min) < 1ms) ||
                                (std::chrono::abs(header_stamp - timestamps.max) < 10ms);
 
   if (absolute_stamps) {
+    apply_offset(timestamps);
     return timestamps;
   }
 
@@ -81,6 +90,7 @@ Timestamps process_timestamps(const std::vector<double>& raw_timestamps,
                    [&header_stamp](const Secondsd& ts) { return ts + header_stamp; });
     timestamps.min += header_stamp;
     timestamps.max += header_stamp;
+    apply_offset(timestamps);
     return timestamps;
   }
 
@@ -93,6 +103,7 @@ Timestamps process_timestamps(const std::vector<double>& raw_timestamps,
   std::cout << "header_sec: " << header_stamp.count() << "\n";
   std::cout << "TimestampProcessingConfig:\n"
             << "  multiplier_to_seconds: " << config.multiplier_to_seconds << "\n"
+            << "  offset_seconds: " << config.offset_seconds << "\n"
             << "  force_absolute: " << std::boolalpha << config.force_absolute << "\n"
             << "  force_relative: " << std::boolalpha << config.force_relative << "\n"
             << "  start and end difference thresholds to header time are 1 and 10 milliseconds. Please force a case if "

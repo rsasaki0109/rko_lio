@@ -17,7 +17,8 @@ PreprocessingResult preprocess_scan(const Vector3dVector& frame, const LIO::Conf
 
   if (config.double_downsample) {
     const Vector3dVector downsampled_frame = voxel_down_sample(clipped_frame, config.voxel_size * 0.5);
-    const Vector3dVector keypoints = voxel_down_sample(downsampled_frame, config.voxel_size * 1.5);
+    const Vector3dVector keypoints = voxel_down_sample(
+        downsampled_frame, config.voxel_size * std::max(0.5, config.icp_keypoint_voxel_multiplier));
     return {.filtered_frame = clipped_frame, .map_frame = downsampled_frame, .keypoints = keypoints};
   } else {
     const Vector3dVector downsampled_frame = voxel_down_sample(clipped_frame, config.voxel_size);
