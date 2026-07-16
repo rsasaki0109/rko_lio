@@ -17,6 +17,8 @@ publish_local_map: true
 map_topic: /rko_lio/local_map
 publish_deskewed_scan: true
 # lio config
+# Fixed LiDAR timestamp correction in seconds, applied to every point timestamp.
+lidar_time_offset_sec: 0.0
 deskew: true
 voxel_size: 1.0
 max_points_per_voxel: 20

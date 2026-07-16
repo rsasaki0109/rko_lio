@@ -28,7 +28,7 @@ PreprocessingResult preprocess_scan(const Vector3dVector& frame,
                                     const TimestampVector& timestamps,
                                     Secondsd end_time,
                                     const Functor& relative_pose_at_time,
-                                    const LIO::Config config) {
+                                    const LIO::Config& config) {
   if (!config.deskew) {
     return preprocess_scan(frame, config);
   }

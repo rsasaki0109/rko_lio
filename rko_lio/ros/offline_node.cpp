@@ -76,9 +76,16 @@ public:
     max_lidar_buffer_size = 100;
     // bag reading
     const tf2::Duration skip_to_time = tf2::durationFromSec(node->declare_parameter<double>("skip_to_time", 0.0));
+    std::vector<std::string> topics{imu_topic, lidar_topic};
+    if (direct_visual_frontend) {
+      topics.push_back(visual_image_topic);
+    }
+    if (!radar_topic.empty()) {
+      topics.push_back(radar_topic);
+    }
     bag = std::make_unique<utils::BufferableBag>(node->declare_parameter<std::string>("bag_path"),
                                                  std::make_shared<utils::BufferableBag::TFBridge>(node),
-                                                 std::vector<std::string>{imu_topic, lidar_topic}, skip_to_time);
+                                                 topics, skip_to_time);
     total_bag_msgs = bag->message_count();
     bag_progress_publisher = node->create_publisher<std_msgs::msg::Float32MultiArray>("rko_lio/bag_progress", 10);
   }
@@ -114,6 +121,12 @@ public:
       } else if (topic_name == lidar_topic) {
         const auto& lidar_msg = deserialize_next_msg<sensor_msgs::msg::PointCloud2>(serialized_msg);
         lidar_callback(lidar_msg);
+      } else if (direct_visual_frontend && topic_name == visual_image_topic) {
+        const auto& image_msg = deserialize_next_msg<sensor_msgs::msg::Image>(serialized_msg);
+        image_callback(image_msg);
+      } else if (!radar_topic.empty() && topic_name == radar_topic) {
+        const auto& radar_msg = deserialize_next_msg<sensor_msgs::msg::PointCloud2>(serialized_msg);
+        radar_callback(radar_msg);
       }
 
       processed_bag_msgs++;

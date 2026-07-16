@@ -83,6 +83,7 @@ from .util import error_and_exit
 @dataclass
 class TimestampConfig:
     multiplier_to_seconds: float = 0.0
+    offset_seconds: float = 0.0
     force_absolute: bool = False
     force_relative: bool = False
 

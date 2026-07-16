@@ -69,7 +69,7 @@ std::tuple<Eigen::Vector3d, double> SparseVoxelGrid::GetClosestNeighbor(const Ei
 std::tuple<Eigen::Vector3d, double> SparseVoxelGrid::GetClosestNeighbor(const Eigen::Vector3d& query,
                                                                         int voxel_search_radius) const {
   Eigen::Vector3d closest_neighbor = Eigen::Vector3d::Zero();
-  double closest_distance = std::numeric_limits<double>::max();
+  double closest_squared_distance = std::numeric_limits<double>::max();
   const auto const_accessor = map_.createConstAccessor();
   const Bonxai::CoordT voxel = map_.posToCoord(query);
   const int radius = std::max(1, voxel_search_radius);
@@ -78,17 +78,19 @@ std::tuple<Eigen::Vector3d, double> SparseVoxelGrid::GetClosestNeighbor(const Ei
       const Bonxai::CoordT query_voxel = voxel + voxel_shift;
       const VoxelBlock* voxel_points = const_accessor.value(query_voxel);
       if (voxel_points != nullptr) {
-        const Eigen::Vector3d& neighbor =
-            *std::min_element(voxel_points->cbegin(), voxel_points->cend(), [&](const auto& lhs, const auto& rhs) {
-              return (lhs - query).norm() < (rhs - query).norm();
-            });
-        double distance = (neighbor - query).norm();
-        if (distance < closest_distance) {
-          closest_neighbor = neighbor;
-          closest_distance = distance;
+        for (const Eigen::Vector3d& point : *voxel_points) {
+          const double squared_distance = (point - query).squaredNorm();
+          if (squared_distance < closest_squared_distance) {
+            closest_neighbor = point;
+            closest_squared_distance = squared_distance;
+          }
         }
       }
     });
+    const double closest_distance =
+        closest_squared_distance == std::numeric_limits<double>::max()
+            ? std::numeric_limits<double>::max()
+            : std::sqrt(closest_squared_distance);
     return std::make_tuple(closest_neighbor, closest_distance);
   }
 
@@ -100,18 +102,20 @@ std::tuple<Eigen::Vector3d, double> SparseVoxelGrid::GetClosestNeighbor(const Ei
         if (voxel_points == nullptr) {
           continue;
         }
-        const Eigen::Vector3d& neighbor =
-            *std::min_element(voxel_points->cbegin(), voxel_points->cend(), [&](const auto& lhs, const auto& rhs) {
-              return (lhs - query).norm() < (rhs - query).norm();
-            });
-        double distance = (neighbor - query).norm();
-        if (distance < closest_distance) {
-          closest_neighbor = neighbor;
-          closest_distance = distance;
+        for (const Eigen::Vector3d& point : *voxel_points) {
+          const double squared_distance = (point - query).squaredNorm();
+          if (squared_distance < closest_squared_distance) {
+            closest_neighbor = point;
+            closest_squared_distance = squared_distance;
+          }
         }
       }
     }
   }
+  const double closest_distance =
+      closest_squared_distance == std::numeric_limits<double>::max()
+          ? std::numeric_limits<double>::max()
+          : std::sqrt(closest_squared_distance);
   return std::make_tuple(closest_neighbor, closest_distance);
 }
 
