@@ -136,7 +136,8 @@ TEST(DirectVisualOdometry, MetricDirectAlignmentReducesPhotometricError) {
 TEST(DirectVisualOdometry, CameraPredictionUsesCurrentImuInterval) {
   rko_lio::core::LIO::Config config;
   rko_lio::core::LIO lio(config);
-  lio.lidar_state.time = rko_lio::core::Secondsd(10.0);
+  lio.lidar_state.time =
+      std::chrono::duration_cast<rko_lio::core::Nsec>(std::chrono::duration<double>(10.0));
   lio.lidar_state.velocity = Eigen::Vector3d(1.0, 0.0, 0.0);
   lio.interval_stats.imu_count = 2;
   lio.interval_stats.body_acceleration_sum = Eigen::Vector3d(2.0, 0.0, 0.0);
@@ -145,7 +146,7 @@ TEST(DirectVisualOdometry, CameraPredictionUsesCurrentImuInterval) {
   expected_motion.head<3>() = Eigen::Vector3d(4.0, 0.0, 0.0);
   expected_motion.tail<3>() = Eigen::Vector3d(0.0, 0.0, 0.4);
   const Sophus::SE3d expected = Sophus::SE3d::exp(expected_motion);
-  EXPECT_TRUE(lio.predict_pose_at(rko_lio::core::Secondsd(12.0))
+  EXPECT_TRUE(lio.predict_pose_at(std::chrono::duration_cast<rko_lio::core::Nsec>(std::chrono::duration<double>(12.0)))
                   .matrix().isApprox(expected.matrix(), 1.0e-12));
 }
 
