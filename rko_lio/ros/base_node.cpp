@@ -134,70 +134,168 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SelectiveVisualFusionConfig,
                                    max_weak_directions,
                                    max_translation_update_m,
                                    max_rotation_update_rad)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LIO::Config,
-                                   deskew,
-                                   max_iterations,
-                                   voxel_size,
-                                   max_points_per_voxel,
-                                   max_range,
-                                   min_range,
-                                   convergence_criterion,
-                                   max_correspondence_distance,
-                                   max_num_threads,
-                                   initialization_phase,
-                                   max_expected_jerk,
-                                   double_downsample,
-                                   icp_keypoint_voxel_multiplier,
-                                   min_beta,
-                                   degeneracy_aware_solve,
-                                   degeneracy_well_conditioned_ratio,
-                                   degeneracy_multiplicity_relative_gap,
-                                   degeneracy_prior_weight,
-                                   degeneracy_persistence_gate,
-                                   degeneracy_persistence_min_scans,
-                                   degeneracy_persistence_tracking_ratio,
-                                   degeneracy_persistence_min_absolute_cosine,
-                                   degeneracy_persistence_min_translation_fraction,
-                                   degeneracy_adaptive_iteration_budget,
-                                   degeneracy_adaptive_max_iterations,
-                                   degeneracy_adaptive_iteration_ratio,
-                                   degeneracy_adaptive_hold_scans,
-                                   degeneracy_multiscan_observability_gate,
-                                   degeneracy_observability_window_scans,
-                                   degeneracy_observability_min_scans,
-                                   degeneracy_observability_max_directional_ratio,
-                                   visual_fusion,
-                                   visual_prior_max_time_offset_sec,
-                                   radar_velocity_fusion,
-                                   radar_prior_max_time_offset_sec,
-                                   radar_min_speed,
-                                   radar_disagreement_gate,
-                                   radar_disagreement_min_mps,
-                                   radar_disagreement_min_scans,
-                                   radar_disagreement_weight,
-                                   intensity_constraint,
-                                   intensity_bin_size_m,
-                                   intensity_profile_half_length_m,
-                                   intensity_max_shift_m,
-                                   intensity_min_correlation,
-                                   intensity_min_filled_bins,
-                                   intensity_disagreement_gate,
-                                   intensity_disagreement_min_mps,
-                                   intensity_disagreement_min_scans,
-                                   intensity_disagreement_weight,
-                                   max_scan_delta_sec,
-                                   enable_kidnap_relocalization,
-                                   reset_on_registration_failure,
-                                   recovery_min_failures,
-                                   relocalize_after_scan_gap,
-                                   relocalization_min_correspondences,
-                                   relocalization_min_inlier_ratio,
-                                   relocalization_max_mean_error,
-                                   relocalization_max_correspondence_distance,
-                                   relocalization_yaw_samples,
-                                   relocalization_pose_stride,
-                                   relocalization_min_pose_separation,
-                                   relocalization_max_iterations)
+// NOTE: LIO::Config's field count exceeds nlohmann's NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE macro
+// limit (63 fields: NLOHMANN_JSON_PASTE tops out at PASTE64, which is `func` + 63 values --
+// confirmed by build failure when this list hit 65 entries), so to_json/from_json are written
+// out manually here in the exact same per-field style the macro itself expands to
+// (`j["field"] = t.field;` / `j.at("field").get_to(t.field);`), just without its argument-count
+// ceiling. Keep new fields appended at the end; there is no other constraint to preserve.
+template <typename BasicJsonType,
+         nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0>
+void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t) {
+  nlohmann_json_j["deskew"] = nlohmann_json_t.deskew;
+  nlohmann_json_j["max_iterations"] = nlohmann_json_t.max_iterations;
+  nlohmann_json_j["voxel_size"] = nlohmann_json_t.voxel_size;
+  nlohmann_json_j["max_points_per_voxel"] = nlohmann_json_t.max_points_per_voxel;
+  nlohmann_json_j["max_range"] = nlohmann_json_t.max_range;
+  nlohmann_json_j["min_range"] = nlohmann_json_t.min_range;
+  nlohmann_json_j["convergence_criterion"] = nlohmann_json_t.convergence_criterion;
+  nlohmann_json_j["max_correspondence_distance"] = nlohmann_json_t.max_correspondence_distance;
+  nlohmann_json_j["max_num_threads"] = nlohmann_json_t.max_num_threads;
+  nlohmann_json_j["initialization_phase"] = nlohmann_json_t.initialization_phase;
+  nlohmann_json_j["max_expected_jerk"] = nlohmann_json_t.max_expected_jerk;
+  nlohmann_json_j["double_downsample"] = nlohmann_json_t.double_downsample;
+  nlohmann_json_j["icp_keypoint_voxel_multiplier"] = nlohmann_json_t.icp_keypoint_voxel_multiplier;
+  nlohmann_json_j["min_beta"] = nlohmann_json_t.min_beta;
+  nlohmann_json_j["degeneracy_aware_solve"] = nlohmann_json_t.degeneracy_aware_solve;
+  nlohmann_json_j["degeneracy_well_conditioned_ratio"] = nlohmann_json_t.degeneracy_well_conditioned_ratio;
+  nlohmann_json_j["degeneracy_multiplicity_relative_gap"] = nlohmann_json_t.degeneracy_multiplicity_relative_gap;
+  nlohmann_json_j["degeneracy_prior_weight"] = nlohmann_json_t.degeneracy_prior_weight;
+  nlohmann_json_j["degeneracy_persistence_gate"] = nlohmann_json_t.degeneracy_persistence_gate;
+  nlohmann_json_j["degeneracy_persistence_min_scans"] = nlohmann_json_t.degeneracy_persistence_min_scans;
+  nlohmann_json_j["degeneracy_persistence_tracking_ratio"] = nlohmann_json_t.degeneracy_persistence_tracking_ratio;
+  nlohmann_json_j["degeneracy_persistence_min_absolute_cosine"] =
+      nlohmann_json_t.degeneracy_persistence_min_absolute_cosine;
+  nlohmann_json_j["degeneracy_persistence_min_translation_fraction"] =
+      nlohmann_json_t.degeneracy_persistence_min_translation_fraction;
+  nlohmann_json_j["degeneracy_adaptive_iteration_budget"] = nlohmann_json_t.degeneracy_adaptive_iteration_budget;
+  nlohmann_json_j["degeneracy_adaptive_max_iterations"] = nlohmann_json_t.degeneracy_adaptive_max_iterations;
+  nlohmann_json_j["degeneracy_adaptive_iteration_ratio"] = nlohmann_json_t.degeneracy_adaptive_iteration_ratio;
+  nlohmann_json_j["degeneracy_adaptive_hold_scans"] = nlohmann_json_t.degeneracy_adaptive_hold_scans;
+  nlohmann_json_j["degeneracy_multiscan_observability_gate"] =
+      nlohmann_json_t.degeneracy_multiscan_observability_gate;
+  nlohmann_json_j["degeneracy_observability_window_scans"] = nlohmann_json_t.degeneracy_observability_window_scans;
+  nlohmann_json_j["degeneracy_observability_min_scans"] = nlohmann_json_t.degeneracy_observability_min_scans;
+  nlohmann_json_j["degeneracy_observability_max_directional_ratio"] =
+      nlohmann_json_t.degeneracy_observability_max_directional_ratio;
+  nlohmann_json_j["visual_fusion"] = nlohmann_json_t.visual_fusion;
+  nlohmann_json_j["visual_prior_max_time_offset_sec"] = nlohmann_json_t.visual_prior_max_time_offset_sec;
+  nlohmann_json_j["radar_velocity_fusion"] = nlohmann_json_t.radar_velocity_fusion;
+  nlohmann_json_j["radar_prior_max_time_offset_sec"] = nlohmann_json_t.radar_prior_max_time_offset_sec;
+  nlohmann_json_j["radar_min_speed"] = nlohmann_json_t.radar_min_speed;
+  nlohmann_json_j["radar_disagreement_gate"] = nlohmann_json_t.radar_disagreement_gate;
+  nlohmann_json_j["radar_disagreement_min_mps"] = nlohmann_json_t.radar_disagreement_min_mps;
+  nlohmann_json_j["radar_disagreement_min_scans"] = nlohmann_json_t.radar_disagreement_min_scans;
+  nlohmann_json_j["radar_disagreement_weight"] = nlohmann_json_t.radar_disagreement_weight;
+  nlohmann_json_j["radar_velocity_continuous_fusion"] = nlohmann_json_t.radar_velocity_continuous_fusion;
+  nlohmann_json_j["radar_fusion_icp_information_scale"] = nlohmann_json_t.radar_fusion_icp_information_scale;
+  nlohmann_json_j["intensity_constraint"] = nlohmann_json_t.intensity_constraint;
+  nlohmann_json_j["intensity_bin_size_m"] = nlohmann_json_t.intensity_bin_size_m;
+  nlohmann_json_j["intensity_profile_half_length_m"] = nlohmann_json_t.intensity_profile_half_length_m;
+  nlohmann_json_j["intensity_max_shift_m"] = nlohmann_json_t.intensity_max_shift_m;
+  nlohmann_json_j["intensity_min_correlation"] = nlohmann_json_t.intensity_min_correlation;
+  nlohmann_json_j["intensity_min_filled_bins"] = nlohmann_json_t.intensity_min_filled_bins;
+  nlohmann_json_j["intensity_disagreement_gate"] = nlohmann_json_t.intensity_disagreement_gate;
+  nlohmann_json_j["intensity_disagreement_min_mps"] = nlohmann_json_t.intensity_disagreement_min_mps;
+  nlohmann_json_j["intensity_disagreement_min_scans"] = nlohmann_json_t.intensity_disagreement_min_scans;
+  nlohmann_json_j["intensity_disagreement_weight"] = nlohmann_json_t.intensity_disagreement_weight;
+  nlohmann_json_j["max_scan_delta_sec"] = nlohmann_json_t.max_scan_delta_sec;
+  nlohmann_json_j["enable_kidnap_relocalization"] = nlohmann_json_t.enable_kidnap_relocalization;
+  nlohmann_json_j["reset_on_registration_failure"] = nlohmann_json_t.reset_on_registration_failure;
+  nlohmann_json_j["recovery_min_failures"] = nlohmann_json_t.recovery_min_failures;
+  nlohmann_json_j["relocalize_after_scan_gap"] = nlohmann_json_t.relocalize_after_scan_gap;
+  nlohmann_json_j["relocalization_min_correspondences"] = nlohmann_json_t.relocalization_min_correspondences;
+  nlohmann_json_j["relocalization_min_inlier_ratio"] = nlohmann_json_t.relocalization_min_inlier_ratio;
+  nlohmann_json_j["relocalization_max_mean_error"] = nlohmann_json_t.relocalization_max_mean_error;
+  nlohmann_json_j["relocalization_max_correspondence_distance"] =
+      nlohmann_json_t.relocalization_max_correspondence_distance;
+  nlohmann_json_j["relocalization_yaw_samples"] = nlohmann_json_t.relocalization_yaw_samples;
+  nlohmann_json_j["relocalization_pose_stride"] = nlohmann_json_t.relocalization_pose_stride;
+  nlohmann_json_j["relocalization_min_pose_separation"] = nlohmann_json_t.relocalization_min_pose_separation;
+  nlohmann_json_j["relocalization_max_iterations"] = nlohmann_json_t.relocalization_max_iterations;
+}
+template <typename BasicJsonType,
+         nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0>
+void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_t) {
+  nlohmann_json_j.at("deskew").get_to(nlohmann_json_t.deskew);
+  nlohmann_json_j.at("max_iterations").get_to(nlohmann_json_t.max_iterations);
+  nlohmann_json_j.at("voxel_size").get_to(nlohmann_json_t.voxel_size);
+  nlohmann_json_j.at("max_points_per_voxel").get_to(nlohmann_json_t.max_points_per_voxel);
+  nlohmann_json_j.at("max_range").get_to(nlohmann_json_t.max_range);
+  nlohmann_json_j.at("min_range").get_to(nlohmann_json_t.min_range);
+  nlohmann_json_j.at("convergence_criterion").get_to(nlohmann_json_t.convergence_criterion);
+  nlohmann_json_j.at("max_correspondence_distance").get_to(nlohmann_json_t.max_correspondence_distance);
+  nlohmann_json_j.at("max_num_threads").get_to(nlohmann_json_t.max_num_threads);
+  nlohmann_json_j.at("initialization_phase").get_to(nlohmann_json_t.initialization_phase);
+  nlohmann_json_j.at("max_expected_jerk").get_to(nlohmann_json_t.max_expected_jerk);
+  nlohmann_json_j.at("double_downsample").get_to(nlohmann_json_t.double_downsample);
+  nlohmann_json_j.at("icp_keypoint_voxel_multiplier").get_to(nlohmann_json_t.icp_keypoint_voxel_multiplier);
+  nlohmann_json_j.at("min_beta").get_to(nlohmann_json_t.min_beta);
+  nlohmann_json_j.at("degeneracy_aware_solve").get_to(nlohmann_json_t.degeneracy_aware_solve);
+  nlohmann_json_j.at("degeneracy_well_conditioned_ratio").get_to(nlohmann_json_t.degeneracy_well_conditioned_ratio);
+  nlohmann_json_j.at("degeneracy_multiplicity_relative_gap")
+      .get_to(nlohmann_json_t.degeneracy_multiplicity_relative_gap);
+  nlohmann_json_j.at("degeneracy_prior_weight").get_to(nlohmann_json_t.degeneracy_prior_weight);
+  nlohmann_json_j.at("degeneracy_persistence_gate").get_to(nlohmann_json_t.degeneracy_persistence_gate);
+  nlohmann_json_j.at("degeneracy_persistence_min_scans").get_to(nlohmann_json_t.degeneracy_persistence_min_scans);
+  nlohmann_json_j.at("degeneracy_persistence_tracking_ratio")
+      .get_to(nlohmann_json_t.degeneracy_persistence_tracking_ratio);
+  nlohmann_json_j.at("degeneracy_persistence_min_absolute_cosine")
+      .get_to(nlohmann_json_t.degeneracy_persistence_min_absolute_cosine);
+  nlohmann_json_j.at("degeneracy_persistence_min_translation_fraction")
+      .get_to(nlohmann_json_t.degeneracy_persistence_min_translation_fraction);
+  nlohmann_json_j.at("degeneracy_adaptive_iteration_budget")
+      .get_to(nlohmann_json_t.degeneracy_adaptive_iteration_budget);
+  nlohmann_json_j.at("degeneracy_adaptive_max_iterations")
+      .get_to(nlohmann_json_t.degeneracy_adaptive_max_iterations);
+  nlohmann_json_j.at("degeneracy_adaptive_iteration_ratio")
+      .get_to(nlohmann_json_t.degeneracy_adaptive_iteration_ratio);
+  nlohmann_json_j.at("degeneracy_adaptive_hold_scans").get_to(nlohmann_json_t.degeneracy_adaptive_hold_scans);
+  nlohmann_json_j.at("degeneracy_multiscan_observability_gate")
+      .get_to(nlohmann_json_t.degeneracy_multiscan_observability_gate);
+  nlohmann_json_j.at("degeneracy_observability_window_scans")
+      .get_to(nlohmann_json_t.degeneracy_observability_window_scans);
+  nlohmann_json_j.at("degeneracy_observability_min_scans").get_to(nlohmann_json_t.degeneracy_observability_min_scans);
+  nlohmann_json_j.at("degeneracy_observability_max_directional_ratio")
+      .get_to(nlohmann_json_t.degeneracy_observability_max_directional_ratio);
+  nlohmann_json_j.at("visual_fusion").get_to(nlohmann_json_t.visual_fusion);
+  nlohmann_json_j.at("visual_prior_max_time_offset_sec").get_to(nlohmann_json_t.visual_prior_max_time_offset_sec);
+  nlohmann_json_j.at("radar_velocity_fusion").get_to(nlohmann_json_t.radar_velocity_fusion);
+  nlohmann_json_j.at("radar_prior_max_time_offset_sec").get_to(nlohmann_json_t.radar_prior_max_time_offset_sec);
+  nlohmann_json_j.at("radar_min_speed").get_to(nlohmann_json_t.radar_min_speed);
+  nlohmann_json_j.at("radar_disagreement_gate").get_to(nlohmann_json_t.radar_disagreement_gate);
+  nlohmann_json_j.at("radar_disagreement_min_mps").get_to(nlohmann_json_t.radar_disagreement_min_mps);
+  nlohmann_json_j.at("radar_disagreement_min_scans").get_to(nlohmann_json_t.radar_disagreement_min_scans);
+  nlohmann_json_j.at("radar_disagreement_weight").get_to(nlohmann_json_t.radar_disagreement_weight);
+  nlohmann_json_j.at("radar_velocity_continuous_fusion").get_to(nlohmann_json_t.radar_velocity_continuous_fusion);
+  nlohmann_json_j.at("radar_fusion_icp_information_scale")
+      .get_to(nlohmann_json_t.radar_fusion_icp_information_scale);
+  nlohmann_json_j.at("intensity_constraint").get_to(nlohmann_json_t.intensity_constraint);
+  nlohmann_json_j.at("intensity_bin_size_m").get_to(nlohmann_json_t.intensity_bin_size_m);
+  nlohmann_json_j.at("intensity_profile_half_length_m").get_to(nlohmann_json_t.intensity_profile_half_length_m);
+  nlohmann_json_j.at("intensity_max_shift_m").get_to(nlohmann_json_t.intensity_max_shift_m);
+  nlohmann_json_j.at("intensity_min_correlation").get_to(nlohmann_json_t.intensity_min_correlation);
+  nlohmann_json_j.at("intensity_min_filled_bins").get_to(nlohmann_json_t.intensity_min_filled_bins);
+  nlohmann_json_j.at("intensity_disagreement_gate").get_to(nlohmann_json_t.intensity_disagreement_gate);
+  nlohmann_json_j.at("intensity_disagreement_min_mps").get_to(nlohmann_json_t.intensity_disagreement_min_mps);
+  nlohmann_json_j.at("intensity_disagreement_min_scans").get_to(nlohmann_json_t.intensity_disagreement_min_scans);
+  nlohmann_json_j.at("intensity_disagreement_weight").get_to(nlohmann_json_t.intensity_disagreement_weight);
+  nlohmann_json_j.at("max_scan_delta_sec").get_to(nlohmann_json_t.max_scan_delta_sec);
+  nlohmann_json_j.at("enable_kidnap_relocalization").get_to(nlohmann_json_t.enable_kidnap_relocalization);
+  nlohmann_json_j.at("reset_on_registration_failure").get_to(nlohmann_json_t.reset_on_registration_failure);
+  nlohmann_json_j.at("recovery_min_failures").get_to(nlohmann_json_t.recovery_min_failures);
+  nlohmann_json_j.at("relocalize_after_scan_gap").get_to(nlohmann_json_t.relocalize_after_scan_gap);
+  nlohmann_json_j.at("relocalization_min_correspondences")
+      .get_to(nlohmann_json_t.relocalization_min_correspondences);
+  nlohmann_json_j.at("relocalization_min_inlier_ratio").get_to(nlohmann_json_t.relocalization_min_inlier_ratio);
+  nlohmann_json_j.at("relocalization_max_mean_error").get_to(nlohmann_json_t.relocalization_max_mean_error);
+  nlohmann_json_j.at("relocalization_max_correspondence_distance")
+      .get_to(nlohmann_json_t.relocalization_max_correspondence_distance);
+  nlohmann_json_j.at("relocalization_yaw_samples").get_to(nlohmann_json_t.relocalization_yaw_samples);
+  nlohmann_json_j.at("relocalization_pose_stride").get_to(nlohmann_json_t.relocalization_pose_stride);
+  nlohmann_json_j.at("relocalization_min_pose_separation").get_to(nlohmann_json_t.relocalization_min_pose_separation);
+  nlohmann_json_j.at("relocalization_max_iterations").get_to(nlohmann_json_t.relocalization_max_iterations);
+}
 } // namespace rko_lio::core
 
 namespace rko_lio::ros {
@@ -376,6 +474,10 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       static_cast<size_t>(radar_disagreement_min_scans > 0 ? radar_disagreement_min_scans : 1);
   lio_config.radar_disagreement_weight =
       node->declare_parameter<double>("radar_disagreement_weight", lio_config.radar_disagreement_weight);
+  lio_config.radar_velocity_continuous_fusion = node->declare_parameter<bool>(
+      "radar_velocity_continuous_fusion", lio_config.radar_velocity_continuous_fusion);
+  lio_config.radar_fusion_icp_information_scale = node->declare_parameter<double>(
+      "radar_fusion_icp_information_scale", lio_config.radar_fusion_icp_information_scale);
 
   // ---- intensity/reflectivity texture constraint (fork addition; default-off) ----
   lio_config.intensity_constraint =
@@ -454,6 +556,15 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
         "radar_min_inliers", static_cast<int>(radar_ego_velocity_config.min_inliers));
     radar_ego_velocity_config.min_inliers = static_cast<std::size_t>(radar_min_inliers > 0 ? radar_min_inliers : 1);
     radar_velocity_scale = node->declare_parameter<double>("radar_velocity_scale", radar_velocity_scale);
+    // Per-axis radar velocity sigmas (radar sensor frame: forward/lateral/vertical), used only
+    // by lio_config.radar_velocity_continuous_fusion to build each prior's info_base (see
+    // RadarVelocityPrior::info_base and BaseNode::radar_callback). Declared unconditionally
+    // whenever a radar topic is configured -- harmless when continuous fusion is off. Defaults
+    // reflect the fog validation: near-unbiased forward-velocity estimate, weak lateral/vertical
+    // (narrow-FOV radar, limited direction diversity).
+    radar_sigma_forward_mps = node->declare_parameter<double>("radar_sigma_forward_mps", radar_sigma_forward_mps);
+    radar_sigma_lateral_mps = node->declare_parameter<double>("radar_sigma_lateral_mps", radar_sigma_lateral_mps);
+    radar_sigma_vertical_mps = node->declare_parameter<double>("radar_sigma_vertical_mps", radar_sigma_vertical_mps);
   }
 
   // Lidar per-point timestamp processing params, namespaced under lidar_timestamps.*
@@ -532,12 +643,13 @@ void BaseNode::parse_cli_extrinsics() {
   if (lio->config.visual_fusion.enabled) {
     visual_extrinsic_set = parse_extrinsic("cam", extrinsic_cam2base);
   }
-  if (lio->config.radar_velocity_fusion) {
+  if (lio->config.radar_velocity_fusion || lio->config.radar_velocity_continuous_fusion) {
     radar_extrinsic_set = parse_extrinsic("radar", extrinsic_radar2base);
     if (!radar_extrinsic_set) {
       RCLCPP_WARN_STREAM(node->get_logger(),
-                         "radar_velocity_fusion is enabled but extrinsic_radar2base_quat_xyzw_xyz was not set; "
-                         "assuming identity rotation between radar and base.");
+                         "radar_velocity_fusion/radar_velocity_continuous_fusion is enabled but "
+                         "extrinsic_radar2base_quat_xyzw_xyz was not set; assuming identity rotation between "
+                         "radar and base.");
     }
   }
   extrinsics_set = imu_ok && lidar_ok;
@@ -696,7 +808,7 @@ BaseNode::~BaseNode() { atomic_node_running = false; }
 // ---- radar ego-velocity fusion (fork addition) ----
 
 void BaseNode::radar_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& radar_msg) {
-  if (!lio->config.radar_velocity_fusion) {
+  if (!lio->config.radar_velocity_fusion && !lio->config.radar_velocity_continuous_fusion) {
     return;
   }
   const bool has_velocity_field =
@@ -734,6 +846,20 @@ void BaseNode::radar_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPt
   core::RadarVelocityPrior prior;
   prior.time = utils::to_ns(radar_msg->header.stamp);
   prior.velocity_base = radar_velocity_scale * (extrinsic_radar2base.so3() * velocity_result.velocity);
+  if (lio->config.radar_velocity_continuous_fusion) {
+    // Per-axis (forward/lateral/vertical, radar sensor frame) information, rotated into the
+    // base frame so LIO::register_scan can rotate it once more into world using the current
+    // pose estimate (see radar_velocity_continuous_fusion in lio.cpp). Kept in sync with
+    // radar_velocity_scale conceptually: a scaled velocity with an unscaled sigma would
+    // silently mistrust/overtrust the scaled estimate, but the scale here is a systematic bias
+    // correction (narrow-FOV underestimate), not an added noise source, so the sigmas are left
+    // as directly configured.
+    const Eigen::Vector3d inverse_variance(1.0 / (radar_sigma_forward_mps * radar_sigma_forward_mps),
+                                           1.0 / (radar_sigma_lateral_mps * radar_sigma_lateral_mps),
+                                           1.0 / (radar_sigma_vertical_mps * radar_sigma_vertical_mps));
+    const Eigen::Matrix3d R_radar2base = extrinsic_radar2base.so3().matrix();
+    prior.info_base = R_radar2base * inverse_variance.asDiagonal() * R_radar2base.transpose();
+  }
   {
     std::lock_guard lock(radar_prior_mutex);
     radar_prior_queue.push_back(prior);
@@ -746,7 +872,7 @@ void BaseNode::radar_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPt
 }
 
 void BaseNode::prepare_radar_prior(const core::Nsec& lidar_time) {
-  if (!lio->config.radar_velocity_fusion) {
+  if (!lio->config.radar_velocity_fusion && !lio->config.radar_velocity_continuous_fusion) {
     return;
   }
   const double tolerance = lio->config.radar_prior_max_time_offset_sec;
@@ -1151,11 +1277,20 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
       }
     }
     // Radar ego-velocity fusion summary.
-    if (lio->config.radar_velocity_fusion) {
-      const nlohmann::json radar_summary = {
+    if (lio->config.radar_velocity_fusion || lio->config.radar_velocity_continuous_fusion) {
+      nlohmann::json radar_summary = {
           {"prior_attempt_count", lio->radar_prior_attempt_count},
           {"fused_scan_count", lio->radar_fused_scan_count},
           {"disagreement_corrected_scan_count", lio->radar_disagreement_corrected_scan_count}};
+      if (lio->config.radar_velocity_continuous_fusion) {
+        radar_summary["continuous_attempt_count"] = lio->radar_continuous_attempt_count;
+        radar_summary["continuous_fused_scan_count"] = lio->radar_continuous_fused_scan_count;
+        radar_summary["continuous_mean_abs_correction_m"] =
+            lio->radar_continuous_fused_scan_count > 0
+                ? lio->radar_continuous_correction_magnitude_sum /
+                      static_cast<double>(lio->radar_continuous_fused_scan_count)
+                : 0.0;
+      }
       const std::filesystem::path radar_file = output_dir / "radar_velocity_fusion_summary.json";
       if (std::ofstream file(radar_file); file.is_open()) {
         file << radar_summary.dump(4) << "\n";
