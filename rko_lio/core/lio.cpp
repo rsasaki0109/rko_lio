@@ -26,6 +26,7 @@
 #include "degeneracy_aware_solve.hpp"
 #include "preprocess_scan.hpp"
 #include "profiler.hpp"
+#include "radar_ego_velocity.hpp"
 #include "util.hpp"
 // other
 #include <sophus/se3.hpp>
@@ -796,10 +797,12 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   // icp() above); the ICP initial guess itself is untouched.
   std::optional<Sophus::SE3d> radar_prior_pose;
   std::optional<Eigen::Vector3d> radar_velocity_base;
+  std::optional<Eigen::Matrix3d> radar_info_base;
   if (_radar_velocity_prior.has_value() &&
       std::abs(to_seconds(_radar_velocity_prior->time - current_lidar_time)) <= config.radar_prior_max_time_offset_sec &&
       _radar_velocity_prior->velocity_base.norm() >= config.radar_min_speed) {
     radar_velocity_base = _radar_velocity_prior->velocity_base;
+    radar_info_base = _radar_velocity_prior->info_base;
     if (config.radar_velocity_fusion && config.degeneracy_aware_solve) {
       const double radar_dt = to_seconds(current_lidar_time - lidar_state.time);
       const Eigen::Vector3d predicted_translation =
@@ -955,13 +958,56 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       throw;
     }
 
+    // Continuous, information-weighted radar/ICP velocity fusion (see Config::
+    // radar_velocity_continuous_fusion doc comment and radar_ego_velocity.hpp's
+    // blend_icp_radar_velocity for the pure math). Runs on every scan with a fresh radar prior,
+    // no streak/threshold gate, and blends all three world-frame translation axes at once
+    // (weighted by relative confidence), instead of radar_disagreement_gate's single-axis,
+    // 10-scan-streak, post-hoc correction below. When enabled it subsumes that gate entirely
+    // (see the `!config.radar_velocity_continuous_fusion` guard on the gate below) rather than
+    // letting both paths correct the same scan.
+    bool radar_continuous_fused_this_scan = false;
+    if (config.radar_velocity_continuous_fusion && radar_velocity_base.has_value() && radar_info_base.has_value()) {
+      const double radar_dt = to_seconds(current_lidar_time - lidar_state.time);
+      if (radar_dt > 1.0e-6) {
+        ++radar_continuous_attempt_count;
+        const Eigen::Vector3d icp_velocity_world =
+            (optimized_pose.translation() - lidar_state.pose.translation()) / radar_dt;
+        // icp_H's translation block is world-frame: build_icp_linear_system's Jacobian sets
+        // J_r.block(0,0) = I against a residual computed as (current_pose * point) - target,
+        // i.e. directly in the map/world frame, with no further rotation applied. H is already
+        // averaged over correspondences, so H_tt / dt^2 is only a proxy for a translation-rate
+        // information matrix; radar_fusion_icp_information_scale lets the two sensors' relative
+        // trust be tuned empirically.
+        const Eigen::Matrix3d icp_information_world =
+            config.radar_fusion_icp_information_scale * (icp_H.block<3, 3>(0, 0) / square(radar_dt));
+        const Eigen::Vector3d radar_velocity_world = optimized_pose.so3() * (*radar_velocity_base);
+        const Eigen::Matrix3d R_wb = optimized_pose.so3().matrix();
+        const Eigen::Matrix3d radar_information_world = R_wb * (*radar_info_base) * R_wb.transpose();
+        const RadarIcpVelocityBlendResult blend = blend_icp_radar_velocity(
+            icp_velocity_world, icp_information_world, radar_velocity_world, radar_information_world);
+        if (blend.valid) {
+          const Eigen::Vector3d correction = (blend.velocity - icp_velocity_world) * radar_dt;
+          optimized_pose.translation() += correction;
+          ++radar_continuous_fused_scan_count;
+          radar_continuous_correction_magnitude_sum += correction.norm();
+          radar_continuous_fused_this_scan = true;
+        }
+      }
+    }
+    (void)radar_continuous_fused_this_scan; // reserved for future gating of downstream features
+
     // Radar-vs-ICP velocity disagreement gate: ICP locked onto clutter that
     // travels with the sensor (fog) yields a confident near-zero motion that
     // the eigenvalue gates cannot flag. After a persistent disagreement,
     // blend the translation toward the radar-observed displacement, but only
-    // along the radar velocity direction.
+    // along the radar velocity direction. Skipped entirely when
+    // radar_velocity_continuous_fusion is on -- that feature already corrects every axis on
+    // every scan with a fresh radar prior, so this gate would either double-correct or fight the
+    // continuous blend's own numbers with its own separate streak/threshold logic.
     bool radar_disagreement_corrected_this_scan = false;
-    if (config.radar_disagreement_gate && radar_velocity_base.has_value()) {
+    if (config.radar_disagreement_gate && !config.radar_velocity_continuous_fusion &&
+        radar_velocity_base.has_value()) {
       const double radar_dt = to_seconds(current_lidar_time - lidar_state.time);
       if (radar_dt > 1.0e-6) {
         const Eigen::Vector3d icp_velocity_world =
@@ -984,7 +1030,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           radar_disagreement_corrected_this_scan = true;
         }
       }
-    } else if (config.radar_disagreement_gate) {
+    } else if (config.radar_disagreement_gate && !config.radar_velocity_continuous_fusion) {
       _radar_disagreement_streak = 0;
     }
 

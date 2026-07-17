@@ -50,6 +50,15 @@ struct VisualPosePrior {
 struct RadarVelocityPrior {
   Nsec time{0};
   Eigen::Vector3d velocity_base = Eigen::Vector3d::Zero();
+
+  /** Base-frame translation information (inverse covariance) of `velocity_base`, used only by
+   *  Config::radar_velocity_continuous_fusion (see LIO::register_scan). Computed by the ROS
+   *  node from the radar-to-base extrinsic rotation and the per-axis radar sigmas
+   *  (radar_sigma_forward/lateral/vertical_mps), i.e. info_base = R_radar2base *
+   *  diag(1/sigma_fwd^2, 1/sigma_lat^2, 1/sigma_vert^2) * R_radar2base^T. Defaults to an
+   *  isotropic 0.3 m/s sigma so a producer that never sets this field (or the continuous
+   *  fusion feature being off) still yields a well-defined, harmless information matrix. */
+  Eigen::Matrix3d info_base = Eigen::Matrix3d::Identity() * (1.0 / (0.3 * 0.3));
 };
 
 struct VisualObservabilityDiagnosticsSample {
@@ -191,6 +200,24 @@ public:
      *  actively wrong along this direction, so full replacement is the
      *  default. */
     double radar_disagreement_weight = 1.0;
+
+    /** Continuous, information-weighted radar/ICP velocity fusion. Unlike radar_disagreement_gate
+     *  (which needs a 10-scan disagreement streak, only corrects along the single radar-heading
+     *  direction, and only above radar_disagreement_min_mps), this blends every scan with a
+     *  fresh radar prior, per-axis, weighted by the relative confidence (information) of the
+     *  ICP solve vs. the radar measurement in that world-frame axis -- see
+     *  radar_ego_velocity.hpp's blend_icp_radar_velocity for the pure math. Fixes fog
+     *  clutter-lock from scan 1 instead of after 10 scans of accumulated drift. When enabled,
+     *  this subsumes radar_disagreement_gate for scans with a fresh radar prior: that gate's
+     *  block is skipped entirely (see LIO::register_scan) rather than double-correcting. */
+    bool radar_velocity_continuous_fusion = false;
+
+    /** Multiplies the ICP translation information (H_tt / dt^2) before blending against the
+     *  radar information. H is already averaged over correspondences by build_icp_linear_system,
+     *  so its absolute scale does not correspond to a physical covariance; this factor lets the
+     *  relative trust between ICP and radar be tuned empirically without touching the radar
+     *  sigmas below. 1.0 preserves H's own scale unmodified. */
+    double radar_fusion_icp_information_scale = 1.0;
 
     /** Correct translation along a confirmed persistent weak direction using scan-to-scan
      *  cross-correlation of a 1D reflectivity/intensity profile built along that axis.
@@ -389,6 +416,15 @@ public:
   std::size_t radar_prior_attempt_count = 0;
   std::size_t radar_fused_scan_count = 0;
   std::size_t radar_disagreement_corrected_scan_count = 0;
+
+  /** Continuous information-weighted radar fusion diagnostics (radar_velocity_continuous_fusion).
+   *  attempt_count: a fresh radar prior was available and dt was usable. fused_scan_count: the
+   *  information-weighted blend solved successfully and a correction was applied.
+   *  correction_magnitude_sum / fused_scan_count gives the mean absolute correction magnitude
+   *  (m) applied per fused scan. */
+  std::size_t radar_continuous_attempt_count = 0;
+  std::size_t radar_continuous_fused_scan_count = 0;
+  double radar_continuous_correction_magnitude_sum = 0.0;
 
   /** Aggregate intensity-constraint diagnostics, mirroring the radar counters.
    *  attempt_count: a confirmed weak direction plus a stored reference profile

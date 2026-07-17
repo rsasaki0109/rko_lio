@@ -138,6 +138,14 @@ public:
   // Corrects the systematic speed underestimate of sparse narrow-FOV radars
   // (limited direction diversity biases the LSQ ego-velocity low).
   double radar_velocity_scale = 1.0;
+  // Per-axis radar sensor-frame velocity sigmas (m/s), used only when
+  // lio->config.radar_velocity_continuous_fusion is set (see radar_callback): builds each
+  // prior's info_base by rotating diag(1/sigma^2) into the base frame with
+  // extrinsic_radar2base. Defaults reflect the fog validation: near-unbiased forward-velocity
+  // estimate, weak lateral/vertical (narrow-FOV radar, limited direction diversity).
+  double radar_sigma_forward_mps = 0.15;
+  double radar_sigma_lateral_mps = 0.5;
+  double radar_sigma_vertical_mps = 0.5;
   // Estimates buffered by time: the offline reader runs far ahead of the
   // registration thread, so a latest-wins one-shot prior would always be
   // stale-gated. The registration loop picks the nearest estimate per scan.

@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include <Eigen/Cholesky>
 #include <Eigen/Core>
 #include <Eigen/LU>
 
@@ -172,6 +173,89 @@ inline RadarEgoVelocityResult estimate_radar_ego_velocity(
   result.velocity = *refined;
   result.inlier_count = best_inliers.size();
   result.residual_rms = std::sqrt(residual_squared_sum / static_cast<double>(best_inliers.size()));
+  return result;
+}
+
+/**
+ * Build a 3x3 translation information (inverse covariance) matrix from independent per-axis
+ * sigmas (e.g. radar forward/lateral/vertical velocity noise), expressed in whatever frame the
+ * three sigmas are defined in.
+ */
+inline Eigen::Matrix3d diagonal_velocity_information(const double sigma_axis0,
+                                                     const double sigma_axis1,
+                                                     const double sigma_axis2) {
+  const Eigen::Vector3d inverse_variance(1.0 / (sigma_axis0 * sigma_axis0), 1.0 / (sigma_axis1 * sigma_axis1),
+                                         1.0 / (sigma_axis2 * sigma_axis2));
+  return inverse_variance.asDiagonal();
+}
+
+/** Result of blending two independent Gaussian estimates of the same 3D velocity. */
+struct RadarIcpVelocityBlendResult {
+  bool valid = false;
+  /** Information-weighted fused velocity; only meaningful when `valid`. */
+  Eigen::Vector3d velocity = Eigen::Vector3d::Zero();
+};
+
+/**
+ * Information-weighted (inverse-covariance-weighted) fusion of an ICP-derived velocity estimate
+ * and a radar-derived velocity estimate, both expressed in the same (world) frame:
+ *
+ *   v_fused = (I_icp + I_radar)^-1 * (I_icp * v_icp + I_radar * v_radar)
+ *
+ * This is the closed-form Bayesian fusion of two independent Gaussian estimates of the same
+ * quantity, and reduces to a simple weighted average when the informations are isotropic and
+ * commute. Per-axis (anisotropic) informations let one sensor dominate only the axes it
+ * actually observes well -- e.g. a narrow-FOV radar with a well-constrained forward-velocity
+ * estimate but a nearly unobservable lateral/vertical one.
+ *
+ * Guards against numerical failure: the combined information is symmetrized (roundoff can break
+ * exact symmetry) and solved with LDLT rather than a raw inverse. `valid` is false (and
+ * `velocity` must not be used) whenever:
+ *   - either input has a non-finite entry;
+ *   - the combined information is not positive definite (e.g. both inputs disagree in sign along
+ *     some axis -- should not happen for two genuine information matrices, but a caller error is
+ *     not this function's problem to solve silently); or
+ *   - the combined information is rank-deficient along some axis (neither sensor observes that
+ *     axis at all -- e.g. a 2D radar and a purely-vertical-degenerate ICP solve sharing the same
+ *     blind spot). LDLT can technically "solve" such a system (returning 0 for the unconstrained
+ *     component when the matching right-hand side is also 0), but that 0 is an artifact of the
+ *     decomposition, not a real measurement, so it must not be reported as a confident fused
+ *     velocity. This is checked via the LDLT diagonal D: a near-zero entry relative to the
+ *     largest one means that direction carries essentially no combined information.
+ * Callers should fall back to the uncorrected ICP velocity whenever `valid` is false.
+ */
+inline RadarIcpVelocityBlendResult blend_icp_radar_velocity(const Eigen::Vector3d& icp_velocity,
+                                                             const Eigen::Matrix3d& icp_information,
+                                                             const Eigen::Vector3d& radar_velocity,
+                                                             const Eigen::Matrix3d& radar_information) {
+  RadarIcpVelocityBlendResult result;
+  if (!icp_velocity.allFinite() || !radar_velocity.allFinite() || !icp_information.allFinite() ||
+      !radar_information.allFinite()) {
+    return result;
+  }
+  Eigen::Matrix3d combined_information = icp_information + radar_information;
+  // Roundoff (and, defensively, a caller passing a not-quite-symmetric information matrix) can
+  // break exact symmetry; LDLT below assumes a symmetric matrix, so restore it explicitly.
+  combined_information = 0.5 * (combined_information + combined_information.transpose());
+  const Eigen::LDLT<Eigen::Matrix3d> ldlt(combined_information);
+  if (ldlt.info() != Eigen::Success || !ldlt.isPositive()) {
+    return result;
+  }
+  // Reject rank-deficient combined information (see doc comment above): every direction must
+  // carry at least a small fraction of the strongest direction's information to be trusted.
+  const Eigen::Vector3d diagonal_d = ldlt.vectorD();
+  const double max_d = diagonal_d.maxCoeff();
+  constexpr double kMinRelativeInformation = 1.0e-9;
+  if (!(max_d > 0.0) || diagonal_d.minCoeff() <= kMinRelativeInformation * max_d) {
+    return result;
+  }
+  const Eigen::Vector3d rhs = icp_information * icp_velocity + radar_information * radar_velocity;
+  const Eigen::Vector3d fused_velocity = ldlt.solve(rhs);
+  if (!fused_velocity.allFinite()) {
+    return result;
+  }
+  result.valid = true;
+  result.velocity = fused_velocity;
   return result;
 }
 
