@@ -23,8 +23,12 @@
  */
 
 #pragma once
+#include "persistent_weak_direction.hpp"
 #include <Eigen/Core>
+#include <Eigen/Eigenvalues>
+#include <algorithm>
 #include <chrono>
+#include <optional>
 #include <sophus/se3.hpp>
 
 namespace Eigen {
@@ -46,6 +50,81 @@ inline Eigen::Vector3d gravity() { return {0, 0, -GRAVITY_MAG}; }
 
 inline double to_seconds(const Nsec d) { return std::chrono::duration<double>(d).count(); }
 
+// ============================================================================
+// [v0.8 Phase 1, diagnostic-only] localizability / ICP-conditioning summary.
+//
+// Nothing below this comment and above `struct State` changes any estimate:
+// it exposes the 6x6 Gauss-Newton Hessian `icp()` already computes and
+// discards every iteration (see rko_lio/core/lio.cpp's `build_icp_linear_system`
+// / `icp`), plus its eigen-decomposition, so downstream consumers (this
+// fork's own ROS wrapper, and this repo's `graph_based_slam` degeneracy
+// detector) can inspect solve conditioning without recomputing it. See
+// docs/roadmap/v0.8.md (lidarslam-ros2, the downstream repo this fork patch
+// was written for) for the full design rationale.
+// ============================================================================
+
+/**
+ * Eigen-decomposition of a 6x6 ICP Gauss-Newton Hessian, ordered to match
+ * Sophus::SE3d's se(3) tangent convention (translation rho first, rotation
+ * phi second): axes are `[tx, ty, tz, rx, ry, rz]`.
+ */
+struct LocalizabilitySummary {
+  /** Eigenvalues of H in ascending order; a value near zero along a given
+   *  eigenvector indicates the solve is under-constrained in that direction
+   *  (Zhang & Singh, "On Degeneracy of Optimization-based State Estimation
+   *  Problems", ICRA 2016). */
+  Eigen::Vector6d eigenvalues = Eigen::Vector6d::Zero();
+
+  /** Eigenvectors of H, one per column, ordered to match `eigenvalues`.
+   *  Sign-canonicalized (the largest-magnitude component of each eigenvector
+   *  is made non-negative) so the summary is deterministic run-to-run for a
+   *  bit-identical `H`, independent of the eigen-solver's internal sign
+   *  convention. */
+  Eigen::Matrix6d eigenvectors = Eigen::Matrix6d::Identity();
+
+  /** Decompose `H` (assumed symmetric PSD, as `build_icp_linear_system`
+   *  always produces) into its ascending eigenvalues/eigenvectors. */
+  static LocalizabilitySummary from_hessian(const Eigen::Matrix6d& H) {
+    const Eigen::SelfAdjointEigenSolver<Eigen::Matrix6d> solver(H);
+    LocalizabilitySummary summary;
+    summary.eigenvalues = solver.eigenvalues();
+    summary.eigenvectors = solver.eigenvectors();
+    for (int col = 0; col < summary.eigenvectors.cols(); ++col) {
+      Eigen::Index max_row = 0;
+      summary.eigenvectors.col(col).cwiseAbs().maxCoeff(&max_row);
+      if (summary.eigenvectors(max_row, col) < 0.0) {
+        summary.eigenvectors.col(col) *= -1.0;
+      }
+    }
+    return summary;
+  }
+};
+
+/**
+ * Final-iteration ICP linear system for one `register_scan()` call, plus its
+ * eigen-summary. Diagnostic-only: populated after a successful ICP solve so
+ * callers can inspect conditioning; never fed back into `State::pose`.
+ */
+struct IcpDiagnostics {
+  /** Final-iteration Gauss-Newton Hessian (averaged over correspondences,
+   *  same value `icp()` solved `dx = H.ldlt().solve(-b)` against). */
+  Eigen::Matrix6d H = Eigen::Matrix6d::Zero();
+  /** Final-iteration Gauss-Newton gradient vector, same ordering as `H`. */
+  Eigen::Vector6d b = Eigen::Vector6d::Zero();
+  /** Eigen-decomposition of `H`. */
+  LocalizabilitySummary localizability;
+  /** Persistent weak-direction state after observing this scan. */
+  PersistentWeakDirectionState persistent_weak_direction;
+  /** ICP iterations in this scan where the persistent-direction intervention ran. */
+  std::size_t degeneracy_intervention_count = 0;
+};
+
+struct DegeneracyPersistenceDiagnosticsSample {
+  Nsec time{0};
+  PersistentWeakDirectionState persistent_weak_direction;
+  std::size_t intervention_count = 0;
+};
+
 // data structs
 struct State {
   Nsec time{0};
@@ -53,6 +132,15 @@ struct State {
   Eigen::Vector3d velocity = Eigen::Vector3d::Zero();
   Eigen::Vector3d angular_velocity = Eigen::Vector3d::Zero();
   Eigen::Vector3d linear_acceleration = Eigen::Vector3d::Zero();
+
+  /** [v0.8 Phase 1, diagnostic-only] Final-iteration ICP linear system and
+   *  eigen-summary for the scan that produced this state, or `std::nullopt`
+   *  when no ICP solve happened for this scan (first frame, a scan dropped
+   *  during kidnap recovery, or a scan that triggered a relocalization/local
+   *  reset -- see LIO::drop_failed_scan / LIO::recover_with_scan). Populated
+   *  by LIO::register_scan; consumed by rko_lio/ros/node.cpp to fill the
+   *  previously-always-zero nav_msgs/Odometry.pose.covariance field. */
+  std::optional<IcpDiagnostics> icp_diagnostics = std::nullopt;
 };
 
 struct ImuBias {

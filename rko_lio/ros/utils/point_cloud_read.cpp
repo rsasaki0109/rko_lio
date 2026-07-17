@@ -101,4 +101,39 @@ point_cloud2_to_eigen_with_timestamps(const PointCloud2::ConstSharedPtr& msg) {
 
   return {points, raw_timestamps};
 }
+
+std::vector<float> point_cloud2_to_intensity(const PointCloud2::ConstSharedPtr& msg) {
+  using sensor_msgs::PointCloud2ConstIterator;
+  const size_t point_count = static_cast<size_t>(msg->height) * msg->width;
+
+  const PointField* reflectivity_field = nullptr;
+  const PointField* intensity_field = nullptr;
+  for (const PointField& field : msg->fields) {
+    if (field.name == "reflectivity") {
+      reflectivity_field = &field;
+    } else if (field.name == "intensity") {
+      intensity_field = &field;
+    }
+  }
+
+  std::vector<float> intensities;
+  if (reflectivity_field != nullptr && reflectivity_field->datatype == PointField::UINT16) {
+    intensities.reserve(point_count);
+    PointCloud2ConstIterator<uint16_t> msg_reflectivity(*msg, "reflectivity");
+    for (size_t i = 0; i < point_count; ++i, ++msg_reflectivity) {
+      intensities.push_back(static_cast<float>(*msg_reflectivity));
+    }
+    return intensities;
+  }
+  if (intensity_field != nullptr && intensity_field->datatype == PointField::FLOAT32) {
+    intensities.reserve(point_count);
+    PointCloud2ConstIterator<float> msg_intensity(*msg, "intensity");
+    for (size_t i = 0; i < point_count; ++i, ++msg_intensity) {
+      intensities.push_back(*msg_intensity);
+    }
+    return intensities;
+  }
+  // Neither a uint16 "reflectivity" nor a float32 "intensity" field: intensity unavailable.
+  return {};
+}
 } // namespace rko_lio::ros::utils

@@ -69,9 +69,12 @@ void ThreadedNode::lidar_callback(const sensor_msgs::msg::PointCloud2::ConstShar
   }
   try {
     const auto [timestamps, scan] = process_lidar_msg(lidar_msg);
+    // Fork addition: per-point reflectivity/intensity, only parsed when an intensity-based
+    // feature is enabled (see BaseNode::process_lidar_intensity).
+    const std::vector<float> intensities = process_lidar_intensity(lidar_msg);
     {
       std::lock_guard lock(buffer_mutex);
-      lidar_buffer.emplace(timestamps, scan);
+      lidar_buffer.emplace(timestamps, scan, intensities);
       atomic_can_process = !imu_buffer.empty() && imu_buffer.back().time > lidar_buffer.front().timestamps.max;
     }
     if (atomic_can_process) {
@@ -94,8 +97,9 @@ void ThreadedNode::registration_loop() {
     LidarFrame frame = std::move(lidar_buffer.front());
     lidar_buffer.pop();
     registration_busy = true;
-    const auto& [timestamps, scan] = frame;
+    const auto& [timestamps, scan, intensities] = frame;
     const auto& [start_stamp, end_stamp, time_vector] = timestamps;
+    const std::vector<float>* intensities_ptr = intensities.empty() ? nullptr : &intensities;
     for (; !imu_buffer.empty() && imu_buffer.front().time < end_stamp; imu_buffer.pop()) {
       const core::ImuControl& imu_data = imu_buffer.front();
       lio->add_imu_measurement(extrinsic_imu2base, imu_data);
@@ -106,13 +110,28 @@ void ThreadedNode::registration_loop() {
     buffer_lock.unlock(); // we dont touch the buffers anymore
 
     try {
-      const core::Vector3dVector deskewed_frame = register_scan_locked(scan, time_vector);
+      // Fork additions: prepare any pending visual/radar priors for this scan before
+      // register_scan consumes them (one-shot; see LIO::register_scan). Default-off unless
+      // the corresponding config flags are set.
+      std::optional<LiveVisualKeyframe> direct_visual_frame;
+      if (direct_visual_frontend) {
+        direct_visual_frame = prepare_direct_visual_prior(scan, end_stamp);
+      } else {
+        prepare_visual_prior(end_stamp);
+      }
+      prepare_radar_prior(end_stamp);
+      const core::Vector3dVector deskewed_frame = register_scan_locked(scan, time_vector, intensities_ptr);
       if (!deskewed_frame.empty()) {
         // TODO: first frame is skipped and an empty frame is returned. improve how we handle this
         publish_lidar_outputs(deskewed_frame);
         publish_tf(lio->lidar_state);
+        if (direct_visual_frame.has_value()) {
+          commit_direct_visual_keyframe(std::move(*direct_visual_frame), end_stamp, deskewed_frame);
+        }
       }
-    } catch (const std::invalid_argument& ex) {
+    } catch (const std::exception& ex) {
+      // Catch both std::invalid_argument (Keypoints=0 / Δt) and std::runtime_error (Number of
+      // correspondences=0). Both are recoverable on kidnap-style bags (fork addition).
       RCLCPP_ERROR_STREAM(node->get_logger(), "Encountered error, dropping frame. Error: " << ex.what());
     }
     registration_busy = false;

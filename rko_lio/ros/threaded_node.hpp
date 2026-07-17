@@ -39,6 +39,10 @@ namespace rko_lio::ros {
 struct LidarFrame {
   core::Timestamps timestamps;
   core::Vector3dVector points;
+  // Per-point reflectivity/intensity, same order as `points`. Empty when unavailable or when
+  // neither intensity_constraint nor intensity_disagreement_gate is set (fork addition; see
+  // BaseNode::process_lidar_intensity).
+  std::vector<float> intensities;
 };
 
 class ThreadedNode : public BaseNode {

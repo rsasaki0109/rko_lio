@@ -26,6 +26,7 @@
 #include "rko_lio/core/profiler.hpp"
 #include "rko_lio/ros/utils/rosbag.hpp"
 // other
+#include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 
 namespace {
@@ -55,9 +56,18 @@ public:
       : ThreadedNode("rko_lio_offline_node", options), bag_start_time(std::chrono::steady_clock::now()) {
     // bag reading
     const tf2::Duration skip_to_time = tf2::durationFromSec(node->declare_parameter<double>("skip_to_time", 0.0));
+    // Fork addition: dispatch the optional radar and direct-visual-frontend image topics from
+    // the same bag when those (default-off) features are enabled.
+    std::vector<std::string> topics{imu_topic, lidar_topic};
+    if (direct_visual_frontend) {
+      topics.push_back(visual_image_topic);
+    }
+    if (!radar_topic.empty()) {
+      topics.push_back(radar_topic);
+    }
     bag = std::make_unique<utils::BufferableBag>(node->declare_parameter<std::string>("bag_path"),
-                                                 std::make_shared<utils::BufferableBag::TFBridge>(node),
-                                                 std::vector<std::string>{imu_topic, lidar_topic}, skip_to_time);
+                                                 std::make_shared<utils::BufferableBag::TFBridge>(node), topics,
+                                                 skip_to_time);
     total_bag_msgs = bag->message_count();
     bag_progress_publisher = node->create_publisher<std_msgs::msg::Float32MultiArray>("rko_lio/bag_progress", 10);
   }
@@ -104,6 +114,14 @@ public:
       } else if (topic_name == lidar_topic) {
         const auto& lidar_msg = deserialize_next_msg<sensor_msgs::msg::PointCloud2>(serialized_msg);
         lidar_callback(lidar_msg);
+      } else if (direct_visual_frontend && topic_name == visual_image_topic) {
+        // Fork addition: direct visual odometry frontend image dispatch.
+        const auto& image_msg = deserialize_next_msg<sensor_msgs::msg::Image>(serialized_msg);
+        image_callback(image_msg);
+      } else if (!radar_topic.empty() && topic_name == radar_topic) {
+        // Fork addition: radar ego-velocity fusion dispatch.
+        const auto& radar_msg = deserialize_next_msg<sensor_msgs::msg::PointCloud2>(serialized_msg);
+        radar_callback(radar_msg);
       }
 
       processed_bag_msgs++;
@@ -111,9 +129,23 @@ public:
     }
     while (rclcpp::ok()) {
       {
-        // wait for the registration buffer to drain - leftover IMU after the last lidar scan is harmless
+        // Even if the bag finishes, wait until every queued LiDAR frame has either been
+        // registered or dropped. Trailing IMU messages are expected in many bags and should
+        // not keep the offline run alive forever.
         std::lock_guard<std::mutex> lock(buffer_mutex);
         if (lidar_buffer.empty() && !registration_busy.load()) {
+          break;
+        }
+        // Fork addition (bug fix): a trailing frame whose sweep extends past the last IMU
+        // record can never satisfy the processing predicate once the bag is exhausted -- no
+        // producer will ever set atomic_can_process again, so the pipeline is permanently
+        // idle. Drop the leftovers instead of hanging forever (previously required an
+        // external `timeout -s INT` to terminate offline_node at end-of-bag).
+        if (!atomic_can_process && !registration_busy.load()) {
+          RCLCPP_INFO_STREAM(node->get_logger(),
+                             "Bag exhausted with " << lidar_buffer.size()
+                                                   << " trailing LiDAR frame(s) that can no longer be matched with "
+                                                      "IMU data. Dropping them and finishing the run.");
           break;
         }
       }
