@@ -71,7 +71,37 @@ PYBIND11_MODULE(rko_lio_pybind, m) {
       .def_readwrite("initialization_phase", &LIO::Config::initialization_phase)
       .def_readwrite("max_expected_jerk", &LIO::Config::max_expected_jerk)
       .def_readwrite("double_downsample", &LIO::Config::double_downsample)
-      .def_readwrite("min_beta", &LIO::Config::min_beta);
+      .def_readwrite("icp_keypoint_voxel_multiplier", &LIO::Config::icp_keypoint_voxel_multiplier)
+      .def_readwrite("min_beta", &LIO::Config::min_beta)
+      .def_readwrite("degeneracy_aware_solve", &LIO::Config::degeneracy_aware_solve)
+      .def_readwrite(
+          "degeneracy_well_conditioned_ratio", &LIO::Config::degeneracy_well_conditioned_ratio)
+      .def_readwrite(
+          "degeneracy_multiplicity_relative_gap", &LIO::Config::degeneracy_multiplicity_relative_gap)
+      .def_readwrite("degeneracy_prior_weight", &LIO::Config::degeneracy_prior_weight)
+      .def_readwrite("degeneracy_persistence_gate", &LIO::Config::degeneracy_persistence_gate)
+      .def_readwrite("degeneracy_persistence_min_scans", &LIO::Config::degeneracy_persistence_min_scans)
+      .def_readwrite("degeneracy_persistence_tracking_ratio", &LIO::Config::degeneracy_persistence_tracking_ratio)
+      .def_readwrite("degeneracy_persistence_min_absolute_cosine",
+                     &LIO::Config::degeneracy_persistence_min_absolute_cosine)
+      .def_readwrite("degeneracy_persistence_min_translation_fraction",
+                     &LIO::Config::degeneracy_persistence_min_translation_fraction)
+      .def_readwrite("degeneracy_adaptive_iteration_budget",
+                     &LIO::Config::degeneracy_adaptive_iteration_budget)
+      .def_readwrite("degeneracy_adaptive_max_iterations",
+                     &LIO::Config::degeneracy_adaptive_max_iterations)
+      .def_readwrite("degeneracy_adaptive_iteration_ratio",
+                     &LIO::Config::degeneracy_adaptive_iteration_ratio)
+      .def_readwrite("degeneracy_adaptive_hold_scans",
+                     &LIO::Config::degeneracy_adaptive_hold_scans)
+      .def_readwrite("degeneracy_multiscan_observability_gate",
+                     &LIO::Config::degeneracy_multiscan_observability_gate)
+      .def_readwrite("degeneracy_observability_window_scans",
+                     &LIO::Config::degeneracy_observability_window_scans)
+      .def_readwrite("degeneracy_observability_min_scans",
+                     &LIO::Config::degeneracy_observability_min_scans)
+      .def_readwrite("degeneracy_observability_max_directional_ratio",
+                     &LIO::Config::degeneracy_observability_max_directional_ratio);
 
   py::class_<LIO>(m, "_LIO")
       .def(py::init<const LIO::Config&>(), "config"_a)
@@ -148,6 +178,7 @@ PYBIND11_MODULE(rko_lio_pybind, m) {
   py::class_<TPConfig>(m, "_TimestampProcessingConfig")
       .def(py::init<>())
       .def_readwrite("multiplier_to_seconds", &TPConfig::multiplier_to_seconds)
+      .def_readwrite("offset_seconds", &TPConfig::offset_seconds)
       .def_readwrite("force_absolute", &TPConfig::force_absolute)
       .def_readwrite("force_relative", &TPConfig::force_relative);
 

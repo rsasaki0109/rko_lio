@@ -22,6 +22,8 @@ odom_at_imu_rate: false
 # seq.tf_at_imu_rate: false
 
 # lio config
+# Fixed LiDAR timestamp correction in seconds, applied to every point timestamp.
+lidar_time_offset_sec: 0.0
 deskew: true
 voxel_size: 1.0
 max_points_per_voxel: 20

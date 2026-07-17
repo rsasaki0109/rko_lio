@@ -54,6 +54,12 @@ struct VoxelHashMap {
   void remove_points_far_from_location(const Eigen::Vector3d& origin);
   std::vector<Eigen::Vector3d> pointcloud() const;
   std::tuple<Eigen::Vector3d, double> get_closest_neighbor(const Eigen::Vector3d& query) const;
+  // Widened neighbor search: scans a (2*voxel_search_radius+1)^3 block of voxels instead of the
+  // fixed 3x3x3 neighborhood used by the single-argument overload above. Ported from this fork's
+  // SparseVoxelGrid::GetClosestNeighbor (see git history); used by the degeneracy-aware solve /
+  // relocalization paths that need a wider correspondence search than plain ICP.
+  std::tuple<Eigen::Vector3d, double> get_closest_neighbor(const Eigen::Vector3d& query,
+                                                           int voxel_search_radius) const;
 
   double voxel_size_;
   double inv_voxel_size_;

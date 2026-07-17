@@ -63,6 +63,25 @@ else()
 
   add_subdirectory(rko_lio/ros)
 
+  if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(
+      test_direct_visual_odometry
+      test/test_direct_visual_odometry.cpp)
+    if(TARGET test_direct_visual_odometry)
+      target_link_libraries(test_direct_visual_odometry rko_lio::core)
+    endif()
+    # test_process_timestamps: superseded by upstream's Catch2-based
+    # tests/core/test_process_timestamps.cpp, which covers the same
+    # process_timestamps() function against the current Nsec-based API.
+    ament_add_gtest(
+      test_voxel_hash_map
+      test/test_voxel_hash_map.cpp)
+    if(TARGET test_voxel_hash_map)
+      target_link_libraries(test_voxel_hash_map rko_lio::core)
+    endif()
+  endif()
+
   # ament macros cannot be in a CMake subdirectory, even rclcpp
   rclcpp_components_register_node(
     online_node_component

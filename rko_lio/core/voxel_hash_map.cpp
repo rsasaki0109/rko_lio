@@ -89,6 +89,40 @@ std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eig
   return std::make_tuple(closest_neighbor, closest_distance);
 }
 
+std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eigen::Vector3d& query,
+                                                                        int voxel_search_radius) const {
+  const int radius = std::max(1, voxel_search_radius);
+  if (radius == 1) {
+    return get_closest_neighbor(query);
+  }
+  Eigen::Vector3d closest_neighbor = Eigen::Vector3d::Zero();
+  double closest_squared_distance = std::numeric_limits<double>::max();
+  const Voxel voxel = point_to_voxel(query, inv_voxel_size_);
+  for (int dx = -radius; dx <= radius; ++dx) {
+    for (int dy = -radius; dy <= radius; ++dy) {
+      for (int dz = -radius; dz <= radius; ++dz) {
+        const Voxel query_voxel = voxel + Voxel{dx, dy, dz};
+        const auto search = map_.find(query_voxel);
+        if (search == map_.end()) {
+          continue;
+        }
+        const VoxelBlock& voxel_points = search.value();
+        for (const Eigen::Vector3d& point : voxel_points) {
+          const double squared_distance = (point - query).squaredNorm();
+          if (squared_distance < closest_squared_distance) {
+            closest_neighbor = point;
+            closest_squared_distance = squared_distance;
+          }
+        }
+      }
+    }
+  }
+  const double closest_distance = closest_squared_distance == std::numeric_limits<double>::max()
+                                       ? std::numeric_limits<double>::max()
+                                       : std::sqrt(closest_squared_distance);
+  return std::make_tuple(closest_neighbor, closest_distance);
+}
+
 void VoxelHashMap::add_points(const std::vector<Eigen::Vector3d>& points) {
   const double map_resolution_sq = voxel_size_ * voxel_size_ / max_points_per_voxel_;
   std::for_each(points.cbegin(), points.cend(), [&](const Eigen::Vector3d& p) {

@@ -23,23 +23,31 @@
  */
 
 #pragma once
+#include "rko_lio/core/direct_visual_odometry.hpp"
 #include "rko_lio/core/lio.hpp"
 #include "rko_lio/core/process_timestamps.hpp"
+#include "rko_lio/core/radar_ego_velocity.hpp"
 // stl
 #include <atomic>
+#include <deque>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <queue>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <tuple>
+#include <vector>
 // ros
 #include <geometry_msgs/msg/accel_stamped.hpp>
 #include <geometry_msgs/msg/accel_with_covariance_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/node.hpp>
 #include <rclcpp/node_options.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <tf2_ros/buffer.h>
@@ -49,6 +57,47 @@
 namespace rko_lio::ros {
 // Shared helper used by both the threaded and sequential nodes.
 core::ImuControl imu_msg_to_imu_data(const sensor_msgs::msg::Imu& imu_msg);
+
+// ---- selective visual fusion / direct visual odometry frontend state ----
+// (fork addition; default-off, gated by lio->config.visual_fusion.enabled)
+struct VisualRelativeConstraint {
+  core::Nsec first_time{0};
+  core::Nsec second_time{0};
+  Eigen::Matrix3d current_R_previous_camera = Eigen::Matrix3d::Identity();
+  Eigen::Vector3d current_t_previous_direction = Eigen::Vector3d::Zero();
+  core::VisualConstraintConfidence confidence;
+};
+
+struct VisualImageFrame {
+  core::Nsec time{0};
+  core::GrayImage image;
+};
+
+struct LiveVisualKeyframe {
+  core::Nsec time{0};
+  core::GrayImage image;
+  core::SparseDepthImage depth;
+  Sophus::SE3d world_T_base;
+};
+
+struct DirectVisualDiagnosticsSample {
+  core::Nsec time{0};
+  bool solver_valid = false;
+  bool confidence_gate_passed = false;
+  int failure_reason = 0;
+  int features = 0;
+  int tracked_features = 0;
+  int inliers = 0;
+  double inlier_ratio = 0.0;
+  double initial_rmse = std::numeric_limits<double>::infinity();
+  double final_rmse = std::numeric_limits<double>::infinity();
+  double exposure_gain = 1.0;
+  double exposure_bias = 0.0;
+  double rotation_error_deg = std::numeric_limits<double>::infinity();
+  double translation_cosine = -1.0;
+  double baseline_m = 0.0;
+  double predicted_baseline_m = 0.0;
+};
 
 class BaseNode {
 public:
@@ -77,7 +126,56 @@ public:
 
   Sophus::SE3d extrinsic_imu2base;
   Sophus::SE3d extrinsic_lidar2base;
+  Sophus::SE3d extrinsic_cam2base;
+  Sophus::SE3d extrinsic_radar2base;
   bool extrinsics_set = false;
+  bool visual_extrinsic_set = false;
+  bool radar_extrinsic_set = false;
+
+  // ---- radar ego-velocity fusion (fork addition; default-off) ----
+  std::string radar_topic = ""; // default: radar velocity fusion disabled
+  core::RadarEgoVelocityConfig radar_ego_velocity_config;
+  // Corrects the systematic speed underestimate of sparse narrow-FOV radars
+  // (limited direction diversity biases the LSQ ego-velocity low).
+  double radar_velocity_scale = 1.0;
+  // Estimates buffered by time: the offline reader runs far ahead of the
+  // registration thread, so a latest-wins one-shot prior would always be
+  // stale-gated. The registration loop picks the nearest estimate per scan.
+  std::deque<core::RadarVelocityPrior> radar_prior_queue;
+  std::mutex radar_prior_mutex;
+  void radar_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& radar_msg);
+  void prepare_radar_prior(const core::Nsec& lidar_time);
+
+  // ---- selective visual fusion / direct visual odometry (fork addition; default-off) ----
+  bool direct_visual_frontend = false;
+  bool direct_visual_require_previous_weak_direction = false;
+  std::string visual_image_topic = "/alphasense/cam0/image_raw";
+  double visual_camera_time_offset_sec = 0.0;
+  double visual_max_image_lidar_delta_sec = 0.04;
+  double visual_keyframe_interval_sec = 0.25;
+  core::FisheyeCameraModel visual_camera;
+  core::DirectVisualOdometryConfig direct_visual_config;
+  std::mutex visual_buffer_mutex;
+  std::queue<VisualImageFrame> visual_image_buffer;
+  std::optional<LiveVisualKeyframe> live_visual_keyframe;
+  std::size_t direct_visual_attempt_count = 0;
+  std::size_t direct_visual_weak_gate_skip_count = 0;
+  std::size_t direct_visual_solver_valid_count = 0;
+  std::size_t direct_visual_valid_count = 0;
+  std::vector<DirectVisualDiagnosticsSample> direct_visual_diagnostics;
+
+  std::vector<VisualRelativeConstraint> visual_constraints;
+  std::size_t next_visual_constraint = 0;
+
+  void load_visual_constraints();
+  void configure_direct_visual_frontend();
+  void image_callback(const sensor_msgs::msg::Image::ConstSharedPtr& image_msg);
+  std::optional<LiveVisualKeyframe> prepare_direct_visual_prior(const core::Vector3dVector& scan,
+                                                                const core::Nsec& lidar_time);
+  void commit_direct_visual_keyframe(LiveVisualKeyframe frame,
+                                     const core::Nsec& lidar_time,
+                                     const core::Vector3dVector& deskewed_lidar_frame);
+  void prepare_visual_prior(const core::Nsec& lidar_time);
 
   std::shared_ptr<tf2_ros::TransformListener> tf_listener;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer;
@@ -112,7 +210,13 @@ public:
   std::tuple<core::Timestamps, core::Vector3dVector>
   process_lidar_msg(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& lidar_msg) const;
 
-  core::Vector3dVector register_scan_locked(const core::Vector3dVector& scan, const core::TimestampVector& time_vector);
+  // Per-point reflectivity/intensity, same order/size as process_lidar_msg's scan; empty when
+  // unavailable or when neither intensity_constraint nor intensity_disagreement_gate is set.
+  std::vector<float> process_lidar_intensity(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& lidar_msg) const;
+
+  core::Vector3dVector register_scan_locked(const core::Vector3dVector& scan,
+                                            const core::TimestampVector& time_vector,
+                                            const std::vector<float>* intensities = nullptr);
 
   void publish_lidar_outputs(const core::Vector3dVector& deskewed_frame) const;
 
