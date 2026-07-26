@@ -189,6 +189,14 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["radar_disagreement_weight"] = nlohmann_json_t.radar_disagreement_weight;
   nlohmann_json_j["radar_velocity_continuous_fusion"] = nlohmann_json_t.radar_velocity_continuous_fusion;
   nlohmann_json_j["radar_fusion_icp_information_scale"] = nlohmann_json_t.radar_fusion_icp_information_scale;
+  nlohmann_json_j["gravity_window_alignment"] = nlohmann_json_t.gravity_window_alignment;
+  nlohmann_json_j["gravity_window_sec"] = nlohmann_json_t.gravity_window_sec;
+  nlohmann_json_j["gravity_alignment_gain"] = nlohmann_json_t.gravity_alignment_gain;
+  nlohmann_json_j["gravity_alignment_max_correction_rad"] = nlohmann_json_t.gravity_alignment_max_correction_rad;
+  nlohmann_json_j["gravity_alignment_max_magnitude_deviation"] =
+      nlohmann_json_t.gravity_alignment_max_magnitude_deviation;
+  nlohmann_json_j["gravity_alignment_max_plausible_tilt_rad"] = nlohmann_json_t.gravity_alignment_max_plausible_tilt_rad;
+  nlohmann_json_j["gravity_alignment_max_yaw_rate_rad_s"] = nlohmann_json_t.gravity_alignment_max_yaw_rate_rad_s;
   nlohmann_json_j["intensity_constraint"] = nlohmann_json_t.intensity_constraint;
   nlohmann_json_j["intensity_bin_size_m"] = nlohmann_json_t.intensity_bin_size_m;
   nlohmann_json_j["intensity_profile_half_length_m"] = nlohmann_json_t.intensity_profile_half_length_m;
@@ -270,6 +278,17 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
   nlohmann_json_j.at("radar_velocity_continuous_fusion").get_to(nlohmann_json_t.radar_velocity_continuous_fusion);
   nlohmann_json_j.at("radar_fusion_icp_information_scale")
       .get_to(nlohmann_json_t.radar_fusion_icp_information_scale);
+  nlohmann_json_j.at("gravity_window_alignment").get_to(nlohmann_json_t.gravity_window_alignment);
+  nlohmann_json_j.at("gravity_window_sec").get_to(nlohmann_json_t.gravity_window_sec);
+  nlohmann_json_j.at("gravity_alignment_gain").get_to(nlohmann_json_t.gravity_alignment_gain);
+  nlohmann_json_j.at("gravity_alignment_max_correction_rad")
+      .get_to(nlohmann_json_t.gravity_alignment_max_correction_rad);
+  nlohmann_json_j.at("gravity_alignment_max_magnitude_deviation")
+      .get_to(nlohmann_json_t.gravity_alignment_max_magnitude_deviation);
+  nlohmann_json_j.at("gravity_alignment_max_plausible_tilt_rad")
+      .get_to(nlohmann_json_t.gravity_alignment_max_plausible_tilt_rad);
+  nlohmann_json_j.at("gravity_alignment_max_yaw_rate_rad_s")
+      .get_to(nlohmann_json_t.gravity_alignment_max_yaw_rate_rad_s);
   nlohmann_json_j.at("intensity_constraint").get_to(nlohmann_json_t.intensity_constraint);
   nlohmann_json_j.at("intensity_bin_size_m").get_to(nlohmann_json_t.intensity_bin_size_m);
   nlohmann_json_j.at("intensity_profile_half_length_m").get_to(nlohmann_json_t.intensity_profile_half_length_m);
@@ -478,6 +497,21 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "radar_velocity_continuous_fusion", lio_config.radar_velocity_continuous_fusion);
   lio_config.radar_fusion_icp_information_scale = node->declare_parameter<double>(
       "radar_fusion_icp_information_scale", lio_config.radar_fusion_icp_information_scale);
+
+  // ---- sliding-window absolute gravity alignment (fork addition; default-off) ----
+  lio_config.gravity_window_alignment =
+      node->declare_parameter<bool>("gravity_window_alignment", lio_config.gravity_window_alignment);
+  lio_config.gravity_window_sec = node->declare_parameter<double>("gravity_window_sec", lio_config.gravity_window_sec);
+  lio_config.gravity_alignment_gain =
+      node->declare_parameter<double>("gravity_alignment_gain", lio_config.gravity_alignment_gain);
+  lio_config.gravity_alignment_max_correction_rad = node->declare_parameter<double>(
+      "gravity_alignment_max_correction_rad", lio_config.gravity_alignment_max_correction_rad);
+  lio_config.gravity_alignment_max_magnitude_deviation = node->declare_parameter<double>(
+      "gravity_alignment_max_magnitude_deviation", lio_config.gravity_alignment_max_magnitude_deviation);
+  lio_config.gravity_alignment_max_plausible_tilt_rad = node->declare_parameter<double>(
+      "gravity_alignment_max_plausible_tilt_rad", lio_config.gravity_alignment_max_plausible_tilt_rad);
+  lio_config.gravity_alignment_max_yaw_rate_rad_s = node->declare_parameter<double>(
+      "gravity_alignment_max_yaw_rate_rad_s", lio_config.gravity_alignment_max_yaw_rate_rad_s);
 
   // ---- intensity/reflectivity texture constraint (fork addition; default-off) ----
   lio_config.intensity_constraint =
@@ -1295,6 +1329,24 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
       if (std::ofstream file(radar_file); file.is_open()) {
         file << radar_summary.dump(4) << "\n";
         std::cout << "Radar velocity fusion summary written to " << radar_file << "\n";
+      }
+    }
+    // Sliding-window gravity alignment summary.
+    if (lio->config.gravity_window_alignment) {
+      const nlohmann::json gravity_summary = {
+          {"attempt_count", lio->gravity_alignment_attempt_count},
+          {"applied_count", lio->gravity_alignment_applied_count},
+          {"last_tilt_deg", lio->gravity_alignment_last_tilt_rad * 180.0 / M_PI},
+          {"mean_correction_deg_per_applied_scan",
+           lio->gravity_alignment_applied_count > 0
+               ? (lio->gravity_alignment_correction_rad_sum /
+                  static_cast<double>(lio->gravity_alignment_applied_count)) *
+                     180.0 / M_PI
+               : 0.0}};
+      const std::filesystem::path gravity_file = output_dir / "gravity_alignment_summary.json";
+      if (std::ofstream file(gravity_file); file.is_open()) {
+        file << gravity_summary.dump(4) << "\n";
+        std::cout << "Gravity alignment summary written to " << gravity_file << "\n";
       }
     }
     // Intensity/reflectivity texture constraint summary.
