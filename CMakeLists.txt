@@ -80,6 +80,12 @@ else()
     if(TARGET test_voxel_hash_map)
       target_link_libraries(test_voxel_hash_map rko_lio::core)
     endif()
+    ament_add_gtest(
+      test_gravity_alignment
+      test/test_gravity_alignment.cpp)
+    if(TARGET test_gravity_alignment)
+      target_link_libraries(test_gravity_alignment rko_lio::core)
+    endif()
   endif()
 
   # ament macros cannot be in a CMake subdirectory, even rclcpp

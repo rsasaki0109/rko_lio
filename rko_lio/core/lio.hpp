@@ -34,8 +34,10 @@
 #include "voxel_hash_map.hpp"
 #include "util.hpp"
 #include <array>
+#include <deque>
 #include <optional>
 #include <string>
+#include <utility>
 
 /** Core namespace containing LIO data structures and state definitions. */
 namespace rko_lio::core {
@@ -218,6 +220,42 @@ public:
      *  relative trust between ICP and radar be tuned empirically without touching the radar
      *  sigmas below. 1.0 preserves H's own scale unmodified. */
     double radar_fusion_icp_information_scale = 1.0;
+
+    /** Sliding-window absolute gravity alignment (see gravity_alignment.hpp). Treats the
+     *  long-window mean of raw accelerometer samples, rotated into the world frame, as an
+     *  absolute up reference and feeds the residual tilt back as a small, capped,
+     *  roll/pitch-only correction after each registration. Complements min_beta's per-scan
+     *  regularization, whose Kalman-filter reference is built with the current rotation
+     *  estimate and therefore tracks -- instead of observing -- slow pitch/roll drift. */
+    bool gravity_window_alignment = false;
+
+    /** Sliding window length (s) for the world-frame accelerometer mean. Long enough that
+     *  quasi-steady body acceleration averages out; short enough that the drift being
+     *  measured is approximately constant across the window. */
+    double gravity_window_sec = 20.0;
+
+    /** Fraction of the measured window tilt corrected per registered scan. */
+    double gravity_alignment_gain = 0.05;
+
+    /** Hard cap (rad) on the correction angle applied per registered scan. */
+    double gravity_alignment_max_correction_rad = 0.002;
+
+    /** Reject a window whose mean magnitude deviates from |g| by more than this fraction
+     *  (sustained acceleration, e.g. constant braking, would masquerade as tilt). */
+    double gravity_alignment_max_magnitude_deviation = 0.05;
+
+    /** Reject a window whose measured tilt exceeds this (rad). Permissive by default
+     *  (45 deg): the per-scan correction cap is the primary safety mechanism, and on
+     *  sequences with fast genuine attitude error (fog clutter-lock) large measured tilts
+     *  still carry real signal. Tighten on rigs where large tilts are known-impossible. */
+    double gravity_alignment_max_plausible_tilt_rad = 0.785;
+
+    /** Do not add a scan interval to the window while the world-frame yaw rate exceeds this
+     *  (rad/s): sustained turning adds centripetal acceleration that does not average out
+     *  and would masquerade as tilt (measured: fog loop walk p50 yaw rate 0.10 rad/s vs.
+     *  tunnel straight traversal p90 0.04 rad/s). During long turns the window drains and
+     *  the alignment goes dormant instead of injecting a false correction. */
+    double gravity_alignment_max_yaw_rate_rad_s = 0.05;
 
     /** Correct translation along a confirmed persistent weak direction using scan-to-scan
      *  cross-correlation of a 1D reflectivity/intensity profile built along that axis.
@@ -438,6 +476,16 @@ public:
   /** Scans where the intensity-vs-ICP velocity disagreement gate applied a correction. */
   std::size_t intensity_disagreement_corrected_scan_count = 0;
 
+  /** Sliding-window gravity alignment diagnostics (gravity_window_alignment).
+   *  attempt_count: window was full enough to evaluate. applied_count: the
+   *  magnitude gate passed and a (possibly identity) correction was applied.
+   *  last_tilt_rad: most recent measured window tilt. correction_rad_sum /
+   *  applied_count gives the mean correction angle per applied scan. */
+  std::size_t gravity_alignment_attempt_count = 0;
+  std::size_t gravity_alignment_applied_count = 0;
+  double gravity_alignment_last_tilt_rad = 0.0;
+  double gravity_alignment_correction_rad_sum = 0.0;
+
   /** Diagnostic-only counters for the intensity-vs-ICP velocity disagreement gate: how many
    *  scans had a stored previous profile to correlate against, how many of those produced a
    *  trustworthy (valid, non-saturated) shift, and how many of those exceeded the disagreement
@@ -521,5 +569,9 @@ private:
 
   /** Consecutive scans with an intensity-vs-ICP velocity disagreement. */
   std::size_t _intensity_disagreement_streak = 0;
+
+  /** Sliding window of (scan time, world-frame raw-accelerometer interval mean) samples for
+   *  gravity_window_alignment. Entries older than gravity_window_sec are dropped each scan. */
+  std::deque<std::pair<Nsec, Eigen::Vector3d>> _gravity_alignment_window;
 };
 } // namespace rko_lio::core

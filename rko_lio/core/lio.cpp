@@ -24,6 +24,7 @@
 
 #include "lio.hpp"
 #include "degeneracy_aware_solve.hpp"
+#include "gravity_alignment.hpp"
 #include "preprocess_scan.hpp"
 #include "profiler.hpp"
 #include "radar_ego_velocity.hpp"
@@ -1139,6 +1140,52 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       }
     } else if (config.intensity_disagreement_gate) {
       _intensity_disagreement_streak = 0;
+    }
+
+    // Sliding-window absolute gravity alignment (see gravity_alignment.hpp for why the
+    // min_beta regularization above cannot correct slow pitch/roll drift on its own). The
+    // window collects each scan interval's raw (gravity-inclusive) accelerometer mean rotated
+    // by that scan's optimized orientation; its long-window mean must point world-up, and the
+    // residual tilt is fed back as a small, capped, roll/pitch-only left-multiplicative
+    // correction. Applied before the velocity/acceleration estimation below so the state
+    // update sees the corrected orientation.
+    if (config.gravity_window_alignment && interval_stats.imu_count > 0) {
+      const Eigen::Vector3d interval_mean_accel = interval_stats.imu_acceleration_sum / interval_stats.imu_count;
+      const Eigen::Vector3d interval_mean_ang_vel_world =
+          optimized_pose.so3() * (interval_stats.angular_velocity_sum / interval_stats.imu_count);
+      // Sustained turning (world-frame yaw rate) adds centripetal acceleration that does not
+      // average out over the window; skip such intervals instead of poisoning the mean.
+      if (std::abs(interval_mean_ang_vel_world.z()) <= config.gravity_alignment_max_yaw_rate_rad_s) {
+        _gravity_alignment_window.emplace_back(current_lidar_time, optimized_pose.so3() * interval_mean_accel);
+      }
+      while (!_gravity_alignment_window.empty() &&
+             to_seconds(current_lidar_time - _gravity_alignment_window.front().first) > config.gravity_window_sec) {
+        _gravity_alignment_window.pop_front();
+      }
+      const double window_span =
+          _gravity_alignment_window.empty()
+              ? 0.0
+              : to_seconds(current_lidar_time - _gravity_alignment_window.front().first);
+      // Only act on a mostly-full window: a short window has not yet averaged out the body
+      // acceleration and would inject transient tilt as a false correction.
+      if (window_span >= 0.5 * config.gravity_window_sec && _gravity_alignment_window.size() >= 10) {
+        ++gravity_alignment_attempt_count;
+        Eigen::Vector3d mean_world_accel = Eigen::Vector3d::Zero();
+        for (const auto& [_, world_accel] : _gravity_alignment_window) {
+          mean_world_accel += world_accel;
+        }
+        mean_world_accel /= static_cast<double>(_gravity_alignment_window.size());
+        const GravityAlignmentCorrection alignment = compute_gravity_alignment_correction(
+            mean_world_accel, GRAVITY_MAG, config.gravity_alignment_max_magnitude_deviation,
+            config.gravity_alignment_gain, config.gravity_alignment_max_correction_rad,
+            config.gravity_alignment_max_plausible_tilt_rad);
+        if (alignment.valid) {
+          ++gravity_alignment_applied_count;
+          gravity_alignment_last_tilt_rad = alignment.tilt_rad;
+          gravity_alignment_correction_rad_sum += alignment.correction.log().norm();
+          optimized_pose.so3() = alignment.correction * optimized_pose.so3();
+        }
+      }
     }
 
     // estimate velocities and accelerations from the new pose
