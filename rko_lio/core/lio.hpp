@@ -313,6 +313,20 @@ public:
      *  This caps only prior authority, not the final ICP pose. Set <= 0 to disable. */
     double kinematic_blend_max_propagated_speed_mps = 3.0;
 
+    /** Clear the anchor when the previous LiDAR velocity exceeds this application
+     *  envelope. Prevents a walking-speed preset from engaging on a driving rig.
+     *  Set <= 0 to disable. */
+    double kinematic_blend_max_activation_speed_mps = 0.0;
+
+    /** Consecutive above-envelope scans required before the activation-speed
+     *  gate clears the anchor. Rejects sustained driving without reacting to
+     *  isolated walking-speed ICP noise. */
+    std::size_t kinematic_blend_speed_gate_min_scans = 1;
+
+    /** Time the platform speed must remain inside the activation envelope
+     *  after a persistent rejection before the bridge may re-enable. */
+    double kinematic_blend_speed_reenable_delay_sec = 0.0;
+
     /** Below this previous speed (m/s), clear the anchor and leave startup to ICP. */
     double kinematic_blend_min_speed = 0.3;
 
@@ -323,6 +337,30 @@ public:
 
     /** Consecutive above-threshold scans required before yaw disables the blend. */
     std::size_t kinematic_blend_yaw_gate_min_scans = 5;
+
+    /** Require a tunnel-like scan range distribution before the inertial bridge
+     *  can anchor or correct. Intended to reject near-field fog/clutter and
+     *  close-range handheld sequences. */
+    bool kinematic_blend_range_scene_gate = false;
+
+    /** A return below this range counts as near-field scene support. */
+    double kinematic_blend_scene_near_range_m = 3.0;
+
+    /** Maximum fraction of valid returns allowed inside the near range. */
+    double kinematic_blend_scene_max_near_fraction = 0.5;
+
+    /** A return above this range counts as long-range structural support. */
+    double kinematic_blend_scene_far_range_m = 10.0;
+
+    /** Minimum fraction of valid returns required beyond the far range. */
+    double kinematic_blend_scene_min_far_fraction = 0.05;
+
+    /** Minimum valid scan points required to evaluate the range scene gate. */
+    std::size_t kinematic_blend_scene_min_valid_points = 100;
+
+    /** Time a structurally trusted scene must remain clear after a range-scene
+     *  rejection before the inertial bridge may re-enable. */
+    double kinematic_blend_scene_reenable_delay_sec = 0.0;
 
     /** Suppress map insertion only when propagation weight exceeds this threshold.
      *  1.0 keeps every scan (the default); values below 1 enable the map-policy A/B. */
@@ -615,6 +653,14 @@ public:
   double kinematic_blend_propagation_weight_sum = 0.0;
   double kinematic_blend_max_propagation_weight = 0.0;
   double kinematic_blend_max_anchor_age_sec = 0.0;
+  std::size_t kinematic_blend_scene_evaluation_count = 0;
+  std::size_t kinematic_blend_scene_valid_count = 0;
+  std::size_t kinematic_blend_scene_rejected_scan_count = 0;
+  std::size_t kinematic_blend_scene_cooldown_rejected_scan_count = 0;
+  std::size_t kinematic_blend_speed_rejected_scan_count = 0;
+  std::size_t kinematic_blend_speed_cooldown_rejected_scan_count = 0;
+  double kinematic_blend_scene_near_fraction_sum = 0.0;
+  double kinematic_blend_scene_far_fraction_sum = 0.0;
 
 private:
   /**
@@ -700,6 +746,15 @@ private:
 
   /** Consecutive scan intervals above kinematic_blend_max_yaw_rate_rad_s. */
   std::size_t _kinematic_blend_turning_streak = 0;
+
+  /** Consecutive scans above kinematic_blend_max_activation_speed_mps. */
+  std::size_t _kinematic_blend_speeding_streak = 0;
+
+  /** Most recent range-scene rejection time, in seconds. */
+  double _kinematic_blend_scene_last_rejected_time_sec = -1.0;
+
+  /** Most recent persistent activation-speed rejection time, in seconds. */
+  double _kinematic_blend_speed_last_rejected_time_sec = -1.0;
 
   /** Sliding window of (scan time, world-frame raw-accelerometer interval mean) samples for
    *  gravity_window_alignment. Entries older than gravity_window_sec are dropped each scan. */
