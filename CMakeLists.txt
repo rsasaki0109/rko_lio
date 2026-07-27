@@ -104,6 +104,12 @@ else()
     if(TARGET test_kinematic_velocity_blend)
       target_link_libraries(test_kinematic_velocity_blend rko_lio::core)
     endif()
+    ament_add_gtest(
+      test_kinematic_scene_range_gate
+      test/test_kinematic_scene_range_gate.cpp)
+    if(TARGET test_kinematic_scene_range_gate)
+      target_link_libraries(test_kinematic_scene_range_gate rko_lio::core)
+    endif()
   endif()
 
   # ament macros cannot be in a CMake subdirectory, even rclcpp

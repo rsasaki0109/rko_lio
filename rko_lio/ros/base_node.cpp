@@ -217,11 +217,31 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
       nlohmann_json_t.kinematic_blend_max_icp_innovation_mps;
   nlohmann_json_j["kinematic_blend_max_propagated_speed_mps"] =
       nlohmann_json_t.kinematic_blend_max_propagated_speed_mps;
+  nlohmann_json_j["kinematic_blend_max_activation_speed_mps"] =
+      nlohmann_json_t.kinematic_blend_max_activation_speed_mps;
+  nlohmann_json_j["kinematic_blend_speed_gate_min_scans"] =
+      nlohmann_json_t.kinematic_blend_speed_gate_min_scans;
+  nlohmann_json_j["kinematic_blend_speed_reenable_delay_sec"] =
+      nlohmann_json_t.kinematic_blend_speed_reenable_delay_sec;
   nlohmann_json_j["kinematic_blend_min_speed"] = nlohmann_json_t.kinematic_blend_min_speed;
   nlohmann_json_j["kinematic_blend_max_yaw_rate_rad_s"] =
       nlohmann_json_t.kinematic_blend_max_yaw_rate_rad_s;
   nlohmann_json_j["kinematic_blend_yaw_gate_min_scans"] =
       nlohmann_json_t.kinematic_blend_yaw_gate_min_scans;
+  nlohmann_json_j["kinematic_blend_range_scene_gate"] =
+      nlohmann_json_t.kinematic_blend_range_scene_gate;
+  nlohmann_json_j["kinematic_blend_scene_near_range_m"] =
+      nlohmann_json_t.kinematic_blend_scene_near_range_m;
+  nlohmann_json_j["kinematic_blend_scene_max_near_fraction"] =
+      nlohmann_json_t.kinematic_blend_scene_max_near_fraction;
+  nlohmann_json_j["kinematic_blend_scene_far_range_m"] =
+      nlohmann_json_t.kinematic_blend_scene_far_range_m;
+  nlohmann_json_j["kinematic_blend_scene_min_far_fraction"] =
+      nlohmann_json_t.kinematic_blend_scene_min_far_fraction;
+  nlohmann_json_j["kinematic_blend_scene_min_valid_points"] =
+      nlohmann_json_t.kinematic_blend_scene_min_valid_points;
+  nlohmann_json_j["kinematic_blend_scene_reenable_delay_sec"] =
+      nlohmann_json_t.kinematic_blend_scene_reenable_delay_sec;
   nlohmann_json_j["kinematic_blend_map_update_max_propagation_weight"] =
       nlohmann_json_t.kinematic_blend_map_update_max_propagation_weight;
   nlohmann_json_j["kinematic_blend_map_update_min_fraction"] =
@@ -338,11 +358,31 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
       .get_to(nlohmann_json_t.kinematic_blend_max_icp_innovation_mps);
   nlohmann_json_j.at("kinematic_blend_max_propagated_speed_mps")
       .get_to(nlohmann_json_t.kinematic_blend_max_propagated_speed_mps);
+  nlohmann_json_j.at("kinematic_blend_max_activation_speed_mps")
+      .get_to(nlohmann_json_t.kinematic_blend_max_activation_speed_mps);
+  nlohmann_json_j.at("kinematic_blend_speed_gate_min_scans")
+      .get_to(nlohmann_json_t.kinematic_blend_speed_gate_min_scans);
+  nlohmann_json_j.at("kinematic_blend_speed_reenable_delay_sec")
+      .get_to(nlohmann_json_t.kinematic_blend_speed_reenable_delay_sec);
   nlohmann_json_j.at("kinematic_blend_min_speed").get_to(nlohmann_json_t.kinematic_blend_min_speed);
   nlohmann_json_j.at("kinematic_blend_max_yaw_rate_rad_s")
       .get_to(nlohmann_json_t.kinematic_blend_max_yaw_rate_rad_s);
   nlohmann_json_j.at("kinematic_blend_yaw_gate_min_scans")
       .get_to(nlohmann_json_t.kinematic_blend_yaw_gate_min_scans);
+  nlohmann_json_j.at("kinematic_blend_range_scene_gate")
+      .get_to(nlohmann_json_t.kinematic_blend_range_scene_gate);
+  nlohmann_json_j.at("kinematic_blend_scene_near_range_m")
+      .get_to(nlohmann_json_t.kinematic_blend_scene_near_range_m);
+  nlohmann_json_j.at("kinematic_blend_scene_max_near_fraction")
+      .get_to(nlohmann_json_t.kinematic_blend_scene_max_near_fraction);
+  nlohmann_json_j.at("kinematic_blend_scene_far_range_m")
+      .get_to(nlohmann_json_t.kinematic_blend_scene_far_range_m);
+  nlohmann_json_j.at("kinematic_blend_scene_min_far_fraction")
+      .get_to(nlohmann_json_t.kinematic_blend_scene_min_far_fraction);
+  nlohmann_json_j.at("kinematic_blend_scene_min_valid_points")
+      .get_to(nlohmann_json_t.kinematic_blend_scene_min_valid_points);
+  nlohmann_json_j.at("kinematic_blend_scene_reenable_delay_sec")
+      .get_to(nlohmann_json_t.kinematic_blend_scene_reenable_delay_sec);
   nlohmann_json_j.at("kinematic_blend_map_update_max_propagation_weight")
       .get_to(nlohmann_json_t.kinematic_blend_map_update_max_propagation_weight);
   nlohmann_json_j.at("kinematic_blend_map_update_min_fraction")
@@ -606,6 +646,16 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "kinematic_blend_max_icp_innovation_mps", lio_config.kinematic_blend_max_icp_innovation_mps);
   lio_config.kinematic_blend_max_propagated_speed_mps = node->declare_parameter<double>(
       "kinematic_blend_max_propagated_speed_mps", lio_config.kinematic_blend_max_propagated_speed_mps);
+  lio_config.kinematic_blend_max_activation_speed_mps = node->declare_parameter<double>(
+      "kinematic_blend_max_activation_speed_mps", lio_config.kinematic_blend_max_activation_speed_mps);
+  const auto kinematic_blend_speed_gate_min_scans = node->declare_parameter<int>(
+      "kinematic_blend_speed_gate_min_scans",
+      static_cast<int>(lio_config.kinematic_blend_speed_gate_min_scans));
+  lio_config.kinematic_blend_speed_gate_min_scans = static_cast<std::size_t>(
+      kinematic_blend_speed_gate_min_scans > 0 ? kinematic_blend_speed_gate_min_scans : 1);
+  lio_config.kinematic_blend_speed_reenable_delay_sec = node->declare_parameter<double>(
+      "kinematic_blend_speed_reenable_delay_sec",
+      lio_config.kinematic_blend_speed_reenable_delay_sec);
   lio_config.kinematic_blend_min_speed =
       node->declare_parameter<double>("kinematic_blend_min_speed", lio_config.kinematic_blend_min_speed);
   lio_config.kinematic_blend_max_yaw_rate_rad_s = node->declare_parameter<double>(
@@ -615,6 +665,24 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       static_cast<int>(lio_config.kinematic_blend_yaw_gate_min_scans));
   lio_config.kinematic_blend_yaw_gate_min_scans = static_cast<std::size_t>(
       kinematic_blend_yaw_gate_min_scans > 0 ? kinematic_blend_yaw_gate_min_scans : 1);
+  lio_config.kinematic_blend_range_scene_gate = node->declare_parameter<bool>(
+      "kinematic_blend_range_scene_gate", lio_config.kinematic_blend_range_scene_gate);
+  lio_config.kinematic_blend_scene_near_range_m = node->declare_parameter<double>(
+      "kinematic_blend_scene_near_range_m", lio_config.kinematic_blend_scene_near_range_m);
+  lio_config.kinematic_blend_scene_max_near_fraction = node->declare_parameter<double>(
+      "kinematic_blend_scene_max_near_fraction", lio_config.kinematic_blend_scene_max_near_fraction);
+  lio_config.kinematic_blend_scene_far_range_m = node->declare_parameter<double>(
+      "kinematic_blend_scene_far_range_m", lio_config.kinematic_blend_scene_far_range_m);
+  lio_config.kinematic_blend_scene_min_far_fraction = node->declare_parameter<double>(
+      "kinematic_blend_scene_min_far_fraction", lio_config.kinematic_blend_scene_min_far_fraction);
+  const auto kinematic_blend_scene_min_valid_points = node->declare_parameter<int>(
+      "kinematic_blend_scene_min_valid_points",
+      static_cast<int>(lio_config.kinematic_blend_scene_min_valid_points));
+  lio_config.kinematic_blend_scene_min_valid_points = static_cast<std::size_t>(
+      kinematic_blend_scene_min_valid_points > 0 ? kinematic_blend_scene_min_valid_points : 1);
+  lio_config.kinematic_blend_scene_reenable_delay_sec = node->declare_parameter<double>(
+      "kinematic_blend_scene_reenable_delay_sec",
+      lio_config.kinematic_blend_scene_reenable_delay_sec);
   lio_config.kinematic_blend_map_update_max_propagation_weight = node->declare_parameter<double>(
       "kinematic_blend_map_update_max_propagation_weight",
       lio_config.kinematic_blend_map_update_max_propagation_weight);
@@ -1490,7 +1558,25 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
                      static_cast<double>(lio->kinematic_blend_corrected_scan_count)
                : 0.0},
           {"max_propagation_weight", lio->kinematic_blend_max_propagation_weight},
-          {"max_anchor_age_sec", lio->kinematic_blend_max_anchor_age_sec}};
+          {"max_anchor_age_sec", lio->kinematic_blend_max_anchor_age_sec},
+          {"scene_evaluation_count", lio->kinematic_blend_scene_evaluation_count},
+          {"scene_valid_count", lio->kinematic_blend_scene_valid_count},
+          {"scene_rejected_scan_count", lio->kinematic_blend_scene_rejected_scan_count},
+          {"scene_cooldown_rejected_scan_count",
+           lio->kinematic_blend_scene_cooldown_rejected_scan_count},
+          {"speed_rejected_scan_count", lio->kinematic_blend_speed_rejected_scan_count},
+          {"speed_cooldown_rejected_scan_count",
+           lio->kinematic_blend_speed_cooldown_rejected_scan_count},
+          {"mean_scene_near_fraction",
+           lio->kinematic_blend_scene_valid_count > 0
+               ? lio->kinematic_blend_scene_near_fraction_sum /
+                     static_cast<double>(lio->kinematic_blend_scene_valid_count)
+               : 0.0},
+          {"mean_scene_far_fraction",
+           lio->kinematic_blend_scene_valid_count > 0
+               ? lio->kinematic_blend_scene_far_fraction_sum /
+                     static_cast<double>(lio->kinematic_blend_scene_valid_count)
+               : 0.0}};
       const std::filesystem::path blend_file = output_dir / "kinematic_velocity_blend_summary.json";
       if (std::ofstream file(blend_file); file.is_open()) {
         file << blend_summary.dump(4) << "\n";

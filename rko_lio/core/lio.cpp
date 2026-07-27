@@ -25,6 +25,7 @@
 #include "lio.hpp"
 #include "degeneracy_aware_solve.hpp"
 #include "gravity_alignment.hpp"
+#include "kinematic_scene_range_gate.hpp"
 #include "kinematic_velocity_blend.hpp"
 #include "kinematic_velocity_gate.hpp"
 #include "localizability_weighting.hpp"
@@ -586,6 +587,9 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
   _kinematic_blend_anchor_time.reset();
   _kinematic_blend_propagated_velocity_world.reset();
   _kinematic_blend_turning_streak = 0;
+  _kinematic_blend_speeding_streak = 0;
+  _kinematic_blend_scene_last_rejected_time_sec = -1.0;
+  _kinematic_blend_speed_last_rejected_time_sec = -1.0;
   imu_state = lidar_state;
   interval_stats.reset();
   update_maps(map_update_frame, lidar_state.pose);
@@ -605,6 +609,9 @@ Vector3dVector LIO::drop_failed_scan(const Nsec& current_lidar_time, const std::
   _kinematic_blend_anchor_time.reset();
   _kinematic_blend_propagated_velocity_world.reset();
   _kinematic_blend_turning_streak = 0;
+  _kinematic_blend_speeding_streak = 0;
+  _kinematic_blend_scene_last_rejected_time_sec = -1.0;
+  _kinematic_blend_speed_last_rejected_time_sec = -1.0;
   imu_state = lidar_state;
   interval_stats.reset();
   std::cerr << "[WARNING] Dropping scan during kidnap recovery: " << reason << "\n";
@@ -1224,6 +1231,52 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // This newer blend takes precedence if both it and the legacy hard gate are enabled.
     if (config.kinematic_velocity_blend && interval_stats.imu_count > 0) {
       const Eigen::Vector3d previous_velocity_world = lidar_state.pose.so3() * lidar_state.velocity;
+      bool scene_rejected = false;
+      if (config.kinematic_blend_range_scene_gate) {
+        ++kinematic_blend_scene_evaluation_count;
+        const KinematicSceneRangeSupport scene =
+            evaluate_kinematic_scene_range_support(
+                preproc_result.filtered_frame, config.min_range, config.max_range,
+                config.kinematic_blend_scene_near_range_m,
+                config.kinematic_blend_scene_max_near_fraction,
+                config.kinematic_blend_scene_far_range_m,
+                config.kinematic_blend_scene_min_far_fraction,
+                config.kinematic_blend_scene_min_valid_points);
+        if (scene.valid) {
+          ++kinematic_blend_scene_valid_count;
+          kinematic_blend_scene_near_fraction_sum += scene.near_fraction;
+          kinematic_blend_scene_far_fraction_sum += scene.far_fraction;
+        }
+        const KinematicSceneReenableGate scene_gate =
+            update_kinematic_scene_reenable_gate(
+                scene.trusted, to_seconds(current_lidar_time),
+                config.kinematic_blend_scene_reenable_delay_sec,
+                _kinematic_blend_scene_last_rejected_time_sec);
+        _kinematic_blend_scene_last_rejected_time_sec =
+            scene_gate.last_rejected_time_sec;
+        scene_rejected = scene_gate.rejected;
+        kinematic_blend_scene_rejected_scan_count += !scene.trusted ? 1U : 0U;
+        kinematic_blend_scene_cooldown_rejected_scan_count +=
+            scene_gate.cooldown_active ? 1U : 0U;
+      }
+      const KinematicPersistentSpeedGate speed_gate =
+          update_kinematic_persistent_speed_gate(
+              previous_velocity_world.norm(),
+              config.kinematic_blend_max_activation_speed_mps,
+              config.kinematic_blend_speed_gate_min_scans,
+              _kinematic_blend_speeding_streak);
+      _kinematic_blend_speeding_streak = speed_gate.streak;
+      const KinematicSceneReenableGate speed_reenable_gate =
+          update_kinematic_speed_reenable_gate(
+              !speed_gate.rejected, to_seconds(current_lidar_time),
+              config.kinematic_blend_speed_reenable_delay_sec,
+              _kinematic_blend_speed_last_rejected_time_sec);
+      _kinematic_blend_speed_last_rejected_time_sec =
+          speed_reenable_gate.last_rejected_time_sec;
+      const bool speed_too_high = speed_reenable_gate.rejected;
+      kinematic_blend_speed_rejected_scan_count += speed_gate.rejected ? 1U : 0U;
+      kinematic_blend_speed_cooldown_rejected_scan_count +=
+          speed_reenable_gate.cooldown_active ? 1U : 0U;
       const Eigen::Vector3d interval_mean_body_accel =
           interval_stats.body_acceleration_sum / interval_stats.imu_count;
       const Eigen::Vector3d interval_mean_angular_velocity_world =
@@ -1242,7 +1295,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           _kinematic_blend_turning_streak >=
           std::max<std::size_t>(1, config.kinematic_blend_yaw_gate_min_scans);
       if (previous_velocity_world.norm() < config.kinematic_blend_min_speed ||
-          turning_too_fast) {
+          speed_too_high || scene_rejected || turning_too_fast) {
         _kinematic_blend_anchor_time.reset();
         _kinematic_blend_propagated_velocity_world.reset();
       } else {
