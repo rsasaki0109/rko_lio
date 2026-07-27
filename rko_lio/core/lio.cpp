@@ -25,6 +25,9 @@
 #include "lio.hpp"
 #include "degeneracy_aware_solve.hpp"
 #include "gravity_alignment.hpp"
+#include "kinematic_velocity_blend.hpp"
+#include "kinematic_velocity_gate.hpp"
+#include "localizability_weighting.hpp"
 #include "preprocess_scan.hpp"
 #include "profiler.hpp"
 #include "radar_ego_velocity.hpp"
@@ -166,40 +169,68 @@ std::pair<Vector3dVector, std::vector<float>> deskew_and_clip_with_intensity(
 }
 
 using LinearSystem = std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double>;
+
+// Per-build diagnostics of the localizability weighting (see
+// localizability_weighting.hpp): how many correspondences existed and how many
+// received a boosted (> 1) weight from an axis-observing map normal.
+struct IcpWeightingStats {
+  int correspondences = 0;
+  int boosted = 0;
+};
+
 LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                                      const rko_lio::core::Vector3dVector& frame,
                                      const rko_lio::core::VoxelHashMap& voxel_map,
                                      const double& max_correspondence_distance,
-                                     const int voxel_search_radius = 1) {
-  auto linear_system_reduce = [](LinearSystem lhs, const LinearSystem& rhs) {
-    auto& [lhs_H, lhs_b, lhs_chi] = lhs;
-    const auto& [rhs_H, rhs_b, rhs_chi] = rhs;
+                                     const int voxel_search_radius = 1,
+                                     const std::optional<Eigen::Vector3d>& localizability_axis = std::nullopt,
+                                     const double localizability_boost = 0.0,
+                                     IcpWeightingStats* weighting_stats = nullptr) {
+  // H, b, chi, weight sum. The weight sum replaces the correspondence count in
+  // the H/b normalization; with weighting disabled every weight is exactly 1
+  // and the result is bit-identical to the historical count-normalized system.
+  using WeightedSystem = std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double, double>;
+  auto linear_system_reduce = [](WeightedSystem lhs, const WeightedSystem& rhs) {
+    auto& [lhs_H, lhs_b, lhs_chi, lhs_w] = lhs;
+    const auto& [rhs_H, rhs_b, rhs_chi, rhs_w] = rhs;
     lhs_H += rhs_H;
     lhs_b += rhs_b;
     lhs_chi += rhs_chi;
+    lhs_w += rhs_w;
     return lhs;
   };
 
-  auto linear_system_for_one_point = [](const Eigen::Vector3d& source, const Eigen::Vector3d& target) {
+  const bool weighting_enabled = localizability_axis.has_value() && localizability_boost > 0.0;
+  std::atomic<int> boosted_counter = 0;
+
+  auto linear_system_for_one_point = [&](const Eigen::Vector3d& source, const Eigen::Vector3d& target) {
     Eigen::Matrix3_6d J_r;
     J_r.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
     J_r.block<3, 3>(0, 3) = -1.0 * Sophus::SO3d::hat(source);
     const Eigen::Vector3d residual = source - target;
-    return LinearSystem(J_r.transpose() * J_r,      // JTJ
-                        J_r.transpose() * residual, // JTr
-                        residual.squaredNorm());    // chi
+    double weight = 1.0;
+    if (weighting_enabled) {
+      weight = localizability_weight(voxel_map.voxel_normal(target), *localizability_axis, localizability_boost);
+      if (weight > 1.0) {
+        boosted_counter++;
+      }
+    }
+    return WeightedSystem(weight * J_r.transpose() * J_r,      // JTJ
+                          weight * J_r.transpose() * residual, // JTr
+                          weight * residual.squaredNorm(),     // chi
+                          weight);
   };
 
   // The only parallel part
   using points_iterator = std::vector<Eigen::Vector3d>::const_iterator;
   std::atomic<int> correspondences_counter = 0;
-  const auto& [H_icp, b_icp, chi_icp] = tbb::parallel_reduce(
+  const auto& [H_icp, b_icp, chi_icp, weight_sum] = tbb::parallel_reduce(
       // Range
       tbb::blocked_range<points_iterator>{frame.cbegin(), frame.cend()},
       // Identity
-      LinearSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0),
+      WeightedSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0, 0.0),
       // 1st Lambda: Parallel computation
-      [&](const tbb::blocked_range<points_iterator>& r, LinearSystem J) -> LinearSystem {
+      [&](const tbb::blocked_range<points_iterator>& r, WeightedSystem J) -> WeightedSystem {
         return std::transform_reduce(r.begin(), r.end(), J, linear_system_reduce, [&](const auto& point) {
           // Compute data association and linear system
           const Eigen::Vector3d transformed_point = current_pose * point;
@@ -210,7 +241,7 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
             return linear_system_for_one_point(transformed_point, closest_neighbor);
           }
           // TODO (meher): additional 0 add flops, which may hurt single threaded perf slightly
-          return LinearSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0);
+          return WeightedSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0, 0.0);
         });
       },
       // 2nd Lambda: Parallel reduction of the private Jacobians
@@ -219,8 +250,12 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
   if (correspondences_counter == 0) {
     throw std::runtime_error("Number of correspondences are 0.");
   }
+  if (weighting_stats != nullptr) {
+    weighting_stats->correspondences = correspondences_counter;
+    weighting_stats->boosted = boosted_counter;
+  }
 
-  return {H_icp / correspondences_counter, b_icp / correspondences_counter, 0.5 * chi_icp};
+  return {H_icp / weight_sum, b_icp / weight_sum, 0.5 * chi_icp};
 }
 
 LinearSystem build_orientation_linear_system(const Sophus::SE3d& current_pose,
@@ -252,6 +287,8 @@ struct IcpResult {
   std::size_t visual_unobservable_directions = 0;
   std::array<double, 6> visual_directional_information_ratios{};
   std::size_t visual_directional_information_ratio_count = 0;
+  // Final-iteration localizability weighting stats (zeros when disabled).
+  IcpWeightingStats weighting_stats;
 };
 
 IcpResult icp(const Vector3dVector& frame,
@@ -263,7 +300,9 @@ IcpResult icp(const Vector3dVector& frame,
              const PersistentWeakDirectionState& persistent_direction = {},
              const bool start_with_extended_iteration_budget = false,
              const std::optional<VisualPosePrior>& visual_pose_prior = std::nullopt,
-             const std::optional<Sophus::SE3d>& degeneracy_prior_pose = std::nullopt) {
+             const std::optional<Sophus::SE3d>& degeneracy_prior_pose = std::nullopt,
+             const std::optional<Eigen::Vector3d>& localizability_axis = std::nullopt,
+             const double localizability_boost = 0.0) {
   // in case config disables it, or we don't have valid IMU information for this icp loop, beta is -1
   const double beta = (config.min_beta > 0 && optional_accel_info.has_value())
                           ? (config.min_beta * (1 + optional_accel_info->accel_mag_variance))
@@ -280,11 +319,13 @@ IcpResult icp(const Vector3dVector& frame,
       start_with_extended_iteration_budget
           ? std::max(config.max_iterations, config.degeneracy_adaptive_max_iterations)
           : config.max_iterations;
+  IcpWeightingStats weighting_stats;
   for (size_t i = 0; i < iteration_budget; ++i) {
     const auto& [H, b, chi] = std::invoke([&]() -> LinearSystem {
       const auto& [H_icp, b_icp, chi_icp] =
           build_icp_linear_system(current_pose, frame, voxel_map, config.max_correspondence_distance,
-                                  voxel_search_radius);
+                                  voxel_search_radius, localizability_axis, localizability_boost,
+                                  &weighting_stats);
       if (beta >= 0) {
         const auto& [H_ori, b_ori, chi_ori] =
             build_orientation_linear_system(current_pose, optional_accel_info->local_gravity_estimate);
@@ -358,7 +399,7 @@ IcpResult icp(const Vector3dVector& frame,
   return {current_pose, last_H, last_b, degeneracy_intervention_count,
           visual_fused_directions, visual_unobservable_directions,
           visual_directional_information_ratios,
-          visual_directional_information_ratio_count};
+          visual_directional_information_ratio_count, weighting_stats};
 }
 
 struct AlignmentStats {
@@ -431,6 +472,9 @@ LIO::LIO(const Config& config_)
     : config(config_),
       map(config_.voxel_size, config_.max_range, config_.max_points_per_voxel),
       relocalization_map(config_.voxel_size, config_.max_range, config_.max_points_per_voxel) {
+  // Per-voxel normals are only maintained when the localizability weighting can
+  // consume them; the default path pays nothing.
+  map.set_maintain_normals(config.localizability_weighting);
   // Pin TBB's worker pool to config.max_num_threads (0 = leave at TBB default).
   [[maybe_unused]] static const auto tbb_thread_limit = [&] {
     const int threads = config.max_num_threads > 0 ? config.max_num_threads : tbb::this_task_arena::max_concurrency();
@@ -539,6 +583,9 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
   lidar_state.icp_diagnostics = std::nullopt;
   _persistent_weak_direction_tracker.reset();
   _previous_intensity_profile.reset();
+  _kinematic_blend_anchor_time.reset();
+  _kinematic_blend_propagated_velocity_world.reset();
+  _kinematic_blend_turning_streak = 0;
   imu_state = lidar_state;
   interval_stats.reset();
   update_maps(map_update_frame, lidar_state.pose);
@@ -555,6 +602,9 @@ Vector3dVector LIO::drop_failed_scan(const Nsec& current_lidar_time, const std::
   lidar_state.icp_diagnostics = std::nullopt;
   _persistent_weak_direction_tracker.reset();
   _previous_intensity_profile.reset();
+  _kinematic_blend_anchor_time.reset();
+  _kinematic_blend_propagated_velocity_world.reset();
+  _kinematic_blend_turning_streak = 0;
   imu_state = lidar_state;
   interval_stats.reset();
   std::cerr << "[WARNING] Dropping scan during kidnap recovery: " << reason << "\n";
@@ -909,6 +959,12 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   // itself, so this covers the remaining "about to attempt icp()" case.
   lidar_state.icp_diagnostics = std::nullopt;
 
+  // Whether the kinematic velocity gate corrected this scan's pose; consumed by
+  // the map-update skip at the end of this function.
+  bool kinematic_gate_corrected_this_scan = false;
+  bool kinematic_blend_suppress_map_update_this_scan = false;
+  double kinematic_blend_map_update_fraction_this_scan = 1.0;
+
   if (!map.empty()) {
     SCOPED_PROFILER("ICP");
     Sophus::SE3d optimized_pose;
@@ -926,12 +982,30 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // degeneracy_prior_pose slot.
     const std::optional<Sophus::SE3d>& degeneracy_prior_pose =
         radar_prior_pose.has_value() ? radar_prior_pose : intensity_prior_pose;
+    // Localizability weighting axis: the predicted motion direction for this
+    // scan (initial guess vs. previous pose), same convention as the intensity
+    // disagreement gate's correlation axis. No Hessian gating on purpose --
+    // soft degeneracy is precisely the regime the eigenvalue gates miss.
+    std::optional<Eigen::Vector3d> localizability_axis;
+    if (config.localizability_weighting) {
+      localizability_axis = unit_axis_from_step(initial_guess.translation() - lidar_state.pose.translation(),
+                                                config.localizability_min_step_m);
+      if (localizability_axis.has_value()) {
+        ++localizability_attempt_count;
+      }
+    }
     try {
       const IcpResult icp_result = icp(preproc_result.keypoints, map, initial_guess, config, kf_step.info, 1,
                                        _persistent_weak_direction_tracker.state(),
                                        config.degeneracy_adaptive_iteration_budget &&
                                            _adaptive_iteration_hold_remaining > 0,
-                                       visual_pose_prior, degeneracy_prior_pose);
+                                       visual_pose_prior, degeneracy_prior_pose, localizability_axis,
+                                       config.localizability_boost);
+      if (icp_result.weighting_stats.boosted > 0) {
+        ++localizability_weighted_scan_count;
+        localizability_boosted_fraction_sum += static_cast<double>(icp_result.weighting_stats.boosted) /
+                                               std::max(1, icp_result.weighting_stats.correspondences);
+      }
       optimized_pose = icp_result.pose;
       icp_H = icp_result.H;
       icp_b = icp_result.b;
@@ -1142,6 +1216,125 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       _intensity_disagreement_streak = 0;
     }
 
+    // Soft inertial velocity bridge (see kinematic_velocity_blend.hpp). ICP agreement
+    // refreshes a trusted anchor. On disagreement, a propagation-speed prior aligned with
+    // the current motion axis decays with time since that anchor. This prevents
+    // both the tunnel zero-motion attractor and the indefinite hard-clamp runaway.
+    //
+    // This newer blend takes precedence if both it and the legacy hard gate are enabled.
+    if (config.kinematic_velocity_blend && interval_stats.imu_count > 0) {
+      const Eigen::Vector3d previous_velocity_world = lidar_state.pose.so3() * lidar_state.velocity;
+      const Eigen::Vector3d interval_mean_body_accel =
+          interval_stats.body_acceleration_sum / interval_stats.imu_count;
+      const Eigen::Vector3d interval_mean_angular_velocity_world =
+          lidar_state.pose.so3() *
+          (interval_stats.angular_velocity_sum / interval_stats.imu_count);
+      const bool yaw_rate_exceeded =
+          config.kinematic_blend_max_yaw_rate_rad_s > 0.0 &&
+          std::abs(interval_mean_angular_velocity_world.z()) >
+              config.kinematic_blend_max_yaw_rate_rad_s;
+      if (yaw_rate_exceeded) {
+        ++_kinematic_blend_turning_streak;
+      } else {
+        _kinematic_blend_turning_streak = 0;
+      }
+      const bool turning_too_fast =
+          _kinematic_blend_turning_streak >=
+          std::max<std::size_t>(1, config.kinematic_blend_yaw_gate_min_scans);
+      if (previous_velocity_world.norm() < config.kinematic_blend_min_speed ||
+          turning_too_fast) {
+        _kinematic_blend_anchor_time.reset();
+        _kinematic_blend_propagated_velocity_world.reset();
+      } else {
+        ++kinematic_blend_attempt_count;
+        const double blend_dt = to_seconds(current_lidar_time - lidar_state.time);
+        double anchor_age_sec =
+            _kinematic_blend_anchor_time.has_value()
+                ? to_seconds(current_lidar_time - _kinematic_blend_anchor_time.value())
+                : -1.0;
+        // Once the prior has decayed to exp(-5), discard it completely. The next
+        // ICP/propagation agreement can then establish a clean anchor instead of
+        // comparing forever against a long-drifted inertial state.
+        if (anchor_age_sec > 5.0 * config.kinematic_blend_decay_time_sec) {
+          _kinematic_blend_anchor_time.reset();
+          _kinematic_blend_propagated_velocity_world.reset();
+          anchor_age_sec = -1.0;
+        }
+        const Eigen::Vector3d propagation_seed_world =
+            _kinematic_blend_propagated_velocity_world.value_or(previous_velocity_world);
+        const Eigen::Vector3d measured_accel_world = lidar_state.pose.so3() * interval_mean_body_accel;
+        Eigen::Vector3d propagated_velocity_world =
+            propagation_seed_world + measured_accel_world * blend_dt;
+        if (config.kinematic_blend_max_propagated_speed_mps > 0.0 &&
+            propagated_velocity_world.norm() > config.kinematic_blend_max_propagated_speed_mps) {
+          propagated_velocity_world *=
+              config.kinematic_blend_max_propagated_speed_mps / propagated_velocity_world.norm();
+        }
+        const KinematicVelocityBlend blend = blend_icp_with_propagated_velocity(
+            previous_velocity_world, optimized_pose.translation() - lidar_state.pose.translation(), blend_dt,
+            propagated_velocity_world, anchor_age_sec,
+            config.kinematic_blend_icp_information_scale,
+            config.kinematic_blend_propagation_information_scale,
+            config.kinematic_blend_decay_time_sec, config.kinematic_blend_anchor_agreement_mps,
+            config.kinematic_blend_max_icp_innovation_mps, config.kinematic_blend_min_speed);
+        if (blend.valid && blend.anchor_agrees) {
+          const bool establishing_first_anchor = !_kinematic_blend_anchor_time.has_value();
+          _kinematic_blend_anchor_time = current_lidar_time;
+          // Seed from ICP once, but never let later agreement refreshes feed ICP
+          // velocity back into the independent prior. Repeated small (< agreement
+          // threshold) ICP increments could otherwise accumulate into an arbitrarily
+          // fast self-confirming map trajectory while every individual scan appeared
+          // to agree.
+          _kinematic_blend_propagated_velocity_world =
+              establishing_first_anchor
+                  ? (optimized_pose.translation() - lidar_state.pose.translation()) / blend_dt
+                  : propagated_velocity_world;
+          ++kinematic_blend_anchor_refresh_count;
+        } else if (_kinematic_blend_anchor_time.has_value() && blend.propagation_weight > 0.0) {
+          _kinematic_blend_propagated_velocity_world = propagated_velocity_world;
+          optimized_pose.translation() += blend.correction;
+          ++kinematic_blend_corrected_scan_count;
+          kinematic_blend_correction_m_sum += blend.correction.norm();
+          kinematic_blend_propagation_weight_sum += blend.propagation_weight;
+          kinematic_blend_max_propagation_weight =
+              std::max(kinematic_blend_max_propagation_weight, blend.propagation_weight);
+          kinematic_blend_max_anchor_age_sec =
+              std::max(kinematic_blend_max_anchor_age_sec, anchor_age_sec);
+          kinematic_blend_suppress_map_update_this_scan =
+              blend.propagation_weight > config.kinematic_blend_map_update_max_propagation_weight;
+          kinematic_blend_map_update_fraction_this_scan =
+              std::max(std::clamp(config.kinematic_blend_map_update_min_fraction, 0.0, 1.0),
+                       1.0 - blend.propagation_weight);
+        }
+      }
+    }
+
+    // Accelerometer-consistency velocity gate (see kinematic_velocity_gate.hpp): clamp the
+    // per-scan velocity change along the previous motion direction to what the measured body
+    // acceleration allows. Breaks the geometric zero-motion attractor (an ICP freeze implies
+    // a deceleration the accelerometer flatly contradicts) while letting genuine braking
+    // through, since braking raises the measured acceleration and with it the allowed change.
+    // Applied after the radar/intensity gates so their corrections are part of the checked
+    // translation, and before the velocity estimation below so the state update sees the
+    // clamped pose.
+    else if (config.kinematic_velocity_gate && interval_stats.imu_count > 0) {
+      ++kinematic_gate_attempt_count;
+      const Eigen::Vector3d interval_mean_body_accel =
+          interval_stats.body_acceleration_sum / interval_stats.imu_count;
+      const double gate_dt = to_seconds(current_lidar_time - lidar_state.time);
+      const KinematicVelocityClamp clamp = clamp_velocity_change_to_accel(
+          lidar_state.pose.so3() * lidar_state.velocity,
+          optimized_pose.translation() - lidar_state.pose.translation(), gate_dt,
+          lidar_state.pose.so3() * interval_mean_body_accel, config.kinematic_gate_accel_margin,
+          config.kinematic_gate_min_speed, config.kinematic_gate_weight);
+      if (clamp.corrected) {
+        optimized_pose.translation() += clamp.correction;
+        kinematic_gate_corrected_this_scan = true;
+        ++kinematic_gate_corrected_scan_count;
+        kinematic_gate_correction_m_sum += clamp.correction.norm();
+      }
+    }
+
     // Sliding-window absolute gravity alignment (see gravity_alignment.hpp for why the
     // min_beta regularization above cannot correct slow pitch/roll drift on its own). The
     // window collects each scan interval's raw (gravity-inclusive) accelerometer mean rotated
@@ -1287,7 +1480,30 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   // reset imu averages
   interval_stats.reset();
 
-  update_maps(map_input, lidar_state.pose);
+  // Gate-corrected scans stay out of the map (see Config::kinematic_gate_skip_map_update):
+  // inserting a glided scan would let the next ICP anchor to its own correction.
+  if (!(kinematic_gate_corrected_this_scan && config.kinematic_gate_skip_map_update) &&
+      !kinematic_blend_suppress_map_update_this_scan) {
+    if (kinematic_blend_map_update_fraction_this_scan >= 1.0) {
+      update_maps(map_input, lidar_state.pose);
+    } else {
+      // Uniform deterministic thinning keeps some fresh geometry available without
+      // letting a propagation-dominated pose fully rewrite the local map.
+      Vector3dVector thinned_map_input;
+      thinned_map_input.reserve(static_cast<std::size_t>(
+          std::ceil(kinematic_blend_map_update_fraction_this_scan * map_input.size())));
+      for (std::size_t i = 0; i < map_input.size(); ++i) {
+        const auto previous_count = static_cast<std::size_t>(
+            std::floor(kinematic_blend_map_update_fraction_this_scan * static_cast<double>(i)));
+        const auto next_count = static_cast<std::size_t>(
+            std::floor(kinematic_blend_map_update_fraction_this_scan * static_cast<double>(i + 1)));
+        if (next_count > previous_count) {
+          thinned_map_input.push_back(map_input[i]);
+        }
+      }
+      update_maps(thinned_map_input, lidar_state.pose);
+    }
+  }
 
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
   _consecutive_registration_failures = 0;

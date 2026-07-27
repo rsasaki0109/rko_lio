@@ -197,6 +197,35 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
       nlohmann_json_t.gravity_alignment_max_magnitude_deviation;
   nlohmann_json_j["gravity_alignment_max_plausible_tilt_rad"] = nlohmann_json_t.gravity_alignment_max_plausible_tilt_rad;
   nlohmann_json_j["gravity_alignment_max_yaw_rate_rad_s"] = nlohmann_json_t.gravity_alignment_max_yaw_rate_rad_s;
+  nlohmann_json_j["localizability_weighting"] = nlohmann_json_t.localizability_weighting;
+  nlohmann_json_j["localizability_boost"] = nlohmann_json_t.localizability_boost;
+  nlohmann_json_j["localizability_min_step_m"] = nlohmann_json_t.localizability_min_step_m;
+  nlohmann_json_j["kinematic_velocity_gate"] = nlohmann_json_t.kinematic_velocity_gate;
+  nlohmann_json_j["kinematic_gate_accel_margin"] = nlohmann_json_t.kinematic_gate_accel_margin;
+  nlohmann_json_j["kinematic_gate_min_speed"] = nlohmann_json_t.kinematic_gate_min_speed;
+  nlohmann_json_j["kinematic_gate_weight"] = nlohmann_json_t.kinematic_gate_weight;
+  nlohmann_json_j["kinematic_gate_skip_map_update"] = nlohmann_json_t.kinematic_gate_skip_map_update;
+  nlohmann_json_j["kinematic_velocity_blend"] = nlohmann_json_t.kinematic_velocity_blend;
+  nlohmann_json_j["kinematic_blend_icp_information_scale"] =
+      nlohmann_json_t.kinematic_blend_icp_information_scale;
+  nlohmann_json_j["kinematic_blend_propagation_information_scale"] =
+      nlohmann_json_t.kinematic_blend_propagation_information_scale;
+  nlohmann_json_j["kinematic_blend_decay_time_sec"] = nlohmann_json_t.kinematic_blend_decay_time_sec;
+  nlohmann_json_j["kinematic_blend_anchor_agreement_mps"] =
+      nlohmann_json_t.kinematic_blend_anchor_agreement_mps;
+  nlohmann_json_j["kinematic_blend_max_icp_innovation_mps"] =
+      nlohmann_json_t.kinematic_blend_max_icp_innovation_mps;
+  nlohmann_json_j["kinematic_blend_max_propagated_speed_mps"] =
+      nlohmann_json_t.kinematic_blend_max_propagated_speed_mps;
+  nlohmann_json_j["kinematic_blend_min_speed"] = nlohmann_json_t.kinematic_blend_min_speed;
+  nlohmann_json_j["kinematic_blend_max_yaw_rate_rad_s"] =
+      nlohmann_json_t.kinematic_blend_max_yaw_rate_rad_s;
+  nlohmann_json_j["kinematic_blend_yaw_gate_min_scans"] =
+      nlohmann_json_t.kinematic_blend_yaw_gate_min_scans;
+  nlohmann_json_j["kinematic_blend_map_update_max_propagation_weight"] =
+      nlohmann_json_t.kinematic_blend_map_update_max_propagation_weight;
+  nlohmann_json_j["kinematic_blend_map_update_min_fraction"] =
+      nlohmann_json_t.kinematic_blend_map_update_min_fraction;
   nlohmann_json_j["intensity_constraint"] = nlohmann_json_t.intensity_constraint;
   nlohmann_json_j["intensity_bin_size_m"] = nlohmann_json_t.intensity_bin_size_m;
   nlohmann_json_j["intensity_profile_half_length_m"] = nlohmann_json_t.intensity_profile_half_length_m;
@@ -289,6 +318,35 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
       .get_to(nlohmann_json_t.gravity_alignment_max_plausible_tilt_rad);
   nlohmann_json_j.at("gravity_alignment_max_yaw_rate_rad_s")
       .get_to(nlohmann_json_t.gravity_alignment_max_yaw_rate_rad_s);
+  nlohmann_json_j.at("localizability_weighting").get_to(nlohmann_json_t.localizability_weighting);
+  nlohmann_json_j.at("localizability_boost").get_to(nlohmann_json_t.localizability_boost);
+  nlohmann_json_j.at("localizability_min_step_m").get_to(nlohmann_json_t.localizability_min_step_m);
+  nlohmann_json_j.at("kinematic_velocity_gate").get_to(nlohmann_json_t.kinematic_velocity_gate);
+  nlohmann_json_j.at("kinematic_gate_accel_margin").get_to(nlohmann_json_t.kinematic_gate_accel_margin);
+  nlohmann_json_j.at("kinematic_gate_min_speed").get_to(nlohmann_json_t.kinematic_gate_min_speed);
+  nlohmann_json_j.at("kinematic_gate_weight").get_to(nlohmann_json_t.kinematic_gate_weight);
+  nlohmann_json_j.at("kinematic_gate_skip_map_update").get_to(nlohmann_json_t.kinematic_gate_skip_map_update);
+  nlohmann_json_j.at("kinematic_velocity_blend").get_to(nlohmann_json_t.kinematic_velocity_blend);
+  nlohmann_json_j.at("kinematic_blend_icp_information_scale")
+      .get_to(nlohmann_json_t.kinematic_blend_icp_information_scale);
+  nlohmann_json_j.at("kinematic_blend_propagation_information_scale")
+      .get_to(nlohmann_json_t.kinematic_blend_propagation_information_scale);
+  nlohmann_json_j.at("kinematic_blend_decay_time_sec").get_to(nlohmann_json_t.kinematic_blend_decay_time_sec);
+  nlohmann_json_j.at("kinematic_blend_anchor_agreement_mps")
+      .get_to(nlohmann_json_t.kinematic_blend_anchor_agreement_mps);
+  nlohmann_json_j.at("kinematic_blend_max_icp_innovation_mps")
+      .get_to(nlohmann_json_t.kinematic_blend_max_icp_innovation_mps);
+  nlohmann_json_j.at("kinematic_blend_max_propagated_speed_mps")
+      .get_to(nlohmann_json_t.kinematic_blend_max_propagated_speed_mps);
+  nlohmann_json_j.at("kinematic_blend_min_speed").get_to(nlohmann_json_t.kinematic_blend_min_speed);
+  nlohmann_json_j.at("kinematic_blend_max_yaw_rate_rad_s")
+      .get_to(nlohmann_json_t.kinematic_blend_max_yaw_rate_rad_s);
+  nlohmann_json_j.at("kinematic_blend_yaw_gate_min_scans")
+      .get_to(nlohmann_json_t.kinematic_blend_yaw_gate_min_scans);
+  nlohmann_json_j.at("kinematic_blend_map_update_max_propagation_weight")
+      .get_to(nlohmann_json_t.kinematic_blend_map_update_max_propagation_weight);
+  nlohmann_json_j.at("kinematic_blend_map_update_min_fraction")
+      .get_to(nlohmann_json_t.kinematic_blend_map_update_min_fraction);
   nlohmann_json_j.at("intensity_constraint").get_to(nlohmann_json_t.intensity_constraint);
   nlohmann_json_j.at("intensity_bin_size_m").get_to(nlohmann_json_t.intensity_bin_size_m);
   nlohmann_json_j.at("intensity_profile_half_length_m").get_to(nlohmann_json_t.intensity_profile_half_length_m);
@@ -512,6 +570,56 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "gravity_alignment_max_plausible_tilt_rad", lio_config.gravity_alignment_max_plausible_tilt_rad);
   lio_config.gravity_alignment_max_yaw_rate_rad_s = node->declare_parameter<double>(
       "gravity_alignment_max_yaw_rate_rad_s", lio_config.gravity_alignment_max_yaw_rate_rad_s);
+
+  // ---- localizability-aware ICP weighting (fork addition; default-off) ----
+  lio_config.localizability_weighting =
+      node->declare_parameter<bool>("localizability_weighting", lio_config.localizability_weighting);
+  lio_config.localizability_boost =
+      node->declare_parameter<double>("localizability_boost", lio_config.localizability_boost);
+  lio_config.localizability_min_step_m =
+      node->declare_parameter<double>("localizability_min_step_m", lio_config.localizability_min_step_m);
+
+  // ---- accelerometer-consistency velocity gate (fork addition; default-off) ----
+  lio_config.kinematic_velocity_gate =
+      node->declare_parameter<bool>("kinematic_velocity_gate", lio_config.kinematic_velocity_gate);
+  lio_config.kinematic_gate_accel_margin =
+      node->declare_parameter<double>("kinematic_gate_accel_margin", lio_config.kinematic_gate_accel_margin);
+  lio_config.kinematic_gate_min_speed =
+      node->declare_parameter<double>("kinematic_gate_min_speed", lio_config.kinematic_gate_min_speed);
+  lio_config.kinematic_gate_weight =
+      node->declare_parameter<double>("kinematic_gate_weight", lio_config.kinematic_gate_weight);
+  lio_config.kinematic_gate_skip_map_update =
+      node->declare_parameter<bool>("kinematic_gate_skip_map_update", lio_config.kinematic_gate_skip_map_update);
+
+  // ---- anchor-decayed inertial velocity blend (fork addition; default-off) ----
+  lio_config.kinematic_velocity_blend =
+      node->declare_parameter<bool>("kinematic_velocity_blend", lio_config.kinematic_velocity_blend);
+  lio_config.kinematic_blend_icp_information_scale = node->declare_parameter<double>(
+      "kinematic_blend_icp_information_scale", lio_config.kinematic_blend_icp_information_scale);
+  lio_config.kinematic_blend_propagation_information_scale = node->declare_parameter<double>(
+      "kinematic_blend_propagation_information_scale", lio_config.kinematic_blend_propagation_information_scale);
+  lio_config.kinematic_blend_decay_time_sec = node->declare_parameter<double>(
+      "kinematic_blend_decay_time_sec", lio_config.kinematic_blend_decay_time_sec);
+  lio_config.kinematic_blend_anchor_agreement_mps = node->declare_parameter<double>(
+      "kinematic_blend_anchor_agreement_mps", lio_config.kinematic_blend_anchor_agreement_mps);
+  lio_config.kinematic_blend_max_icp_innovation_mps = node->declare_parameter<double>(
+      "kinematic_blend_max_icp_innovation_mps", lio_config.kinematic_blend_max_icp_innovation_mps);
+  lio_config.kinematic_blend_max_propagated_speed_mps = node->declare_parameter<double>(
+      "kinematic_blend_max_propagated_speed_mps", lio_config.kinematic_blend_max_propagated_speed_mps);
+  lio_config.kinematic_blend_min_speed =
+      node->declare_parameter<double>("kinematic_blend_min_speed", lio_config.kinematic_blend_min_speed);
+  lio_config.kinematic_blend_max_yaw_rate_rad_s = node->declare_parameter<double>(
+      "kinematic_blend_max_yaw_rate_rad_s", lio_config.kinematic_blend_max_yaw_rate_rad_s);
+  const auto kinematic_blend_yaw_gate_min_scans = node->declare_parameter<int>(
+      "kinematic_blend_yaw_gate_min_scans",
+      static_cast<int>(lio_config.kinematic_blend_yaw_gate_min_scans));
+  lio_config.kinematic_blend_yaw_gate_min_scans = static_cast<std::size_t>(
+      kinematic_blend_yaw_gate_min_scans > 0 ? kinematic_blend_yaw_gate_min_scans : 1);
+  lio_config.kinematic_blend_map_update_max_propagation_weight = node->declare_parameter<double>(
+      "kinematic_blend_map_update_max_propagation_weight",
+      lio_config.kinematic_blend_map_update_max_propagation_weight);
+  lio_config.kinematic_blend_map_update_min_fraction = node->declare_parameter<double>(
+      "kinematic_blend_map_update_min_fraction", lio_config.kinematic_blend_map_update_min_fraction);
 
   // ---- intensity/reflectivity texture constraint (fork addition; default-off) ----
   lio_config.intensity_constraint =
@@ -1347,6 +1455,62 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
       if (std::ofstream file(gravity_file); file.is_open()) {
         file << gravity_summary.dump(4) << "\n";
         std::cout << "Gravity alignment summary written to " << gravity_file << "\n";
+      }
+    }
+    // Kinematic velocity gate summary.
+    if (lio->config.kinematic_velocity_gate) {
+      const nlohmann::json kinematic_summary = {
+          {"attempt_count", lio->kinematic_gate_attempt_count},
+          {"corrected_scan_count", lio->kinematic_gate_corrected_scan_count},
+          {"mean_correction_m",
+           lio->kinematic_gate_corrected_scan_count > 0
+               ? lio->kinematic_gate_correction_m_sum /
+                     static_cast<double>(lio->kinematic_gate_corrected_scan_count)
+               : 0.0}};
+      const std::filesystem::path kinematic_file = output_dir / "kinematic_velocity_gate_summary.json";
+      if (std::ofstream file(kinematic_file); file.is_open()) {
+        file << kinematic_summary.dump(4) << "\n";
+        std::cout << "Kinematic velocity gate summary written to " << kinematic_file << "\n";
+      }
+    }
+    // Anchor-decayed inertial velocity blend summary.
+    if (lio->config.kinematic_velocity_blend) {
+      const nlohmann::json blend_summary = {
+          {"attempt_count", lio->kinematic_blend_attempt_count},
+          {"anchor_refresh_count", lio->kinematic_blend_anchor_refresh_count},
+          {"corrected_scan_count", lio->kinematic_blend_corrected_scan_count},
+          {"mean_correction_m",
+           lio->kinematic_blend_corrected_scan_count > 0
+               ? lio->kinematic_blend_correction_m_sum /
+                     static_cast<double>(lio->kinematic_blend_corrected_scan_count)
+               : 0.0},
+          {"mean_propagation_weight",
+           lio->kinematic_blend_corrected_scan_count > 0
+               ? lio->kinematic_blend_propagation_weight_sum /
+                     static_cast<double>(lio->kinematic_blend_corrected_scan_count)
+               : 0.0},
+          {"max_propagation_weight", lio->kinematic_blend_max_propagation_weight},
+          {"max_anchor_age_sec", lio->kinematic_blend_max_anchor_age_sec}};
+      const std::filesystem::path blend_file = output_dir / "kinematic_velocity_blend_summary.json";
+      if (std::ofstream file(blend_file); file.is_open()) {
+        file << blend_summary.dump(4) << "\n";
+        std::cout << "Kinematic velocity blend summary written to " << blend_file << "\n";
+      }
+    }
+    // Localizability-aware ICP weighting summary.
+    if (lio->config.localizability_weighting) {
+      const nlohmann::json localizability_summary = {
+          {"attempt_count", lio->localizability_attempt_count},
+          {"weighted_scan_count", lio->localizability_weighted_scan_count},
+          {"mean_boosted_correspondence_fraction",
+           lio->localizability_weighted_scan_count > 0
+               ? lio->localizability_boosted_fraction_sum /
+                     static_cast<double>(lio->localizability_weighted_scan_count)
+               : 0.0}};
+      const std::filesystem::path localizability_file = output_dir / "localizability_weighting_summary.json";
+      if (std::ofstream file(localizability_file); file.is_open()) {
+        file << localizability_summary.dump(4) << "\n";
+        std::cout << "Localizability weighting summary written to " << localizability_file << "\n";
       }
     }
     // Intensity/reflectivity texture constraint summary.

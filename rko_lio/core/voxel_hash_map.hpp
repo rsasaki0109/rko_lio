@@ -32,6 +32,7 @@
 #include "voxel_down_sample.hpp"
 
 #include <Eigen/Core>
+#include <optional>
 #include <sophus/se3.hpp>
 #include <tsl/robin_map.h>
 #include <tuple>
@@ -47,7 +48,10 @@ struct VoxelHashMap {
                         const double clipping_distance,
                         const unsigned int max_points_per_voxel);
 
-  void clear() { map_.clear(); }
+  void clear() {
+    map_.clear();
+    normal_map_.clear();
+  }
   bool empty() const { return map_.empty(); }
   void update(const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& pose);
   void add_points(const std::vector<Eigen::Vector3d>& points);
@@ -61,11 +65,30 @@ struct VoxelHashMap {
   std::tuple<Eigen::Vector3d, double> get_closest_neighbor(const Eigen::Vector3d& query,
                                                            int voxel_search_radius) const;
 
+  /** Opt into per-voxel surface-normal maintenance (localizability weighting). Off by
+   *  default so the common path pays nothing; when on, add_points() refreshes a PCA
+   *  normal for every voxel it modifies. */
+  void set_maintain_normals(bool maintain) { maintain_normals_ = maintain; }
+
+  /** Cached unit surface normal of the voxel containing `point`, if that voxel has one.
+   *  Normals exist only for voxels with >= min_normal_points points whose neighborhood
+   *  is planar (mid eigenvalue > planarity_ratio * smallest); orientation is arbitrary
+   *  (callers should use |n . axis| style expressions only). */
+  std::optional<Eigen::Vector3d> voxel_normal(const Eigen::Vector3d& point) const;
+
   double voxel_size_;
   double inv_voxel_size_;
   double clipping_distance_;
   unsigned int max_points_per_voxel_;
   tsl::robin_map<Voxel, VoxelBlock> map_;
+  bool maintain_normals_ = false;
+  unsigned int min_normal_points_ = 5;
+  double planarity_ratio_ = 3.0;
+  double min_mid_to_major_ratio_ = 0.05;
+  tsl::robin_map<Voxel, Eigen::Vector3d> normal_map_;
+
+private:
+  void refresh_normal(const Voxel& voxel, const VoxelBlock& points);
 };
 
 } // namespace rko_lio::core
