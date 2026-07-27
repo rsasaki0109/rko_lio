@@ -86,6 +86,24 @@ else()
     if(TARGET test_gravity_alignment)
       target_link_libraries(test_gravity_alignment rko_lio::core)
     endif()
+    ament_add_gtest(
+      test_localizability_weighting
+      test/test_localizability_weighting.cpp)
+    if(TARGET test_localizability_weighting)
+      target_link_libraries(test_localizability_weighting rko_lio::core)
+    endif()
+    ament_add_gtest(
+      test_kinematic_velocity_gate
+      test/test_kinematic_velocity_gate.cpp)
+    if(TARGET test_kinematic_velocity_gate)
+      target_link_libraries(test_kinematic_velocity_gate rko_lio::core)
+    endif()
+    ament_add_gtest(
+      test_kinematic_velocity_blend
+      test/test_kinematic_velocity_blend.cpp)
+    if(TARGET test_kinematic_velocity_blend)
+      target_link_libraries(test_kinematic_velocity_blend rko_lio::core)
+    endif()
   endif()
 
   # ament macros cannot be in a CMake subdirectory, even rclcpp

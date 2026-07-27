@@ -257,6 +257,100 @@ public:
      *  the alignment goes dormant instead of injecting a false correction. */
     double gravity_alignment_max_yaw_rate_rad_s = 0.05;
 
+    /** Accelerometer-consistency velocity gate (see kinematic_velocity_gate.hpp). Clamps the
+     *  per-scan velocity change along the previous motion direction to the measured body
+     *  acceleration plus kinematic_gate_accel_margin, breaking the geometric zero-motion
+     *  attractor of self-similar corridors (an ICP freeze implies a physically impossible
+     *  deceleration the accelerometer contradicts). Genuine stops pass: braking raises the
+     *  measured acceleration and with it the allowed change. */
+    bool kinematic_velocity_gate = false;
+
+    /** Slack (m/s^2) added to the axis-projected measured acceleration when bounding the
+     *  per-scan velocity change (covers bias and accelerometer noise). Only the projection
+     *  of the measured acceleration onto the motion direction opens the bound: vibration is
+     *  mostly perpendicular to travel and must not loosen it. */
+    double kinematic_gate_accel_margin = 0.3;
+
+    /** Below this previous speed (m/s) the motion direction is untrustworthy and the gate
+     *  stays out of the way (also lets the rig accelerate from rest). */
+    double kinematic_gate_min_speed = 0.3;
+
+    /** Fraction of the computed clamp correction actually applied (1 = full). */
+    double kinematic_gate_weight = 1.0;
+
+    /** Skip the local-map insertion on scans the gate corrected. Without this the glided
+     *  scans enter the map and the next ICP anchors to its own correction (self-confirming
+     *  feedback: measured 3.1x runaway overshoot on the NTNU tunnel). With it, ICP keeps
+     *  disagreeing against the stale map while the gate bridges the degenerate stretch, and
+     *  re-anchors as soon as genuinely informative structure comes back into range. */
+    bool kinematic_gate_skip_map_update = true;
+
+    /** Soft information-weighted fusion of ICP velocity and IMU propagation along the
+     *  previous direction of travel. Unlike kinematic_velocity_gate, the propagation
+     *  authority decays since the last scan where ICP and propagation agreed. */
+    bool kinematic_velocity_blend = false;
+
+    /** Fixed isotropic ICP velocity information scale. The point-to-point translation
+     *  Hessian is intentionally not used because its N*I block hides tunnel degeneracy. */
+    double kinematic_blend_icp_information_scale = 1.0;
+
+    /** Initial rank-one IMU propagation information along the motion axis. */
+    double kinematic_blend_propagation_information_scale = 9.0;
+
+    /** Exponential time constant (s) for propagation information after the last anchor. */
+    double kinematic_blend_decay_time_sec = 10.0;
+
+    /** Maximum 3D ICP/propagation velocity difference (m/s) that refreshes the
+     *  anchor. Agreement scans are left bit-identical to the ICP result. */
+    double kinematic_blend_anchor_agreement_mps = 0.3;
+
+    /** Huber-style norm cap (m/s) on the 3D ICP innovation before fusion.
+     *  Prevents an arbitrarily large ICP outlier leaking through its finite
+     *  information weight. Set <= 0 to disable robustification. */
+    double kinematic_blend_max_icp_innovation_mps = 2.0;
+
+    /** Maximum speed (m/s) of the independently integrated IMU pseudo-sensor.
+     *  This caps only prior authority, not the final ICP pose. Set <= 0 to disable. */
+    double kinematic_blend_max_propagated_speed_mps = 3.0;
+
+    /** Below this previous speed (m/s), clear the anchor and leave startup to ICP. */
+    double kinematic_blend_min_speed = 0.3;
+
+    /** Disable and clear the propagation anchor above this absolute world yaw
+     *  rate (rad/s). The prior is intended for straight self-similar corridors;
+     *  turns make its previous-motion-axis model invalid. Set <= 0 to disable. */
+    double kinematic_blend_max_yaw_rate_rad_s = 0.05;
+
+    /** Consecutive above-threshold scans required before yaw disables the blend. */
+    std::size_t kinematic_blend_yaw_gate_min_scans = 5;
+
+    /** Suppress map insertion only when propagation weight exceeds this threshold.
+     *  1.0 keeps every scan (the default); values below 1 enable the map-policy A/B. */
+    double kinematic_blend_map_update_max_propagation_weight = 1.0;
+
+    /** Minimum fraction of a propagation-corrected scan inserted into the map.
+     *  1.0 keeps the full scan; lower values thin it in proportion to
+     *  (1 - propagation_weight), while retaining this safety floor. */
+    double kinematic_blend_map_update_min_fraction = 1.0;
+
+    /** Localizability-aware ICP correspondence weighting (X-ICP-inspired; see
+     *  localizability_weighting.hpp). Multiplies every correspondence by
+     *  1 + localizability_boost * (n . axis)^2, where n is a cached per-voxel map
+     *  surface normal and axis is the current motion direction. Amplifies the small
+     *  minority of axis-observing surfaces (door frames, niches: measured 1.3-7.8% of
+     *  planar points on the NTNU tunnel) that soft along-corridor degeneracy otherwise
+     *  drowns under the axis-neutral wall majority. Also enables per-voxel normal
+     *  maintenance in the local map (skipped entirely when off). */
+    bool localizability_weighting = false;
+
+    /** Correspondence weight boost for a fully axis-aligned surface normal. */
+    double localizability_boost = 30.0;
+
+    /** Minimum predicted per-scan translation (m) required to trust a motion axis;
+     *  below this the weighting is skipped for the scan (a near-stationary rig has
+     *  no trustworthy along-track direction). */
+    double localizability_min_step_m = 0.05;
+
     /** Correct translation along a confirmed persistent weak direction using scan-to-scan
      *  cross-correlation of a 1D reflectivity/intensity profile built along that axis.
      *  Recovers along-tunnel translation that geometric ICP under-observes in self-similar
@@ -496,6 +590,32 @@ public:
   std::size_t intensity_disagreement_valid_shift_count = 0;
   std::size_t intensity_disagreement_exceeded_threshold_count = 0;
 
+  /** Localizability-weighting diagnostics (localizability_weighting).
+   *  attempt_count: weighting was enabled and a trustworthy motion axis existed
+   *  this scan. weighted_scan_count: at least one correspondence actually
+   *  received a boosted weight from an axis-observing map normal.
+   *  boosted_fraction_sum / weighted_scan_count gives the mean fraction of
+   *  correspondences boosted per weighted scan (final ICP iteration). */
+  std::size_t localizability_attempt_count = 0;
+  std::size_t localizability_weighted_scan_count = 0;
+  double localizability_boosted_fraction_sum = 0.0;
+
+  /** Kinematic velocity gate diagnostics (kinematic_velocity_gate). attempt_count: gate was
+   *  enabled and IMU data existed for the interval. corrected_scan_count: the clamp fired.
+   *  correction_m_sum / corrected_scan_count gives the mean applied correction (m). */
+  std::size_t kinematic_gate_attempt_count = 0;
+  std::size_t kinematic_gate_corrected_scan_count = 0;
+  double kinematic_gate_correction_m_sum = 0.0;
+
+  /** Soft kinematic velocity blend diagnostics. */
+  std::size_t kinematic_blend_attempt_count = 0;
+  std::size_t kinematic_blend_anchor_refresh_count = 0;
+  std::size_t kinematic_blend_corrected_scan_count = 0;
+  double kinematic_blend_correction_m_sum = 0.0;
+  double kinematic_blend_propagation_weight_sum = 0.0;
+  double kinematic_blend_max_propagation_weight = 0.0;
+  double kinematic_blend_max_anchor_age_sec = 0.0;
+
 private:
   /**
    * Initialize internal odometry state using the given lidar timestamp.
@@ -569,6 +689,17 @@ private:
 
   /** Consecutive scans with an intensity-vs-ICP velocity disagreement. */
   std::size_t _intensity_disagreement_streak = 0;
+
+  /** Time of the last scan where ICP agreed with inertial propagation. */
+  std::optional<Nsec> _kinematic_blend_anchor_time;
+
+  /** Independently propagated world velocity seeded only by an agreement anchor.
+   *  Keeping it separate from lidar_state prevents corrected ICP velocity from
+   *  feeding back into its own prior. */
+  std::optional<Eigen::Vector3d> _kinematic_blend_propagated_velocity_world;
+
+  /** Consecutive scan intervals above kinematic_blend_max_yaw_rate_rad_s. */
+  std::size_t _kinematic_blend_turning_streak = 0;
 
   /** Sliding window of (scan time, world-frame raw-accelerometer interval mean) samples for
    *  gravity_window_alignment. Entries older than gravity_window_sec are dropped each scan. */

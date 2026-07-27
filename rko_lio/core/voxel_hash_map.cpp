@@ -30,10 +30,12 @@
 #include "voxel_hash_map.hpp"
 
 #include <Eigen/Core>
+#include <Eigen/Eigenvalues>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <sophus/se3.hpp>
 #include <tuple>
 #include <vector>
@@ -136,7 +138,47 @@ void VoxelHashMap::add_points(const std::vector<Eigen::Vector3d>& points) {
     }
     voxel_points.reserve(max_points_per_voxel_);
     voxel_points.emplace_back(p);
+    if (maintain_normals_) {
+      refresh_normal(voxel, voxel_points);
+    }
   });
+}
+
+void VoxelHashMap::refresh_normal(const Voxel& voxel, const VoxelBlock& points) {
+  if (points.size() < min_normal_points_) {
+    return; // too few samples: keep any stale normal erased
+  }
+  Eigen::Vector3d mean = Eigen::Vector3d::Zero();
+  for (const Eigen::Vector3d& p : points) {
+    mean += p;
+  }
+  mean /= static_cast<double>(points.size());
+  Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
+  for (const Eigen::Vector3d& p : points) {
+    const Eigen::Vector3d d = p - mean;
+    covariance += d * d.transpose();
+  }
+  covariance /= static_cast<double>(points.size());
+  const Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(covariance);
+  const Eigen::Vector3d& eigenvalues = solver.eigenvalues(); // ascending
+  // Surface-like requires a genuine two-directional spread: the mid eigenvalue must
+  // dominate the smallest (flat) AND be a real fraction of the largest (rules out
+  // lines, whose two small eigenvalues are both ~0 and whose "normal" direction is
+  // arbitrary within the perpendicular plane).
+  if (eigenvalues(1) < planarity_ratio_ * eigenvalues(0) ||
+      eigenvalues(1) < min_mid_to_major_ratio_ * eigenvalues(2)) {
+    normal_map_.erase(voxel); // not surface-like (line/blob): no trustworthy normal
+    return;
+  }
+  normal_map_.insert_or_assign(voxel, solver.eigenvectors().col(0));
+}
+
+std::optional<Eigen::Vector3d> VoxelHashMap::voxel_normal(const Eigen::Vector3d& point) const {
+  const auto search = normal_map_.find(point_to_voxel(point, inv_voxel_size_));
+  if (search == normal_map_.end()) {
+    return std::nullopt;
+  }
+  return search->second;
 }
 
 void VoxelHashMap::remove_points_far_from_location(const Eigen::Vector3d& origin) {
@@ -144,6 +186,7 @@ void VoxelHashMap::remove_points_far_from_location(const Eigen::Vector3d& origin
   for (auto it = map_.begin(); it != map_.end();) {
     const VoxelBlock& voxel_points = it->second;
     if ((voxel_points.front() - origin).squaredNorm() > clipping_distance_sq) {
+      normal_map_.erase(it->first);
       it = map_.erase(it);
     } else {
       ++it;
