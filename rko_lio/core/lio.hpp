@@ -659,8 +659,18 @@ public:
   std::size_t kinematic_blend_scene_cooldown_rejected_scan_count = 0;
   std::size_t kinematic_blend_speed_rejected_scan_count = 0;
   std::size_t kinematic_blend_speed_cooldown_rejected_scan_count = 0;
+  std::size_t kinematic_blend_low_speed_rejected_scan_count = 0;
+  std::size_t kinematic_blend_yaw_rejected_scan_count = 0;
+  std::size_t kinematic_blend_anchor_expiration_count = 0;
+  std::size_t kinematic_blend_propagated_speed_clamp_count = 0;
+  std::size_t kinematic_blend_invalid_result_count = 0;
   double kinematic_blend_scene_near_fraction_sum = 0.0;
   double kinematic_blend_scene_far_fraction_sum = 0.0;
+  double kinematic_blend_max_disagreement_mps = 0.0;
+  double kinematic_blend_max_correction_m = 0.0;
+  double kinematic_blend_first_correction_time_sec = -1.0;
+  double kinematic_blend_last_correction_time_sec = -1.0;
+  double kinematic_blend_last_anchor_refresh_time_sec = -1.0;
 
 private:
   /**

@@ -1294,8 +1294,11 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       const bool turning_too_fast =
           _kinematic_blend_turning_streak >=
           std::max<std::size_t>(1, config.kinematic_blend_yaw_gate_min_scans);
-      if (previous_velocity_world.norm() < config.kinematic_blend_min_speed ||
-          speed_too_high || scene_rejected || turning_too_fast) {
+      const bool speed_too_low =
+          previous_velocity_world.norm() < config.kinematic_blend_min_speed;
+      kinematic_blend_low_speed_rejected_scan_count += speed_too_low ? 1U : 0U;
+      kinematic_blend_yaw_rejected_scan_count += turning_too_fast ? 1U : 0U;
+      if (speed_too_low || speed_too_high || scene_rejected || turning_too_fast) {
         _kinematic_blend_anchor_time.reset();
         _kinematic_blend_propagated_velocity_world.reset();
       } else {
@@ -1312,6 +1315,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           _kinematic_blend_anchor_time.reset();
           _kinematic_blend_propagated_velocity_world.reset();
           anchor_age_sec = -1.0;
+          ++kinematic_blend_anchor_expiration_count;
         }
         const Eigen::Vector3d propagation_seed_world =
             _kinematic_blend_propagated_velocity_world.value_or(previous_velocity_world);
@@ -1322,6 +1326,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
             propagated_velocity_world.norm() > config.kinematic_blend_max_propagated_speed_mps) {
           propagated_velocity_world *=
               config.kinematic_blend_max_propagated_speed_mps / propagated_velocity_world.norm();
+          ++kinematic_blend_propagated_speed_clamp_count;
         }
         const KinematicVelocityBlend blend = blend_icp_with_propagated_velocity(
             previous_velocity_world, optimized_pose.translation() - lidar_state.pose.translation(), blend_dt,
@@ -1330,6 +1335,12 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
             config.kinematic_blend_propagation_information_scale,
             config.kinematic_blend_decay_time_sec, config.kinematic_blend_anchor_agreement_mps,
             config.kinematic_blend_max_icp_innovation_mps, config.kinematic_blend_min_speed);
+        if (blend.valid) {
+          kinematic_blend_max_disagreement_mps =
+              std::max(kinematic_blend_max_disagreement_mps, blend.disagreement_mps);
+        } else {
+          ++kinematic_blend_invalid_result_count;
+        }
         if (blend.valid && blend.anchor_agrees) {
           const bool establishing_first_anchor = !_kinematic_blend_anchor_time.has_value();
           _kinematic_blend_anchor_time = current_lidar_time;
@@ -1343,11 +1354,20 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                   ? (optimized_pose.translation() - lidar_state.pose.translation()) / blend_dt
                   : propagated_velocity_world;
           ++kinematic_blend_anchor_refresh_count;
+          kinematic_blend_last_anchor_refresh_time_sec =
+              to_seconds(current_lidar_time);
         } else if (_kinematic_blend_anchor_time.has_value() && blend.propagation_weight > 0.0) {
           _kinematic_blend_propagated_velocity_world = propagated_velocity_world;
           optimized_pose.translation() += blend.correction;
           ++kinematic_blend_corrected_scan_count;
           kinematic_blend_correction_m_sum += blend.correction.norm();
+          kinematic_blend_max_correction_m =
+              std::max(kinematic_blend_max_correction_m, blend.correction.norm());
+          const double correction_time_sec = to_seconds(current_lidar_time);
+          if (kinematic_blend_first_correction_time_sec < 0.0) {
+            kinematic_blend_first_correction_time_sec = correction_time_sec;
+          }
+          kinematic_blend_last_correction_time_sec = correction_time_sec;
           kinematic_blend_propagation_weight_sum += blend.propagation_weight;
           kinematic_blend_max_propagation_weight =
               std::max(kinematic_blend_max_propagation_weight, blend.propagation_weight);

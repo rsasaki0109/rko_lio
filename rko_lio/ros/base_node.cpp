@@ -1567,6 +1567,27 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
           {"speed_rejected_scan_count", lio->kinematic_blend_speed_rejected_scan_count},
           {"speed_cooldown_rejected_scan_count",
            lio->kinematic_blend_speed_cooldown_rejected_scan_count},
+          {"low_speed_rejected_scan_count",
+           lio->kinematic_blend_low_speed_rejected_scan_count},
+          {"yaw_rejected_scan_count", lio->kinematic_blend_yaw_rejected_scan_count},
+          {"anchor_expiration_count", lio->kinematic_blend_anchor_expiration_count},
+          {"propagated_speed_clamp_count",
+           lio->kinematic_blend_propagated_speed_clamp_count},
+          {"invalid_result_count", lio->kinematic_blend_invalid_result_count},
+          {"max_disagreement_mps", lio->kinematic_blend_max_disagreement_mps},
+          {"max_correction_m", lio->kinematic_blend_max_correction_m},
+          {"first_correction_time_sec",
+           lio->kinematic_blend_first_correction_time_sec >= 0.0
+               ? nlohmann::json(lio->kinematic_blend_first_correction_time_sec)
+               : nlohmann::json(nullptr)},
+          {"last_correction_time_sec",
+           lio->kinematic_blend_last_correction_time_sec >= 0.0
+               ? nlohmann::json(lio->kinematic_blend_last_correction_time_sec)
+               : nlohmann::json(nullptr)},
+          {"last_anchor_refresh_time_sec",
+           lio->kinematic_blend_last_anchor_refresh_time_sec >= 0.0
+               ? nlohmann::json(lio->kinematic_blend_last_anchor_refresh_time_sec)
+               : nlohmann::json(nullptr)},
           {"mean_scene_near_fraction",
            lio->kinematic_blend_scene_valid_count > 0
                ? lio->kinematic_blend_scene_near_fraction_sum /
