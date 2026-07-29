@@ -70,6 +70,7 @@ struct ProfileShiftResult {
   double second_best_correlation = -1.0;
   double peak_margin = 0.0;
   std::size_t overlap_bins = 0;
+  bool has_competing_peak = false;
   bool ambiguous = false;
 };
 
@@ -217,16 +218,16 @@ inline ProfileShiftResult estimate_profile_shift(const IntensityProfile& profile
   const double best_correlation = selection.best.score;
 
   result.overlap_bins = selection.best.support;
-  result.correlation = std::clamp(best_correlation, -1.0, 1.0);
+  // Preserve the exact scores consumed by the generic policy. These profile
+  // scores are averages of globally standardized bins over a partial overlap,
+  // so they are not guaranteed to remain inside [-1, 1]. Clamping here would
+  // make exported evidence disagree with the actual ambiguity decision.
+  result.correlation = best_correlation;
+  result.has_competing_peak = selection.second_best.has_value();
   result.second_best_correlation = selection.second_best.has_value()
-                                       ? std::clamp(
-                                             selection.second_best->score,
-                                             -1.0, 1.0)
+                                       ? selection.second_best->score
                                        : -1.0;
-  result.peak_margin = selection.second_best.has_value()
-                           ? result.correlation -
-                                 result.second_best_correlation
-                           : result.correlation + 1.0;
+  result.peak_margin = selection.peak_margin;
   result.ambiguous =
       selection.rejection == CorrelationPeakRejection::ambiguous;
   if (!selection.accepted) {

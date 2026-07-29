@@ -82,6 +82,7 @@ struct IntensityPeakDiagnostic {
   double peak_margin = 0.0;
   std::size_t overlap_bins = 0;
   bool base_qualified = false;
+  bool has_competing_peak = false;
   bool ambiguous = false;
   bool accepted = false;
 };

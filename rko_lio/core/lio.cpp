@@ -928,6 +928,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
            shift.peak_margin,
            shift.overlap_bins,
            base_qualified,
+           shift.has_competing_peak,
            shift.ambiguous,
            shift.valid});
       if (base_qualified) {
@@ -1210,6 +1211,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                shift.peak_margin,
                shift.overlap_bins,
                base_qualified,
+               shift.has_competing_peak,
                shift.ambiguous,
                shift.valid});
           if (base_qualified) {

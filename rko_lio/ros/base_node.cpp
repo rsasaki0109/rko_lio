@@ -1695,7 +1695,8 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
           output_dir / "intensity_peak_diagnostics.csv";
       if (std::ofstream file(peak_file); file.is_open()) {
         file << "timestamp,source,correlation,second_best_correlation,"
-                "peak_margin,overlap_bins,base_qualified,ambiguous,accepted\n";
+                "peak_margin,overlap_bins,base_qualified,has_competing_peak,"
+                "ambiguous,accepted\n";
         for (const auto& diagnostic : lio->intensity_peak_diagnostics) {
           file << std::fixed << std::setprecision(9)
                << core::to_seconds(diagnostic.time) << ","
@@ -1708,6 +1709,7 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
                << diagnostic.peak_margin << ","
                << diagnostic.overlap_bins << ","
                << (diagnostic.base_qualified ? 1 : 0) << ","
+               << (diagnostic.has_competing_peak ? 1 : 0) << ","
                << (diagnostic.ambiguous ? 1 : 0) << ","
                << (diagnostic.accepted ? 1 : 0) << "\n";
         }

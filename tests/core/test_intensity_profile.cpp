@@ -104,6 +104,26 @@ TEST_CASE("zero peak margin preserves legacy acceptance", "[intensity_profile]")
   REQUIRE_FALSE(result.ambiguous);
 }
 
+TEST_CASE("intensity profile preserves the raw scores used by peak policy",
+          "[intensity_profile]") {
+  const auto profile = make_profile(std::vector<double>(41, 2.0));
+  rko_lio::core::IntensityProfileConfig config;
+  config.bin_size_m = 0.25;
+  config.max_shift_m = 1.5;
+  config.min_correlation = 0.5;
+  config.min_peak_margin = 0.0;
+  config.min_filled_bins = 20;
+
+  const auto result =
+      rko_lio::core::estimate_profile_shift(profile, profile, config);
+
+  REQUIRE(result.valid);
+  REQUIRE(result.has_competing_peak);
+  REQUIRE(result.correlation == 4.0);
+  REQUIRE(result.second_best_correlation == 4.0);
+  REQUIRE(result.peak_margin == 0.0);
+}
+
 TEST_CASE("generic peak selector exposes rejection reason", "[correlation_peak_selector]") {
   const std::vector<rko_lio::core::CorrelationPeakCandidate> candidates = {
       {-2, 0.92, 50},
