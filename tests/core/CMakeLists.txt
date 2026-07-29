@@ -27,6 +27,8 @@ compat_target_sources(
   PRIVATE test_interval_stats.cpp
           test_voxel_down_sample.cpp
           test_process_timestamps.cpp
+          test_intensity_profile.cpp
+          test_oriented_intensity_grid.cpp
           test_preprocess_scan.cpp
           test_imu_integration.cpp
           test_register_scan.cpp

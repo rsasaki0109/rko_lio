@@ -29,12 +29,14 @@
 
 #pragma once
 #include "intensity_profile.hpp"
+#include "oriented_intensity_grid.hpp"
 #include "persistent_weak_direction.hpp"
 #include "selective_visual_fusion.hpp"
 #include "voxel_hash_map.hpp"
 #include "util.hpp"
 #include <array>
 #include <deque>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -61,6 +63,47 @@ struct RadarVelocityPrior {
    *  isotropic 0.3 m/s sigma so a producer that never sets this field (or the continuous
    *  fusion feature being off) still yields a well-defined, harmless information matrix. */
   Eigen::Matrix3d info_base = Eigen::Matrix3d::Identity() * (1.0 / (0.3 * 0.3));
+};
+
+enum class IntensityPeakSource {
+  persistent_prior,
+  disagreement_gate,
+  oriented_grid,
+};
+
+/** Raw correlation-peak evidence retained for offline policy analysis.
+ *
+ * Keeping observations instead of a fixed histogram lets benchmark tooling
+ * change bins or compare future ambiguity policies without replaying a bag.
+ */
+struct IntensityPeakDiagnostic {
+  Nsec time{0};
+  IntensityPeakSource source = IntensityPeakSource::disagreement_gate;
+  double correlation = -1.0;
+  double second_best_correlation = -1.0;
+  double peak_margin = 0.0;
+  double longitudinal_shift_m = 0.0;
+  double lateral_shift_m = 0.0;
+  std::size_t overlap_bins = 0;
+  bool base_qualified = false;
+  bool has_competing_peak = false;
+  bool ambiguous = false;
+  bool accepted = false;
+  double motion_dt_s = 0.0;
+  double intensity_velocity_longitudinal_mps = 0.0;
+  double intensity_velocity_lateral_mps = 0.0;
+  double icp_velocity_longitudinal_mps = 0.0;
+  double icp_velocity_lateral_mps = 0.0;
+  double velocity_disagreement_mps = 0.0;
+  double candidate_correction_m = 0.0;
+  double applied_correction_longitudinal_m = 0.0;
+  double applied_correction_lateral_m = 0.0;
+  double applied_correction_m = 0.0;
+  std::size_t disagreement_streak = 0;
+  bool disagreement_measured = false;
+  bool correction_applied = false;
+  double intensity_channel_correlation = -2.0;
+  double height_channel_correlation = -2.0;
 };
 
 struct VisualObservabilityDiagnosticsSample {
@@ -417,8 +460,29 @@ public:
     /** Minimum peak normalized cross-correlation required to trust a measured shift. */
     double intensity_min_correlation = 0.6;
 
+    /** Minimum correlation margin between the best shift and the strongest
+     *  non-adjacent shift. Zero preserves the historic best-peak-only gate. */
+    double intensity_min_peak_margin = 0.0;
+
+    /** Discrete bins around the best shift treated as the same peak when
+     *  searching for a competing correlation hypothesis. */
+    size_t intensity_peak_exclusion_radius_bins = 1;
+
     /** Minimum populated profile bins required for both scans in a correlation attempt. */
     size_t intensity_min_filled_bins = 40;
+
+    /** Replace the 1D profile inside intensity_disagreement_gate with a
+     *  longitudinal/lateral reflectivity+height grid. Default-off. */
+    bool intensity_oriented_grid = false;
+
+    /** Grid half-width perpendicular to the current motion axis (m). */
+    double intensity_grid_half_width_m = 5.0;
+
+    /** Maximum lateral shift searched by the oriented grid matcher (m). */
+    double intensity_grid_max_lateral_shift_m = 0.5;
+
+    /** Relative weight of the grid height channel; intensity weight is one. */
+    double intensity_grid_height_weight = 0.25;
 
     /** Correct translation along the current motion direction when the reflectivity-profile-
      *  implied velocity and the ICP velocity persistently disagree. Unlike intensity_constraint
@@ -634,6 +698,11 @@ public:
    */
   std::size_t intensity_disagreement_attempt_count = 0;
   std::size_t intensity_disagreement_valid_shift_count = 0;
+  std::size_t intensity_ambiguous_shift_count = 0;
+  std::size_t intensity_peak_margin_sample_count = 0;
+  double intensity_peak_margin_sum = 0.0;
+  double intensity_peak_margin_min = std::numeric_limits<double>::infinity();
+  std::vector<IntensityPeakDiagnostic> intensity_peak_diagnostics;
   std::size_t intensity_disagreement_exceeded_threshold_count = 0;
 
   /** Localizability-weighting diagnostics (localizability_weighting).
@@ -752,6 +821,15 @@ private:
    *  scan's own ICP motion direction (see unit_axis_from_step), not a persistent weak
    *  direction. Kept separate so the two intensity features never share state. */
   std::optional<StoredIntensityProfile> _previous_intensity_velocity_profile;
+
+  struct StoredOrientedIntensityGrid {
+    OrientedIntensityGrid grid;
+    Eigen::Vector3d origin = Eigen::Vector3d::Zero();
+    Eigen::Vector3d longitudinal_axis = Eigen::Vector3d::UnitX();
+    Eigen::Vector3d lateral_axis = Eigen::Vector3d::UnitY();
+  };
+  std::optional<StoredOrientedIntensityGrid>
+      _previous_intensity_velocity_grid;
 
   /** Consecutive scans with an intensity-vs-ICP velocity disagreement. */
   std::size_t _intensity_disagreement_streak = 0;

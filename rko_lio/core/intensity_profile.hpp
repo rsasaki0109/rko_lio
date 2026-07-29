@@ -31,6 +31,9 @@
 
 #pragma once
 
+#include "correlation_peak_selector.hpp"
+#include "correlation_score.hpp"
+
 #include <Eigen/Core>
 
 #include <algorithm>
@@ -46,6 +49,8 @@ struct IntensityProfileConfig {
   double half_length_m = 30.0;
   double max_shift_m = 1.5;
   double min_correlation = 0.6;
+  double min_peak_margin = 0.0;
+  std::size_t peak_exclusion_radius_bins = 1;
   std::size_t min_filled_bins = 40;
 };
 
@@ -63,7 +68,11 @@ struct ProfileShiftResult {
   bool valid = false;
   double shift_m = 0.0;
   double correlation = -1.0;
+  double second_best_correlation = -1.0;
+  double peak_margin = 0.0;
   std::size_t overlap_bins = 0;
+  bool has_competing_peak = false;
+  bool ambiguous = false;
 };
 
 /**
@@ -156,8 +165,8 @@ inline IntensityProfile build_intensity_profile(const std::vector<Eigen::Vector3
  * correction needed to bring that prediction in line with the world-fixed texture.
  * Searches integer-bin shifts up to +/-max_shift_m, then refines with a parabolic peak
  * interpolation around the best integer shift. Invalid if either profile is invalid,
- * the peak correlation is below min_correlation, or the overlap is smaller than
- * min_filled_bins.
+ * the peak correlation is below min_correlation, a non-adjacent secondary peak
+ * is too close to the best peak, or the overlap is smaller than min_filled_bins.
  */
 inline ProfileShiftResult estimate_profile_shift(const IntensityProfile& profile_a,
                                                   const IntensityProfile& profile_b,
@@ -172,8 +181,7 @@ inline ProfileShiftResult estimate_profile_shift(const IntensityProfile& profile
       std::max<long>(1, static_cast<long>(std::round(config.max_shift_m / config.bin_size_m)));
 
   auto correlation_at = [&](const long shift_bins) -> std::pair<double, std::size_t> {
-    double dot = 0.0;
-    std::size_t overlap = 0;
+    PearsonCorrelationAccumulator correlation;
     for (long i = 0; i < num_bins; ++i) {
       const long j = i - shift_bins;
       if (j < 0 || j >= num_bins) {
@@ -182,30 +190,46 @@ inline ProfileShiftResult estimate_profile_shift(const IntensityProfile& profile
       if (!profile_a.filled[static_cast<std::size_t>(i)] || !profile_b.filled[static_cast<std::size_t>(j)]) {
         continue;
       }
-      dot += profile_a.values[static_cast<std::size_t>(i)] * profile_b.values[static_cast<std::size_t>(j)];
-      ++overlap;
+      const double value_a = profile_a.values[static_cast<std::size_t>(i)];
+      const double value_b = profile_b.values[static_cast<std::size_t>(j)];
+      correlation.add(value_a, value_b);
     }
-    if (overlap == 0) {
-      return {-2.0, 0};
-    }
-    return {dot / static_cast<double>(overlap), overlap};
+    return {
+        correlation.score().value_or(-2.0),
+        correlation.support(),
+    };
   };
 
-  double best_correlation = -2.0;
-  long best_shift = 0;
-  std::size_t best_overlap = 0;
+  std::vector<CorrelationPeakCandidate> candidates;
+  candidates.reserve(static_cast<std::size_t>(2 * max_shift_bins + 1));
   for (long shift_bins = -max_shift_bins; shift_bins <= max_shift_bins; ++shift_bins) {
     const auto& [correlation, overlap] = correlation_at(shift_bins);
-    if (correlation > best_correlation) {
-      best_correlation = correlation;
-      best_shift = shift_bins;
-      best_overlap = overlap;
-    }
+    candidates.push_back({shift_bins, correlation, overlap});
   }
 
-  result.overlap_bins = best_overlap;
-  if (best_overlap < config.min_filled_bins || best_correlation < config.min_correlation) {
-    result.correlation = std::clamp(best_correlation, -1.0, 1.0);
+  CorrelationPeakPolicy peak_policy;
+  peak_policy.minimum_score = config.min_correlation;
+  peak_policy.minimum_support = config.min_filled_bins;
+  peak_policy.secondary_exclusion_radius =
+      config.peak_exclusion_radius_bins;
+  peak_policy.minimum_peak_margin = config.min_peak_margin;
+  const CorrelationPeakSelection selection =
+      select_correlation_peak(candidates, peak_policy);
+  const long best_shift = selection.best.offset_index;
+  const double best_correlation = selection.best.score;
+
+  result.overlap_bins = selection.best.support;
+  // Preserve the exact scores consumed by the generic policy so exported
+  // evidence always agrees with the actual ambiguity decision.
+  result.correlation = best_correlation;
+  result.has_competing_peak = selection.second_best.has_value();
+  result.second_best_correlation = selection.second_best.has_value()
+                                       ? selection.second_best->score
+                                       : -1.0;
+  result.peak_margin = selection.peak_margin;
+  result.ambiguous =
+      selection.rejection == CorrelationPeakRejection::ambiguous;
+  if (!selection.accepted) {
     return result;
   }
 
@@ -223,7 +247,6 @@ inline ProfileShiftResult estimate_profile_shift(const IntensityProfile& profile
 
   result.valid = true;
   result.shift_m = (static_cast<double>(best_shift) + sub_bin_offset) * config.bin_size_m;
-  result.correlation = std::clamp(best_correlation, -1.0, 1.0);
   return result;
 }
 

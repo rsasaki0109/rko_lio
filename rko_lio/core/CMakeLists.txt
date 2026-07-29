@@ -36,9 +36,12 @@ compat_target_sources(
   FILE_SET
   HEADERS
   FILES ../../rko_lio/core/lio.hpp
+        ../../rko_lio/core/correlation_peak_selector.hpp
+        ../../rko_lio/core/correlation_score.hpp
         ../../rko_lio/core/direct_visual_odometry.hpp
         ../../rko_lio/core/degeneracy_aware_solve.hpp
         ../../rko_lio/core/intensity_profile.hpp
+        ../../rko_lio/core/oriented_intensity_grid.hpp
         ../../rko_lio/core/persistent_weak_direction.hpp
         ../../rko_lio/core/preprocess_scan.hpp
         ../../rko_lio/core/process_timestamps.hpp

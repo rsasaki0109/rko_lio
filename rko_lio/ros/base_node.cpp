@@ -255,7 +255,16 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["intensity_profile_half_length_m"] = nlohmann_json_t.intensity_profile_half_length_m;
   nlohmann_json_j["intensity_max_shift_m"] = nlohmann_json_t.intensity_max_shift_m;
   nlohmann_json_j["intensity_min_correlation"] = nlohmann_json_t.intensity_min_correlation;
+  nlohmann_json_j["intensity_min_peak_margin"] = nlohmann_json_t.intensity_min_peak_margin;
+  nlohmann_json_j["intensity_peak_exclusion_radius_bins"] =
+      nlohmann_json_t.intensity_peak_exclusion_radius_bins;
   nlohmann_json_j["intensity_min_filled_bins"] = nlohmann_json_t.intensity_min_filled_bins;
+  nlohmann_json_j["intensity_oriented_grid"] = nlohmann_json_t.intensity_oriented_grid;
+  nlohmann_json_j["intensity_grid_half_width_m"] = nlohmann_json_t.intensity_grid_half_width_m;
+  nlohmann_json_j["intensity_grid_max_lateral_shift_m"] =
+      nlohmann_json_t.intensity_grid_max_lateral_shift_m;
+  nlohmann_json_j["intensity_grid_height_weight"] =
+      nlohmann_json_t.intensity_grid_height_weight;
   nlohmann_json_j["intensity_disagreement_gate"] = nlohmann_json_t.intensity_disagreement_gate;
   nlohmann_json_j["intensity_disagreement_min_mps"] = nlohmann_json_t.intensity_disagreement_min_mps;
   nlohmann_json_j["intensity_disagreement_min_scans"] = nlohmann_json_t.intensity_disagreement_min_scans;
@@ -404,7 +413,16 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
   nlohmann_json_j.at("intensity_profile_half_length_m").get_to(nlohmann_json_t.intensity_profile_half_length_m);
   nlohmann_json_j.at("intensity_max_shift_m").get_to(nlohmann_json_t.intensity_max_shift_m);
   nlohmann_json_j.at("intensity_min_correlation").get_to(nlohmann_json_t.intensity_min_correlation);
+  nlohmann_json_j.at("intensity_min_peak_margin").get_to(nlohmann_json_t.intensity_min_peak_margin);
+  nlohmann_json_j.at("intensity_peak_exclusion_radius_bins")
+      .get_to(nlohmann_json_t.intensity_peak_exclusion_radius_bins);
   nlohmann_json_j.at("intensity_min_filled_bins").get_to(nlohmann_json_t.intensity_min_filled_bins);
+  nlohmann_json_j.at("intensity_oriented_grid").get_to(nlohmann_json_t.intensity_oriented_grid);
+  nlohmann_json_j.at("intensity_grid_half_width_m").get_to(nlohmann_json_t.intensity_grid_half_width_m);
+  nlohmann_json_j.at("intensity_grid_max_lateral_shift_m")
+      .get_to(nlohmann_json_t.intensity_grid_max_lateral_shift_m);
+  nlohmann_json_j.at("intensity_grid_height_weight")
+      .get_to(nlohmann_json_t.intensity_grid_height_weight);
   nlohmann_json_j.at("intensity_disagreement_gate").get_to(nlohmann_json_t.intensity_disagreement_gate);
   nlohmann_json_j.at("intensity_disagreement_min_mps").get_to(nlohmann_json_t.intensity_disagreement_min_mps);
   nlohmann_json_j.at("intensity_disagreement_min_scans").get_to(nlohmann_json_t.intensity_disagreement_min_scans);
@@ -725,10 +743,30 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("intensity_max_shift_m", lio_config.intensity_max_shift_m);
   lio_config.intensity_min_correlation =
       node->declare_parameter<double>("intensity_min_correlation", lio_config.intensity_min_correlation);
+  lio_config.intensity_min_peak_margin =
+      node->declare_parameter<double>("intensity_min_peak_margin", lio_config.intensity_min_peak_margin);
+  const auto intensity_peak_exclusion_radius_bins = node->declare_parameter<int>(
+      "intensity_peak_exclusion_radius_bins",
+      static_cast<int>(lio_config.intensity_peak_exclusion_radius_bins));
+  lio_config.intensity_peak_exclusion_radius_bins = static_cast<size_t>(
+      intensity_peak_exclusion_radius_bins > 0
+          ? intensity_peak_exclusion_radius_bins
+          : 0);
   const auto intensity_min_filled_bins = node->declare_parameter<int>(
       "intensity_min_filled_bins", static_cast<int>(lio_config.intensity_min_filled_bins));
   lio_config.intensity_min_filled_bins =
       static_cast<size_t>(intensity_min_filled_bins > 0 ? intensity_min_filled_bins : 1);
+  lio_config.intensity_oriented_grid = node->declare_parameter<bool>(
+      "intensity_oriented_grid", lio_config.intensity_oriented_grid);
+  lio_config.intensity_grid_half_width_m = node->declare_parameter<double>(
+      "intensity_grid_half_width_m", lio_config.intensity_grid_half_width_m);
+  lio_config.intensity_grid_max_lateral_shift_m =
+      node->declare_parameter<double>(
+          "intensity_grid_max_lateral_shift_m",
+          lio_config.intensity_grid_max_lateral_shift_m);
+  lio_config.intensity_grid_height_weight = node->declare_parameter<double>(
+      "intensity_grid_height_weight",
+      lio_config.intensity_grid_height_weight);
   lio_config.intensity_disagreement_gate =
       node->declare_parameter<bool>("intensity_disagreement_gate", lio_config.intensity_disagreement_gate);
   lio_config.intensity_disagreement_min_mps =
@@ -1657,6 +1695,17 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
         intensity_summary["disagreement_corrected_scan_count"] = lio->intensity_disagreement_corrected_scan_count;
         intensity_summary["disagreement_attempt_count"] = lio->intensity_disagreement_attempt_count;
         intensity_summary["disagreement_valid_shift_count"] = lio->intensity_disagreement_valid_shift_count;
+        intensity_summary["ambiguous_shift_count"] = lio->intensity_ambiguous_shift_count;
+        intensity_summary["peak_margin_sample_count"] = lio->intensity_peak_margin_sample_count;
+        intensity_summary["peak_margin_mean"] =
+            lio->intensity_peak_margin_sample_count > 0
+                ? lio->intensity_peak_margin_sum /
+                      static_cast<double>(lio->intensity_peak_margin_sample_count)
+                : 0.0;
+        intensity_summary["peak_margin_min"] =
+            lio->intensity_peak_margin_sample_count > 0
+                ? lio->intensity_peak_margin_min
+                : 0.0;
         intensity_summary["disagreement_exceeded_threshold_count"] =
             lio->intensity_disagreement_exceeded_threshold_count;
       }
@@ -1664,6 +1713,63 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
       if (std::ofstream file(intensity_file); file.is_open()) {
         file << intensity_summary.dump(4) << "\n";
         std::cout << "Intensity constraint summary written to " << intensity_file << "\n";
+      }
+      const std::filesystem::path peak_file =
+          output_dir / "intensity_peak_diagnostics.csv";
+      if (std::ofstream file(peak_file); file.is_open()) {
+        file << "timestamp,source,correlation,second_best_correlation,"
+                "peak_margin,longitudinal_shift_m,lateral_shift_m,"
+                "overlap_bins,base_qualified,has_competing_peak,"
+                "ambiguous,accepted,motion_dt_s,"
+                "intensity_velocity_longitudinal_mps,"
+                "intensity_velocity_lateral_mps,"
+                "icp_velocity_longitudinal_mps,"
+                "icp_velocity_lateral_mps,velocity_disagreement_mps,"
+                "candidate_correction_m,"
+                "applied_correction_longitudinal_m,"
+                "applied_correction_lateral_m,applied_correction_m,"
+                "disagreement_streak,disagreement_measured,"
+                "correction_applied,intensity_channel_correlation,"
+                "height_channel_correlation\n";
+        for (const auto& diagnostic : lio->intensity_peak_diagnostics) {
+          file << std::fixed << std::setprecision(9)
+               << core::to_seconds(diagnostic.time) << ","
+               << (diagnostic.source ==
+                           core::IntensityPeakSource::persistent_prior
+                       ? "persistent_prior"
+                       : diagnostic.source ==
+                                 core::IntensityPeakSource::oriented_grid
+                             ? "oriented_grid"
+                             : "disagreement_gate")
+               << "," << diagnostic.correlation << ","
+               << diagnostic.second_best_correlation << ","
+               << diagnostic.peak_margin << ","
+               << diagnostic.longitudinal_shift_m << ","
+               << diagnostic.lateral_shift_m << ","
+               << diagnostic.overlap_bins << ","
+               << (diagnostic.base_qualified ? 1 : 0) << ","
+               << (diagnostic.has_competing_peak ? 1 : 0) << ","
+               << (diagnostic.ambiguous ? 1 : 0) << ","
+               << (diagnostic.accepted ? 1 : 0) << ","
+               << diagnostic.motion_dt_s << ","
+               << diagnostic.intensity_velocity_longitudinal_mps
+               << ","
+               << diagnostic.intensity_velocity_lateral_mps << ","
+               << diagnostic.icp_velocity_longitudinal_mps << ","
+               << diagnostic.icp_velocity_lateral_mps << ","
+               << diagnostic.velocity_disagreement_mps << ","
+               << diagnostic.candidate_correction_m << ","
+               << diagnostic.applied_correction_longitudinal_m << ","
+               << diagnostic.applied_correction_lateral_m << ","
+               << diagnostic.applied_correction_m << ","
+               << diagnostic.disagreement_streak << ","
+               << (diagnostic.disagreement_measured ? 1 : 0) << ","
+               << (diagnostic.correction_applied ? 1 : 0) << ","
+               << diagnostic.intensity_channel_correlation << ","
+               << diagnostic.height_channel_correlation << "\n";
+        }
+        std::cout << "Intensity peak diagnostics written to " << peak_file
+                  << "\n";
       }
     }
     if (!lio->visual_observability_diagnostics.empty()) {
