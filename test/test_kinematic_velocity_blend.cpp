@@ -3,10 +3,13 @@
 #include "rko_lio/core/kinematic_velocity_blend.hpp"
 
 #include <Eigen/Core>
+#include <Eigen/Geometry>
 
 namespace {
 
 using rko_lio::core::blend_icp_with_propagated_velocity;
+using rko_lio::core::rotate_kinematic_velocity_prior;
+using rko_lio::core::should_bridge_low_speed_with_inertial_activity;
 
 constexpr double kDt = 0.1;
 
@@ -103,6 +106,34 @@ TEST(KinematicVelocityBlend, MissingAnchorOrInvalidInformationCannotCorrect) {
       Eigen::Vector3d(1.7, 0.0, 0.0), 0.0, 0.0, 9.0, 2.0, 0.05, 2.0, 0.3);
   EXPECT_TRUE(bad_information.valid);
   EXPECT_TRUE(bad_information.correction.isZero());
+}
+
+TEST(KinematicVelocityBlend, WalkingActivityBridgesAnAnchoredLowSpeedLock) {
+  EXPECT_TRUE(should_bridge_low_speed_with_inertial_activity(
+      0.08, 0.3, 0.19, 0.03, true, true));
+  EXPECT_FALSE(should_bridge_low_speed_with_inertial_activity(
+      0.08, 0.3, 0.0015, 0.03, true, true));
+}
+
+TEST(KinematicVelocityBlend, ActivityBridgeFailsClosedWithoutTrustedState) {
+  EXPECT_FALSE(should_bridge_low_speed_with_inertial_activity(
+      0.08, 0.3, 0.19, 0.03, false, true));
+  EXPECT_FALSE(should_bridge_low_speed_with_inertial_activity(
+      0.08, 0.3, 0.19, 0.03, true, false));
+  EXPECT_FALSE(should_bridge_low_speed_with_inertial_activity(
+      0.08, 0.3, 0.19, 0.0, true, true));
+}
+
+TEST(KinematicVelocityBlend, YawRotationPreservesPriorSpeed) {
+  constexpr double kHalfPi = 1.5707963267948966;
+  const Eigen::Matrix3d rotation =
+      Eigen::AngleAxisd(kHalfPi, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+  const Eigen::Vector3d rotated =
+      rotate_kinematic_velocity_prior(rotation, Eigen::Vector3d(1.7, 0.0, 0.0));
+  EXPECT_NEAR(rotated.x(), 0.0, 1.0e-12);
+  EXPECT_NEAR(rotated.y(), 1.7, 1.0e-12);
+  EXPECT_NEAR(rotated.z(), 0.0, 1.0e-12);
+  EXPECT_NEAR(rotated.norm(), 1.7, 1.0e-12);
 }
 
 } // namespace

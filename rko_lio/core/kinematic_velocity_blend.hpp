@@ -33,6 +33,29 @@
 
 namespace rko_lio::core {
 
+inline bool should_bridge_low_speed_with_inertial_activity(
+    const double previous_speed_mps,
+    const double min_speed_mps,
+    const double accel_magnitude_variance,
+    const double min_accel_magnitude_variance,
+    const bool anchor_active,
+    const bool propagated_velocity_available) {
+  return previous_speed_mps < std::max(0.0, min_speed_mps) &&
+         min_accel_magnitude_variance > 0.0 &&
+         std::isfinite(accel_magnitude_variance) &&
+         accel_magnitude_variance >= min_accel_magnitude_variance &&
+         anchor_active && propagated_velocity_available;
+}
+
+inline Eigen::Vector3d rotate_kinematic_velocity_prior(
+    const Eigen::Matrix3d& world_rotation_delta,
+    const Eigen::Vector3d& velocity_world) {
+  if (!world_rotation_delta.allFinite() || !velocity_world.allFinite()) {
+    return Eigen::Vector3d::Zero();
+  }
+  return world_rotation_delta * velocity_world;
+}
+
 struct KinematicVelocityBlend {
   /** True when the inputs support either an anchor decision or a blend. */
   bool valid = false;
