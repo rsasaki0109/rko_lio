@@ -1175,6 +1175,25 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         profile_config.peak_exclusion_radius_bins =
             config.intensity_peak_exclusion_radius_bins;
         profile_config.min_filled_bins = config.intensity_min_filled_bins;
+        OrientedIntensityGridConfig grid_config;
+        grid_config.bin_size_m = config.intensity_bin_size_m;
+        grid_config.half_length_m =
+            config.intensity_profile_half_length_m;
+        grid_config.half_width_m = config.intensity_grid_half_width_m;
+        grid_config.max_longitudinal_shift_m =
+            config.intensity_max_shift_m;
+        grid_config.max_lateral_shift_m =
+            config.intensity_grid_max_lateral_shift_m;
+        grid_config.height_weight =
+            config.intensity_grid_height_weight;
+        grid_config.min_correlation =
+            config.intensity_min_correlation;
+        grid_config.min_peak_margin =
+            config.intensity_min_peak_margin;
+        grid_config.peak_exclusion_radius_bins =
+            config.intensity_peak_exclusion_radius_bins;
+        grid_config.min_filled_cells =
+            config.intensity_min_filled_bins;
         // Step 2/3: correlate against the previous scan's stored profile, along *that* stored
         // profile's own axis/origin (not this scan's freshly chosen motion_axis) -- the shift
         // and the profiles it's built from must all describe the same fixed direction for the
@@ -1183,23 +1202,114 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         // intensity_constraint feature above lets the current scan's own axis take over only
         // once it becomes the new stored reference.
         bool disagreement_measured = false;
-        double intensity_velocity_along_axis = 0.0;
-        double icp_velocity_along_axis = 0.0;
-        Eigen::Vector3d correction_axis = *motion_axis;
+        Eigen::Vector3d intensity_velocity_world =
+            Eigen::Vector3d::Zero();
+        Eigen::Vector3d icp_velocity_world =
+            Eigen::Vector3d::Zero();
         const double motion_dt = to_seconds(current_lidar_time - lidar_state.time);
-        if (_previous_intensity_velocity_profile.has_value() && motion_dt > 1.0e-6) {
+        if (config.intensity_oriented_grid &&
+            _previous_intensity_velocity_grid.has_value() &&
+            motion_dt > 1.0e-6) {
           ++intensity_disagreement_attempt_count;
-          const Eigen::Vector3d corr_axis = _previous_intensity_velocity_profile->axis;
-          const Eigen::Vector3d corr_origin = _previous_intensity_velocity_profile->origin;
-          // Built at the initial guess (pre-ICP-correction), exactly like intensity_constraint's
-          // own correlation above: the shift then measures the initial guess's along-axis error.
+          const auto& stored = *_previous_intensity_velocity_grid;
           Vector3dVector initial_guess_world_points(intensity_aligned_points.size());
           std::transform(intensity_aligned_points.cbegin(), intensity_aligned_points.cend(),
                          initial_guess_world_points.begin(), [&](const auto& point) { return initial_guess * point; });
-          const IntensityProfile current_profile = build_intensity_profile(
-              initial_guess_world_points, intensity_aligned_values, corr_axis, corr_origin, profile_config);
-          const ProfileShiftResult shift =
-              estimate_profile_shift(_previous_intensity_velocity_profile->profile, current_profile, profile_config);
+          const OrientedIntensityGrid current_grid =
+              build_oriented_intensity_grid(
+                  initial_guess_world_points,
+                  intensity_aligned_values,
+                  stored.longitudinal_axis,
+                  stored.lateral_axis,
+                  stored.origin,
+                  grid_config);
+          const OrientedGridShiftResult shift =
+              estimate_oriented_grid_shift(
+                  stored.grid, current_grid, grid_config);
+          const bool base_qualified =
+              shift.overlap_cells >= grid_config.min_filled_cells &&
+              shift.correlation >= grid_config.min_correlation;
+          intensity_peak_diagnostics.push_back(
+              {current_lidar_time,
+               IntensityPeakSource::oriented_grid,
+               shift.correlation,
+               shift.second_best_correlation,
+               shift.peak_margin,
+               shift.overlap_cells,
+               base_qualified,
+               shift.has_competing_peak,
+               shift.ambiguous,
+               shift.valid});
+          if (base_qualified) {
+            ++intensity_peak_margin_sample_count;
+            intensity_peak_margin_sum += shift.peak_margin;
+            intensity_peak_margin_min =
+                std::min(intensity_peak_margin_min, shift.peak_margin);
+          }
+          if (shift.ambiguous) {
+            ++intensity_ambiguous_shift_count;
+          }
+          // Reject shifts pinned at the search boundary: the true peak may lie beyond
+          // the configured window, so the correlation result there is unreliable.
+          const double saturation_margin =
+              0.5 * grid_config.bin_size_m;
+          if (shift.valid &&
+              std::abs(shift.longitudinal_shift_m) <
+                  grid_config.max_longitudinal_shift_m -
+                      saturation_margin &&
+              std::abs(shift.lateral_shift_m) <
+                  grid_config.max_lateral_shift_m -
+                      saturation_margin) {
+            ++intensity_disagreement_valid_shift_count;
+            const Eigen::Vector3d texture_position =
+                initial_guess.translation() +
+                shift.longitudinal_shift_m *
+                    stored.longitudinal_axis +
+                shift.lateral_shift_m * stored.lateral_axis;
+            const Eigen::Vector3d implied_velocity =
+                (texture_position - stored.origin) / motion_dt;
+            intensity_velocity_world =
+                stored.longitudinal_axis *
+                    stored.longitudinal_axis.dot(implied_velocity) +
+                stored.lateral_axis *
+                    stored.lateral_axis.dot(implied_velocity);
+            const Eigen::Vector3d icp_velocity =
+                (optimized_pose.translation() -
+                 lidar_state.pose.translation()) /
+                motion_dt;
+            icp_velocity_world =
+                stored.longitudinal_axis *
+                    stored.longitudinal_axis.dot(icp_velocity) +
+                stored.lateral_axis *
+                    stored.lateral_axis.dot(icp_velocity);
+            disagreement_measured = true;
+          }
+        } else if (!config.intensity_oriented_grid &&
+                   _previous_intensity_velocity_profile.has_value() &&
+                   motion_dt > 1.0e-6) {
+          ++intensity_disagreement_attempt_count;
+          const Eigen::Vector3d corr_axis =
+              _previous_intensity_velocity_profile->axis;
+          const Eigen::Vector3d corr_origin =
+              _previous_intensity_velocity_profile->origin;
+          Vector3dVector initial_guess_world_points(
+              intensity_aligned_points.size());
+          std::transform(
+              intensity_aligned_points.cbegin(),
+              intensity_aligned_points.cend(),
+              initial_guess_world_points.begin(),
+              [&](const auto& point) { return initial_guess * point; });
+          const IntensityProfile current_profile =
+              build_intensity_profile(
+                  initial_guess_world_points,
+                  intensity_aligned_values,
+                  corr_axis,
+                  corr_origin,
+                  profile_config);
+          const ProfileShiftResult shift = estimate_profile_shift(
+              _previous_intensity_velocity_profile->profile,
+              current_profile,
+              profile_config);
           const bool base_qualified =
               shift.overlap_bins >= profile_config.min_filled_bins &&
               shift.correlation >= profile_config.min_correlation;
@@ -1218,26 +1328,42 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
             ++intensity_peak_margin_sample_count;
             intensity_peak_margin_sum += shift.peak_margin;
             intensity_peak_margin_min =
-                std::min(intensity_peak_margin_min, shift.peak_margin);
+                std::min(
+                    intensity_peak_margin_min,
+                    shift.peak_margin);
           }
           if (shift.ambiguous) {
             ++intensity_ambiguous_shift_count;
           }
-          // Reject shifts pinned at the search boundary: the true peak may lie beyond
-          // max_shift_m, so the correlation result there is unreliable (item 5).
-          const double saturation_margin = 0.5 * profile_config.bin_size_m;
-          if (shift.valid && std::abs(shift.shift_m) < config.intensity_max_shift_m - saturation_margin) {
+          const double saturation_margin =
+              0.5 * profile_config.bin_size_m;
+          if (shift.valid &&
+              std::abs(shift.shift_m) <
+                  config.intensity_max_shift_m -
+                      saturation_margin) {
             ++intensity_disagreement_valid_shift_count;
-            intensity_velocity_along_axis = intensity_implied_velocity_along_axis(
-                corr_axis, initial_guess.translation(), corr_origin, shift.shift_m, motion_dt);
-            icp_velocity_along_axis =
-                corr_axis.dot(optimized_pose.translation() - lidar_state.pose.translation()) / motion_dt;
-            correction_axis = corr_axis;
+            const double intensity_velocity_along_axis =
+                intensity_implied_velocity_along_axis(
+                    corr_axis,
+                    initial_guess.translation(),
+                    corr_origin,
+                    shift.shift_m,
+                    motion_dt);
+            const double icp_velocity_along_axis =
+                corr_axis.dot(
+                    optimized_pose.translation() -
+                    lidar_state.pose.translation()) /
+                motion_dt;
+            intensity_velocity_world =
+                intensity_velocity_along_axis * corr_axis;
+            icp_velocity_world =
+                icp_velocity_along_axis * corr_axis;
             disagreement_measured = true;
           }
         }
         if (disagreement_measured) {
-          const double gap = std::abs(intensity_velocity_along_axis - icp_velocity_along_axis);
+          const double gap =
+              (intensity_velocity_world - icp_velocity_world).norm();
           if (gap >= config.intensity_disagreement_min_mps) {
             ++_intensity_disagreement_streak;
             ++intensity_disagreement_exceeded_threshold_count;
@@ -1246,8 +1372,10 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           }
           if (_intensity_disagreement_streak >= config.intensity_disagreement_min_scans) {
             const double weight = std::max(0.0, std::min(1.0, config.intensity_disagreement_weight));
-            const double correction = weight * (intensity_velocity_along_axis - icp_velocity_along_axis) * motion_dt;
-            optimized_pose.translation() += correction * correction_axis;
+            optimized_pose.translation() +=
+                weight *
+                (intensity_velocity_world - icp_velocity_world) *
+                motion_dt;
             ++intensity_disagreement_corrected_scan_count;
           }
         }
@@ -1263,12 +1391,47 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         Vector3dVector store_world_points(intensity_aligned_points.size());
         std::transform(intensity_aligned_points.cbegin(), intensity_aligned_points.cend(), store_world_points.begin(),
                        [&](const auto& point) { return optimized_pose * point; });
-        const IntensityProfile store_profile = build_intensity_profile(
-            store_world_points, intensity_aligned_values, *motion_axis, optimized_pose.translation(), profile_config);
-        if (store_profile.valid) {
-          _previous_intensity_velocity_profile = StoredIntensityProfile{store_profile, optimized_pose.translation(), *motion_axis};
-        } else {
+        const Eigen::Vector3d lateral_axis =
+            Eigen::Vector3d::UnitZ().cross(*motion_axis);
+        if (config.intensity_oriented_grid &&
+            lateral_axis.squaredNorm() > 1.0e-12) {
+          const OrientedIntensityGrid store_grid =
+              build_oriented_intensity_grid(
+                  store_world_points,
+                  intensity_aligned_values,
+                  *motion_axis,
+                  lateral_axis.normalized(),
+                  optimized_pose.translation(),
+                  grid_config);
+          if (store_grid.valid) {
+            _previous_intensity_velocity_grid =
+                StoredOrientedIntensityGrid{
+                    store_grid,
+                    optimized_pose.translation(),
+                    *motion_axis,
+                    lateral_axis.normalized()};
+          } else {
+            _previous_intensity_velocity_grid.reset();
+          }
           _previous_intensity_velocity_profile.reset();
+        } else {
+          const IntensityProfile store_profile =
+              build_intensity_profile(
+                  store_world_points,
+                  intensity_aligned_values,
+                  *motion_axis,
+                  optimized_pose.translation(),
+                  profile_config);
+          if (store_profile.valid) {
+            _previous_intensity_velocity_profile =
+                StoredIntensityProfile{
+                    store_profile,
+                    optimized_pose.translation(),
+                    *motion_axis};
+          } else {
+            _previous_intensity_velocity_profile.reset();
+          }
+          _previous_intensity_velocity_grid.reset();
         }
       }
     } else if (config.intensity_disagreement_gate) {

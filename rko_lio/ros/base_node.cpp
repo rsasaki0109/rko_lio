@@ -259,6 +259,12 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["intensity_peak_exclusion_radius_bins"] =
       nlohmann_json_t.intensity_peak_exclusion_radius_bins;
   nlohmann_json_j["intensity_min_filled_bins"] = nlohmann_json_t.intensity_min_filled_bins;
+  nlohmann_json_j["intensity_oriented_grid"] = nlohmann_json_t.intensity_oriented_grid;
+  nlohmann_json_j["intensity_grid_half_width_m"] = nlohmann_json_t.intensity_grid_half_width_m;
+  nlohmann_json_j["intensity_grid_max_lateral_shift_m"] =
+      nlohmann_json_t.intensity_grid_max_lateral_shift_m;
+  nlohmann_json_j["intensity_grid_height_weight"] =
+      nlohmann_json_t.intensity_grid_height_weight;
   nlohmann_json_j["intensity_disagreement_gate"] = nlohmann_json_t.intensity_disagreement_gate;
   nlohmann_json_j["intensity_disagreement_min_mps"] = nlohmann_json_t.intensity_disagreement_min_mps;
   nlohmann_json_j["intensity_disagreement_min_scans"] = nlohmann_json_t.intensity_disagreement_min_scans;
@@ -411,6 +417,12 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
   nlohmann_json_j.at("intensity_peak_exclusion_radius_bins")
       .get_to(nlohmann_json_t.intensity_peak_exclusion_radius_bins);
   nlohmann_json_j.at("intensity_min_filled_bins").get_to(nlohmann_json_t.intensity_min_filled_bins);
+  nlohmann_json_j.at("intensity_oriented_grid").get_to(nlohmann_json_t.intensity_oriented_grid);
+  nlohmann_json_j.at("intensity_grid_half_width_m").get_to(nlohmann_json_t.intensity_grid_half_width_m);
+  nlohmann_json_j.at("intensity_grid_max_lateral_shift_m")
+      .get_to(nlohmann_json_t.intensity_grid_max_lateral_shift_m);
+  nlohmann_json_j.at("intensity_grid_height_weight")
+      .get_to(nlohmann_json_t.intensity_grid_height_weight);
   nlohmann_json_j.at("intensity_disagreement_gate").get_to(nlohmann_json_t.intensity_disagreement_gate);
   nlohmann_json_j.at("intensity_disagreement_min_mps").get_to(nlohmann_json_t.intensity_disagreement_min_mps);
   nlohmann_json_j.at("intensity_disagreement_min_scans").get_to(nlohmann_json_t.intensity_disagreement_min_scans);
@@ -744,6 +756,17 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "intensity_min_filled_bins", static_cast<int>(lio_config.intensity_min_filled_bins));
   lio_config.intensity_min_filled_bins =
       static_cast<size_t>(intensity_min_filled_bins > 0 ? intensity_min_filled_bins : 1);
+  lio_config.intensity_oriented_grid = node->declare_parameter<bool>(
+      "intensity_oriented_grid", lio_config.intensity_oriented_grid);
+  lio_config.intensity_grid_half_width_m = node->declare_parameter<double>(
+      "intensity_grid_half_width_m", lio_config.intensity_grid_half_width_m);
+  lio_config.intensity_grid_max_lateral_shift_m =
+      node->declare_parameter<double>(
+          "intensity_grid_max_lateral_shift_m",
+          lio_config.intensity_grid_max_lateral_shift_m);
+  lio_config.intensity_grid_height_weight = node->declare_parameter<double>(
+      "intensity_grid_height_weight",
+      lio_config.intensity_grid_height_weight);
   lio_config.intensity_disagreement_gate =
       node->declare_parameter<bool>("intensity_disagreement_gate", lio_config.intensity_disagreement_gate);
   lio_config.intensity_disagreement_min_mps =
@@ -1703,7 +1726,10 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
                << (diagnostic.source ==
                            core::IntensityPeakSource::persistent_prior
                        ? "persistent_prior"
-                       : "disagreement_gate")
+                       : diagnostic.source ==
+                                 core::IntensityPeakSource::oriented_grid
+                             ? "oriented_grid"
+                             : "disagreement_gate")
                << "," << diagnostic.correlation << ","
                << diagnostic.second_best_correlation << ","
                << diagnostic.peak_margin << ","

@@ -29,6 +29,7 @@
 
 #pragma once
 #include "intensity_profile.hpp"
+#include "oriented_intensity_grid.hpp"
 #include "persistent_weak_direction.hpp"
 #include "selective_visual_fusion.hpp"
 #include "voxel_hash_map.hpp"
@@ -67,6 +68,7 @@ struct RadarVelocityPrior {
 enum class IntensityPeakSource {
   persistent_prior,
   disagreement_gate,
+  oriented_grid,
 };
 
 /** Raw correlation-peak evidence retained for offline policy analysis.
@@ -452,6 +454,19 @@ public:
     /** Minimum populated profile bins required for both scans in a correlation attempt. */
     size_t intensity_min_filled_bins = 40;
 
+    /** Replace the 1D profile inside intensity_disagreement_gate with a
+     *  longitudinal/lateral reflectivity+height grid. Default-off. */
+    bool intensity_oriented_grid = false;
+
+    /** Grid half-width perpendicular to the current motion axis (m). */
+    double intensity_grid_half_width_m = 5.0;
+
+    /** Maximum lateral shift searched by the oriented grid matcher (m). */
+    double intensity_grid_max_lateral_shift_m = 0.5;
+
+    /** Relative weight of the grid height channel; intensity weight is one. */
+    double intensity_grid_height_weight = 0.25;
+
     /** Correct translation along the current motion direction when the reflectivity-profile-
      *  implied velocity and the ICP velocity persistently disagree. Unlike intensity_constraint
      *  above (which requires degeneracy_aware_solve + a confirmed Hessian-weak direction),
@@ -789,6 +804,15 @@ private:
    *  scan's own ICP motion direction (see unit_axis_from_step), not a persistent weak
    *  direction. Kept separate so the two intensity features never share state. */
   std::optional<StoredIntensityProfile> _previous_intensity_velocity_profile;
+
+  struct StoredOrientedIntensityGrid {
+    OrientedIntensityGrid grid;
+    Eigen::Vector3d origin = Eigen::Vector3d::Zero();
+    Eigen::Vector3d longitudinal_axis = Eigen::Vector3d::UnitX();
+    Eigen::Vector3d lateral_axis = Eigen::Vector3d::UnitY();
+  };
+  std::optional<StoredOrientedIntensityGrid>
+      _previous_intensity_velocity_grid;
 
   /** Consecutive scans with an intensity-vs-ICP velocity disagreement. */
   std::size_t _intensity_disagreement_streak = 0;
