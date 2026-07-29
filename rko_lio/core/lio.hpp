@@ -82,6 +82,8 @@ struct IntensityPeakDiagnostic {
   double correlation = -1.0;
   double second_best_correlation = -1.0;
   double peak_margin = 0.0;
+  double longitudinal_shift_m = 0.0;
+  double lateral_shift_m = 0.0;
   std::size_t overlap_bins = 0;
   bool base_qualified = false;
   bool has_competing_peak = false;
