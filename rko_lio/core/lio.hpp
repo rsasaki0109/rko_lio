@@ -330,9 +330,17 @@ public:
     /** Below this previous speed (m/s), clear the anchor and leave startup to ICP. */
     double kinematic_blend_min_speed = 0.3;
 
-    /** Disable and clear the propagation anchor above this absolute world yaw
-     *  rate (rad/s). The prior is intended for straight self-similar corridors;
-     *  turns make its previous-motion-axis model invalid. Set <= 0 to disable. */
+    /** Minimum within-scan raw acceleration-magnitude variance ((m/s^2)^2)
+     *  required to treat a low LiDAR speed as an ICP lock rather than a real
+     *  stop. Set <= 0 to disable activity-based low-speed bridging. */
+    double kinematic_blend_min_accel_magnitude_variance = 0.0;
+
+    /** Consecutive inactive scans required before clearing the prior. */
+    std::size_t kinematic_blend_inactivity_gate_min_scans = 1;
+
+    /** Suspend translation correction above this absolute world yaw rate
+     *  (rad/s) and rotate the retained prior by the observed orientation
+     *  change. Set <= 0 to disable the yaw suspension. */
     double kinematic_blend_max_yaw_rate_rad_s = 0.05;
 
     /** Consecutive above-threshold scans required before yaw disables the blend. */
@@ -659,8 +667,20 @@ public:
   std::size_t kinematic_blend_scene_cooldown_rejected_scan_count = 0;
   std::size_t kinematic_blend_speed_rejected_scan_count = 0;
   std::size_t kinematic_blend_speed_cooldown_rejected_scan_count = 0;
+  std::size_t kinematic_blend_low_speed_rejected_scan_count = 0;
+  std::size_t kinematic_blend_yaw_rejected_scan_count = 0;
+  std::size_t kinematic_blend_anchor_expiration_count = 0;
+  std::size_t kinematic_blend_propagated_speed_clamp_count = 0;
+  std::size_t kinematic_blend_invalid_result_count = 0;
+  std::size_t kinematic_blend_activity_retained_low_speed_scan_count = 0;
+  std::size_t kinematic_blend_inactivity_rejected_scan_count = 0;
   double kinematic_blend_scene_near_fraction_sum = 0.0;
   double kinematic_blend_scene_far_fraction_sum = 0.0;
+  double kinematic_blend_max_disagreement_mps = 0.0;
+  double kinematic_blend_max_correction_m = 0.0;
+  double kinematic_blend_first_correction_time_sec = -1.0;
+  double kinematic_blend_last_correction_time_sec = -1.0;
+  double kinematic_blend_last_anchor_refresh_time_sec = -1.0;
 
 private:
   /**
@@ -749,6 +769,9 @@ private:
 
   /** Consecutive scans above kinematic_blend_max_activation_speed_mps. */
   std::size_t _kinematic_blend_speeding_streak = 0;
+
+  /** Consecutive scans below the configured IMU activity threshold. */
+  std::size_t _kinematic_blend_inactive_streak = 0;
 
   /** Most recent range-scene rejection time, in seconds. */
   double _kinematic_blend_scene_last_rejected_time_sec = -1.0;

@@ -30,8 +30,60 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <limits>
 
 namespace rko_lio::core {
+
+struct KinematicInactivityGate {
+  std::size_t streak = 0;
+  bool rejected = false;
+};
+
+inline KinematicInactivityGate update_kinematic_inactivity_gate(
+    const double accel_magnitude_variance,
+    const double min_accel_magnitude_variance,
+    const std::size_t min_consecutive_scans,
+    const std::size_t previous_streak) {
+  if (!(min_accel_magnitude_variance > 0.0)) {
+    return {};
+  }
+  const bool inactive =
+      !std::isfinite(accel_magnitude_variance) ||
+      accel_magnitude_variance < min_accel_magnitude_variance;
+  const std::size_t streak =
+      inactive && previous_streak < std::numeric_limits<std::size_t>::max()
+          ? previous_streak + 1
+          : (inactive ? previous_streak : 0U);
+  return {
+      .streak = streak,
+      .rejected =
+          streak >= std::max<std::size_t>(1, min_consecutive_scans),
+  };
+}
+
+inline bool should_bridge_low_speed_with_inertial_activity(
+    const double previous_speed_mps,
+    const double min_speed_mps,
+    const double accel_magnitude_variance,
+    const double min_accel_magnitude_variance,
+    const bool anchor_active,
+    const bool propagated_velocity_available) {
+  return previous_speed_mps < std::max(0.0, min_speed_mps) &&
+         min_accel_magnitude_variance > 0.0 &&
+         std::isfinite(accel_magnitude_variance) &&
+         accel_magnitude_variance >= min_accel_magnitude_variance &&
+         anchor_active && propagated_velocity_available;
+}
+
+inline Eigen::Vector3d rotate_kinematic_velocity_prior(
+    const Eigen::Matrix3d& world_rotation_delta,
+    const Eigen::Vector3d& velocity_world) {
+  if (!world_rotation_delta.allFinite() || !velocity_world.allFinite()) {
+    return Eigen::Vector3d::Zero();
+  }
+  return world_rotation_delta * velocity_world;
+}
 
 struct KinematicVelocityBlend {
   /** True when the inputs support either an anchor decision or a blend. */

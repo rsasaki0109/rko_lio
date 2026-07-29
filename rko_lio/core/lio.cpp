@@ -1231,6 +1231,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // This newer blend takes precedence if both it and the legacy hard gate are enabled.
     if (config.kinematic_velocity_blend && interval_stats.imu_count > 0) {
       const Eigen::Vector3d previous_velocity_world = lidar_state.pose.so3() * lidar_state.velocity;
+      const bool previous_speed_supports_axis =
+          previous_velocity_world.norm() >= config.kinematic_blend_min_speed;
       bool scene_rejected = false;
       if (config.kinematic_blend_range_scene_gate) {
         ++kinematic_blend_scene_evaluation_count;
@@ -1294,10 +1296,52 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       const bool turning_too_fast =
           _kinematic_blend_turning_streak >=
           std::max<std::size_t>(1, config.kinematic_blend_yaw_gate_min_scans);
-      if (previous_velocity_world.norm() < config.kinematic_blend_min_speed ||
-          speed_too_high || scene_rejected || turning_too_fast) {
+      const double accel_magnitude_variance =
+          interval_stats.imu_count > 1
+              ? interval_stats.welford_sum_of_squares /
+                    static_cast<double>(interval_stats.imu_count - 1)
+              : 0.0;
+      const KinematicInactivityGate inactivity_gate =
+          update_kinematic_inactivity_gate(
+              accel_magnitude_variance,
+              config.kinematic_blend_min_accel_magnitude_variance,
+              config.kinematic_blend_inactivity_gate_min_scans,
+              _kinematic_blend_inactive_streak);
+      _kinematic_blend_inactive_streak = inactivity_gate.streak;
+      kinematic_blend_inactivity_rejected_scan_count +=
+          inactivity_gate.rejected ? 1U : 0U;
+      const bool bridge_active_low_speed =
+          should_bridge_low_speed_with_inertial_activity(
+              previous_velocity_world.norm(),
+              config.kinematic_blend_min_speed,
+              accel_magnitude_variance,
+              config.kinematic_blend_min_accel_magnitude_variance,
+              _kinematic_blend_anchor_time.has_value(),
+              _kinematic_blend_propagated_velocity_world.has_value());
+      const bool speed_too_low =
+          !previous_speed_supports_axis &&
+          !bridge_active_low_speed;
+      kinematic_blend_low_speed_rejected_scan_count += speed_too_low ? 1U : 0U;
+      kinematic_blend_activity_retained_low_speed_scan_count +=
+          bridge_active_low_speed ? 1U : 0U;
+      kinematic_blend_yaw_rejected_scan_count += turning_too_fast ? 1U : 0U;
+      if (speed_too_high || scene_rejected || speed_too_low ||
+          inactivity_gate.rejected) {
         _kinematic_blend_anchor_time.reset();
         _kinematic_blend_propagated_velocity_world.reset();
+      } else if (turning_too_fast) {
+        // Suspend translation correction during the turn, but rotate the
+        // independent velocity prior by the observed orientation change. This
+        // preserves its speed for the next straight segment without applying a
+        // stale pre-turn world direction.
+        if (_kinematic_blend_propagated_velocity_world.has_value()) {
+          const Sophus::SO3d world_rotation_delta =
+              optimized_pose.so3() * lidar_state.pose.so3().inverse();
+          _kinematic_blend_propagated_velocity_world =
+              rotate_kinematic_velocity_prior(
+                  world_rotation_delta.matrix(),
+                  _kinematic_blend_propagated_velocity_world.value());
+        }
       } else {
         ++kinematic_blend_attempt_count;
         const double blend_dt = to_seconds(current_lidar_time - lidar_state.time);
@@ -1312,6 +1356,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           _kinematic_blend_anchor_time.reset();
           _kinematic_blend_propagated_velocity_world.reset();
           anchor_age_sec = -1.0;
+          ++kinematic_blend_anchor_expiration_count;
         }
         const Eigen::Vector3d propagation_seed_world =
             _kinematic_blend_propagated_velocity_world.value_or(previous_velocity_world);
@@ -1322,14 +1367,25 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
             propagated_velocity_world.norm() > config.kinematic_blend_max_propagated_speed_mps) {
           propagated_velocity_world *=
               config.kinematic_blend_max_propagated_speed_mps / propagated_velocity_world.norm();
+          ++kinematic_blend_propagated_speed_clamp_count;
         }
+        const Eigen::Vector3d motion_axis_world =
+            bridge_active_low_speed
+                ? _kinematic_blend_propagated_velocity_world.value()
+                : previous_velocity_world;
         const KinematicVelocityBlend blend = blend_icp_with_propagated_velocity(
-            previous_velocity_world, optimized_pose.translation() - lidar_state.pose.translation(), blend_dt,
+            motion_axis_world, optimized_pose.translation() - lidar_state.pose.translation(), blend_dt,
             propagated_velocity_world, anchor_age_sec,
             config.kinematic_blend_icp_information_scale,
             config.kinematic_blend_propagation_information_scale,
             config.kinematic_blend_decay_time_sec, config.kinematic_blend_anchor_agreement_mps,
             config.kinematic_blend_max_icp_innovation_mps, config.kinematic_blend_min_speed);
+        if (blend.valid) {
+          kinematic_blend_max_disagreement_mps =
+              std::max(kinematic_blend_max_disagreement_mps, blend.disagreement_mps);
+        } else {
+          ++kinematic_blend_invalid_result_count;
+        }
         if (blend.valid && blend.anchor_agrees) {
           const bool establishing_first_anchor = !_kinematic_blend_anchor_time.has_value();
           _kinematic_blend_anchor_time = current_lidar_time;
@@ -1343,11 +1399,20 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                   ? (optimized_pose.translation() - lidar_state.pose.translation()) / blend_dt
                   : propagated_velocity_world;
           ++kinematic_blend_anchor_refresh_count;
+          kinematic_blend_last_anchor_refresh_time_sec =
+              to_seconds(current_lidar_time);
         } else if (_kinematic_blend_anchor_time.has_value() && blend.propagation_weight > 0.0) {
           _kinematic_blend_propagated_velocity_world = propagated_velocity_world;
           optimized_pose.translation() += blend.correction;
           ++kinematic_blend_corrected_scan_count;
           kinematic_blend_correction_m_sum += blend.correction.norm();
+          kinematic_blend_max_correction_m =
+              std::max(kinematic_blend_max_correction_m, blend.correction.norm());
+          const double correction_time_sec = to_seconds(current_lidar_time);
+          if (kinematic_blend_first_correction_time_sec < 0.0) {
+            kinematic_blend_first_correction_time_sec = correction_time_sec;
+          }
+          kinematic_blend_last_correction_time_sec = correction_time_sec;
           kinematic_blend_propagation_weight_sum += blend.propagation_weight;
           kinematic_blend_max_propagation_weight =
               std::max(kinematic_blend_max_propagation_weight, blend.propagation_weight);
