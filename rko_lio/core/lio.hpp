@@ -89,6 +89,19 @@ struct IntensityPeakDiagnostic {
   bool has_competing_peak = false;
   bool ambiguous = false;
   bool accepted = false;
+  double motion_dt_s = 0.0;
+  double intensity_velocity_longitudinal_mps = 0.0;
+  double intensity_velocity_lateral_mps = 0.0;
+  double icp_velocity_longitudinal_mps = 0.0;
+  double icp_velocity_lateral_mps = 0.0;
+  double velocity_disagreement_mps = 0.0;
+  double candidate_correction_m = 0.0;
+  double applied_correction_longitudinal_m = 0.0;
+  double applied_correction_lateral_m = 0.0;
+  double applied_correction_m = 0.0;
+  std::size_t disagreement_streak = 0;
+  bool disagreement_measured = false;
+  bool correction_applied = false;
 };
 
 struct VisualObservabilityDiagnosticsSample {

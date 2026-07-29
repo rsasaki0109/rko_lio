@@ -1204,6 +1204,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         // intensity_constraint feature above lets the current scan's own axis take over only
         // once it becomes the new stored reference.
         bool disagreement_measured = false;
+        std::optional<std::size_t> disagreement_diagnostic_index;
         Eigen::Vector3d intensity_velocity_world =
             Eigen::Vector3d::Zero();
         Eigen::Vector3d icp_velocity_world =
@@ -1231,6 +1232,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           const bool base_qualified =
               shift.overlap_cells >= grid_config.min_filled_cells &&
               shift.correlation >= grid_config.min_correlation;
+          disagreement_diagnostic_index =
+              intensity_peak_diagnostics.size();
           intensity_peak_diagnostics.push_back(
               {current_lidar_time,
                IntensityPeakSource::oriented_grid,
@@ -1286,6 +1289,17 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                     stored.longitudinal_axis.dot(icp_velocity) +
                 stored.lateral_axis *
                     stored.lateral_axis.dot(icp_velocity);
+            auto& diagnostic = intensity_peak_diagnostics.at(
+                *disagreement_diagnostic_index);
+            diagnostic.motion_dt_s = motion_dt;
+            diagnostic.intensity_velocity_longitudinal_mps =
+                stored.longitudinal_axis.dot(intensity_velocity_world);
+            diagnostic.intensity_velocity_lateral_mps =
+                stored.lateral_axis.dot(intensity_velocity_world);
+            diagnostic.icp_velocity_longitudinal_mps =
+                stored.longitudinal_axis.dot(icp_velocity_world);
+            diagnostic.icp_velocity_lateral_mps =
+                stored.lateral_axis.dot(icp_velocity_world);
             disagreement_measured = true;
           }
         } else if (!config.intensity_oriented_grid &&
@@ -1317,6 +1331,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           const bool base_qualified =
               shift.overlap_bins >= profile_config.min_filled_bins &&
               shift.correlation >= profile_config.min_correlation;
+          disagreement_diagnostic_index =
+              intensity_peak_diagnostics.size();
           intensity_peak_diagnostics.push_back(
               {current_lidar_time,
                IntensityPeakSource::disagreement_gate,
@@ -1364,6 +1380,13 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                 intensity_velocity_along_axis * corr_axis;
             icp_velocity_world =
                 icp_velocity_along_axis * corr_axis;
+            auto& diagnostic = intensity_peak_diagnostics.at(
+                *disagreement_diagnostic_index);
+            diagnostic.motion_dt_s = motion_dt;
+            diagnostic.intensity_velocity_longitudinal_mps =
+                intensity_velocity_along_axis;
+            diagnostic.icp_velocity_longitudinal_mps =
+                icp_velocity_along_axis;
             disagreement_measured = true;
           }
         }
@@ -1376,12 +1399,35 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           } else {
             _intensity_disagreement_streak = 0;
           }
+          auto& diagnostic = intensity_peak_diagnostics.at(
+              *disagreement_diagnostic_index);
+          diagnostic.velocity_disagreement_mps = gap;
+          diagnostic.disagreement_streak =
+              _intensity_disagreement_streak;
+          diagnostic.disagreement_measured = true;
+          const double weight = std::max(
+              0.0,
+              std::min(1.0, config.intensity_disagreement_weight));
+          diagnostic.candidate_correction_m =
+              weight * gap * motion_dt;
           if (_intensity_disagreement_streak >= config.intensity_disagreement_min_scans) {
-            const double weight = std::max(0.0, std::min(1.0, config.intensity_disagreement_weight));
-            optimized_pose.translation() +=
+            const Eigen::Vector3d correction =
                 weight *
                 (intensity_velocity_world - icp_velocity_world) *
                 motion_dt;
+            optimized_pose.translation() += correction;
+            diagnostic.applied_correction_longitudinal_m =
+                weight *
+                (diagnostic.intensity_velocity_longitudinal_mps -
+                 diagnostic.icp_velocity_longitudinal_mps) *
+                motion_dt;
+            diagnostic.applied_correction_lateral_m =
+                weight *
+                (diagnostic.intensity_velocity_lateral_mps -
+                 diagnostic.icp_velocity_lateral_mps) *
+                motion_dt;
+            diagnostic.applied_correction_m = correction.norm();
+            diagnostic.correction_applied = true;
             ++intensity_disagreement_corrected_scan_count;
           }
         }

@@ -1720,7 +1720,16 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
         file << "timestamp,source,correlation,second_best_correlation,"
                 "peak_margin,longitudinal_shift_m,lateral_shift_m,"
                 "overlap_bins,base_qualified,has_competing_peak,"
-                "ambiguous,accepted\n";
+                "ambiguous,accepted,motion_dt_s,"
+                "intensity_velocity_longitudinal_mps,"
+                "intensity_velocity_lateral_mps,"
+                "icp_velocity_longitudinal_mps,"
+                "icp_velocity_lateral_mps,velocity_disagreement_mps,"
+                "candidate_correction_m,"
+                "applied_correction_longitudinal_m,"
+                "applied_correction_lateral_m,applied_correction_m,"
+                "disagreement_streak,disagreement_measured,"
+                "correction_applied\n";
         for (const auto& diagnostic : lio->intensity_peak_diagnostics) {
           file << std::fixed << std::setprecision(9)
                << core::to_seconds(diagnostic.time) << ","
@@ -1740,7 +1749,21 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
                << (diagnostic.base_qualified ? 1 : 0) << ","
                << (diagnostic.has_competing_peak ? 1 : 0) << ","
                << (diagnostic.ambiguous ? 1 : 0) << ","
-               << (diagnostic.accepted ? 1 : 0) << "\n";
+               << (diagnostic.accepted ? 1 : 0) << ","
+               << diagnostic.motion_dt_s << ","
+               << diagnostic.intensity_velocity_longitudinal_mps
+               << ","
+               << diagnostic.intensity_velocity_lateral_mps << ","
+               << diagnostic.icp_velocity_longitudinal_mps << ","
+               << diagnostic.icp_velocity_lateral_mps << ","
+               << diagnostic.velocity_disagreement_mps << ","
+               << diagnostic.candidate_correction_m << ","
+               << diagnostic.applied_correction_longitudinal_m << ","
+               << diagnostic.applied_correction_lateral_m << ","
+               << diagnostic.applied_correction_m << ","
+               << diagnostic.disagreement_streak << ","
+               << (diagnostic.disagreement_measured ? 1 : 0) << ","
+               << (diagnostic.correction_applied ? 1 : 0) << "\n";
         }
         std::cout << "Intensity peak diagnostics written to " << peak_file
                   << "\n";
