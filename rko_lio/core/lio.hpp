@@ -64,6 +64,28 @@ struct RadarVelocityPrior {
   Eigen::Matrix3d info_base = Eigen::Matrix3d::Identity() * (1.0 / (0.3 * 0.3));
 };
 
+enum class IntensityPeakSource {
+  persistent_prior,
+  disagreement_gate,
+};
+
+/** Raw correlation-peak evidence retained for offline policy analysis.
+ *
+ * Keeping observations instead of a fixed histogram lets benchmark tooling
+ * change bins or compare future ambiguity policies without replaying a bag.
+ */
+struct IntensityPeakDiagnostic {
+  Nsec time{0};
+  IntensityPeakSource source = IntensityPeakSource::disagreement_gate;
+  double correlation = -1.0;
+  double second_best_correlation = -1.0;
+  double peak_margin = 0.0;
+  std::size_t overlap_bins = 0;
+  bool base_qualified = false;
+  bool ambiguous = false;
+  bool accepted = false;
+};
+
 struct VisualObservabilityDiagnosticsSample {
   Nsec time{0};
   std::array<double, 6> directional_information_ratios{};
@@ -647,6 +669,7 @@ public:
   std::size_t intensity_peak_margin_sample_count = 0;
   double intensity_peak_margin_sum = 0.0;
   double intensity_peak_margin_min = std::numeric_limits<double>::infinity();
+  std::vector<IntensityPeakDiagnostic> intensity_peak_diagnostics;
   std::size_t intensity_disagreement_exceeded_threshold_count = 0;
 
   /** Localizability-weighting diagnostics (localizability_weighting).

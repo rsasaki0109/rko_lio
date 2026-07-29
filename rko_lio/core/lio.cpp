@@ -917,8 +917,20 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                                   _previous_intensity_profile->origin, profile_config);
       const ProfileShiftResult shift =
           estimate_profile_shift(_previous_intensity_profile->profile, current_profile, profile_config);
-      if (shift.overlap_bins >= profile_config.min_filled_bins &&
-          shift.correlation >= profile_config.min_correlation) {
+      const bool base_qualified =
+          shift.overlap_bins >= profile_config.min_filled_bins &&
+          shift.correlation >= profile_config.min_correlation;
+      intensity_peak_diagnostics.push_back(
+          {current_lidar_time,
+           IntensityPeakSource::persistent_prior,
+           shift.correlation,
+           shift.second_best_correlation,
+           shift.peak_margin,
+           shift.overlap_bins,
+           base_qualified,
+           shift.ambiguous,
+           shift.valid});
+      if (base_qualified) {
         ++intensity_peak_margin_sample_count;
         intensity_peak_margin_sum += shift.peak_margin;
         intensity_peak_margin_min =
@@ -1187,8 +1199,20 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
               initial_guess_world_points, intensity_aligned_values, corr_axis, corr_origin, profile_config);
           const ProfileShiftResult shift =
               estimate_profile_shift(_previous_intensity_velocity_profile->profile, current_profile, profile_config);
-          if (shift.overlap_bins >= profile_config.min_filled_bins &&
-              shift.correlation >= profile_config.min_correlation) {
+          const bool base_qualified =
+              shift.overlap_bins >= profile_config.min_filled_bins &&
+              shift.correlation >= profile_config.min_correlation;
+          intensity_peak_diagnostics.push_back(
+              {current_lidar_time,
+               IntensityPeakSource::disagreement_gate,
+               shift.correlation,
+               shift.second_best_correlation,
+               shift.peak_margin,
+               shift.overlap_bins,
+               base_qualified,
+               shift.ambiguous,
+               shift.valid});
+          if (base_qualified) {
             ++intensity_peak_margin_sample_count;
             intensity_peak_margin_sum += shift.peak_margin;
             intensity_peak_margin_min =

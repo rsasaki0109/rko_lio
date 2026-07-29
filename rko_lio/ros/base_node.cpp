@@ -1691,6 +1691,29 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
         file << intensity_summary.dump(4) << "\n";
         std::cout << "Intensity constraint summary written to " << intensity_file << "\n";
       }
+      const std::filesystem::path peak_file =
+          output_dir / "intensity_peak_diagnostics.csv";
+      if (std::ofstream file(peak_file); file.is_open()) {
+        file << "timestamp,source,correlation,second_best_correlation,"
+                "peak_margin,overlap_bins,base_qualified,ambiguous,accepted\n";
+        for (const auto& diagnostic : lio->intensity_peak_diagnostics) {
+          file << std::fixed << std::setprecision(9)
+               << core::to_seconds(diagnostic.time) << ","
+               << (diagnostic.source ==
+                           core::IntensityPeakSource::persistent_prior
+                       ? "persistent_prior"
+                       : "disagreement_gate")
+               << "," << diagnostic.correlation << ","
+               << diagnostic.second_best_correlation << ","
+               << diagnostic.peak_margin << ","
+               << diagnostic.overlap_bins << ","
+               << (diagnostic.base_qualified ? 1 : 0) << ","
+               << (diagnostic.ambiguous ? 1 : 0) << ","
+               << (diagnostic.accepted ? 1 : 0) << "\n";
+        }
+        std::cout << "Intensity peak diagnostics written to " << peak_file
+                  << "\n";
+      }
     }
     if (!lio->visual_observability_diagnostics.empty()) {
       const std::filesystem::path observability_file = output_dir / "visual_directional_observability.csv";
