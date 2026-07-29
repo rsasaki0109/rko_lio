@@ -1301,6 +1301,15 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
               ? interval_stats.welford_sum_of_squares /
                     static_cast<double>(interval_stats.imu_count - 1)
               : 0.0;
+      const KinematicInactivityGate inactivity_gate =
+          update_kinematic_inactivity_gate(
+              accel_magnitude_variance,
+              config.kinematic_blend_min_accel_magnitude_variance,
+              config.kinematic_blend_inactivity_gate_min_scans,
+              _kinematic_blend_inactive_streak);
+      _kinematic_blend_inactive_streak = inactivity_gate.streak;
+      kinematic_blend_inactivity_rejected_scan_count +=
+          inactivity_gate.rejected ? 1U : 0U;
       const bool bridge_active_low_speed =
           should_bridge_low_speed_with_inertial_activity(
               previous_velocity_world.norm(),
@@ -1316,7 +1325,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       kinematic_blend_activity_retained_low_speed_scan_count +=
           bridge_active_low_speed ? 1U : 0U;
       kinematic_blend_yaw_rejected_scan_count += turning_too_fast ? 1U : 0U;
-      if (speed_too_high || scene_rejected || speed_too_low) {
+      if (speed_too_high || scene_rejected || speed_too_low ||
+          inactivity_gate.rejected) {
         _kinematic_blend_anchor_time.reset();
         _kinematic_blend_propagated_velocity_world.reset();
       } else if (turning_too_fast) {

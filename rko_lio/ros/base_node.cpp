@@ -226,6 +226,8 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["kinematic_blend_min_speed"] = nlohmann_json_t.kinematic_blend_min_speed;
   nlohmann_json_j["kinematic_blend_min_accel_magnitude_variance"] =
       nlohmann_json_t.kinematic_blend_min_accel_magnitude_variance;
+  nlohmann_json_j["kinematic_blend_inactivity_gate_min_scans"] =
+      nlohmann_json_t.kinematic_blend_inactivity_gate_min_scans;
   nlohmann_json_j["kinematic_blend_max_yaw_rate_rad_s"] =
       nlohmann_json_t.kinematic_blend_max_yaw_rate_rad_s;
   nlohmann_json_j["kinematic_blend_yaw_gate_min_scans"] =
@@ -370,6 +372,10 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
   if (nlohmann_json_j.contains("kinematic_blend_min_accel_magnitude_variance")) {
     nlohmann_json_j.at("kinematic_blend_min_accel_magnitude_variance")
         .get_to(nlohmann_json_t.kinematic_blend_min_accel_magnitude_variance);
+  }
+  if (nlohmann_json_j.contains("kinematic_blend_inactivity_gate_min_scans")) {
+    nlohmann_json_j.at("kinematic_blend_inactivity_gate_min_scans")
+        .get_to(nlohmann_json_t.kinematic_blend_inactivity_gate_min_scans);
   }
   nlohmann_json_j.at("kinematic_blend_max_yaw_rate_rad_s")
       .get_to(nlohmann_json_t.kinematic_blend_max_yaw_rate_rad_s);
@@ -667,6 +673,16 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   lio_config.kinematic_blend_min_accel_magnitude_variance = node->declare_parameter<double>(
       "kinematic_blend_min_accel_magnitude_variance",
       lio_config.kinematic_blend_min_accel_magnitude_variance);
+  const auto kinematic_blend_inactivity_gate_min_scans =
+      node->declare_parameter<int>(
+          "kinematic_blend_inactivity_gate_min_scans",
+          static_cast<int>(
+              lio_config.kinematic_blend_inactivity_gate_min_scans));
+  lio_config.kinematic_blend_inactivity_gate_min_scans =
+      static_cast<std::size_t>(
+          kinematic_blend_inactivity_gate_min_scans > 0
+              ? kinematic_blend_inactivity_gate_min_scans
+              : 1);
   lio_config.kinematic_blend_max_yaw_rate_rad_s = node->declare_parameter<double>(
       "kinematic_blend_max_yaw_rate_rad_s", lio_config.kinematic_blend_max_yaw_rate_rad_s);
   const auto kinematic_blend_yaw_gate_min_scans = node->declare_parameter<int>(
@@ -1585,6 +1601,8 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
           {"invalid_result_count", lio->kinematic_blend_invalid_result_count},
           {"activity_retained_low_speed_scan_count",
            lio->kinematic_blend_activity_retained_low_speed_scan_count},
+          {"inactivity_rejected_scan_count",
+           lio->kinematic_blend_inactivity_rejected_scan_count},
           {"max_disagreement_mps", lio->kinematic_blend_max_disagreement_mps},
           {"max_correction_m", lio->kinematic_blend_max_correction_m},
           {"first_correction_time_sec",

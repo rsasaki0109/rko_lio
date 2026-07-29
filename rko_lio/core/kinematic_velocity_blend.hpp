@@ -30,8 +30,37 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <limits>
 
 namespace rko_lio::core {
+
+struct KinematicInactivityGate {
+  std::size_t streak = 0;
+  bool rejected = false;
+};
+
+inline KinematicInactivityGate update_kinematic_inactivity_gate(
+    const double accel_magnitude_variance,
+    const double min_accel_magnitude_variance,
+    const std::size_t min_consecutive_scans,
+    const std::size_t previous_streak) {
+  if (!(min_accel_magnitude_variance > 0.0)) {
+    return {};
+  }
+  const bool inactive =
+      !std::isfinite(accel_magnitude_variance) ||
+      accel_magnitude_variance < min_accel_magnitude_variance;
+  const std::size_t streak =
+      inactive && previous_streak < std::numeric_limits<std::size_t>::max()
+          ? previous_streak + 1
+          : (inactive ? previous_streak : 0U);
+  return {
+      .streak = streak,
+      .rejected =
+          streak >= std::max<std::size_t>(1, min_consecutive_scans),
+  };
+}
 
 inline bool should_bridge_low_speed_with_inertial_activity(
     const double previous_speed_mps,

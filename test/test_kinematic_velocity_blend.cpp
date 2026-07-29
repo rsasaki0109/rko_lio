@@ -10,6 +10,7 @@ namespace {
 using rko_lio::core::blend_icp_with_propagated_velocity;
 using rko_lio::core::rotate_kinematic_velocity_prior;
 using rko_lio::core::should_bridge_low_speed_with_inertial_activity;
+using rko_lio::core::update_kinematic_inactivity_gate;
 
 constexpr double kDt = 0.1;
 
@@ -134,6 +135,28 @@ TEST(KinematicVelocityBlend, YawRotationPreservesPriorSpeed) {
   EXPECT_NEAR(rotated.y(), 1.7, 1.0e-12);
   EXPECT_NEAR(rotated.z(), 0.0, 1.0e-12);
   EXPECT_NEAR(rotated.norm(), 1.7, 1.0e-12);
+}
+
+TEST(KinematicVelocityBlend, InactivityGateRequiresPersistence) {
+  const auto first =
+      update_kinematic_inactivity_gate(0.0015, 0.03, 5, 0);
+  EXPECT_EQ(first.streak, 1U);
+  EXPECT_FALSE(first.rejected);
+  const auto fifth =
+      update_kinematic_inactivity_gate(0.0015, 0.03, 5, 4);
+  EXPECT_EQ(fifth.streak, 5U);
+  EXPECT_TRUE(fifth.rejected);
+}
+
+TEST(KinematicVelocityBlend, WalkingActivityResetsInactivityStreak) {
+  const auto active =
+      update_kinematic_inactivity_gate(0.19, 0.03, 5, 4);
+  EXPECT_EQ(active.streak, 0U);
+  EXPECT_FALSE(active.rejected);
+  const auto disabled =
+      update_kinematic_inactivity_gate(0.0, 0.0, 5, 99);
+  EXPECT_EQ(disabled.streak, 0U);
+  EXPECT_FALSE(disabled.rejected);
 }
 
 } // namespace
