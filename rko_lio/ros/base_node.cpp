@@ -256,6 +256,8 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["intensity_max_shift_m"] = nlohmann_json_t.intensity_max_shift_m;
   nlohmann_json_j["intensity_min_correlation"] = nlohmann_json_t.intensity_min_correlation;
   nlohmann_json_j["intensity_min_peak_margin"] = nlohmann_json_t.intensity_min_peak_margin;
+  nlohmann_json_j["intensity_peak_exclusion_radius_bins"] =
+      nlohmann_json_t.intensity_peak_exclusion_radius_bins;
   nlohmann_json_j["intensity_min_filled_bins"] = nlohmann_json_t.intensity_min_filled_bins;
   nlohmann_json_j["intensity_disagreement_gate"] = nlohmann_json_t.intensity_disagreement_gate;
   nlohmann_json_j["intensity_disagreement_min_mps"] = nlohmann_json_t.intensity_disagreement_min_mps;
@@ -406,6 +408,8 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
   nlohmann_json_j.at("intensity_max_shift_m").get_to(nlohmann_json_t.intensity_max_shift_m);
   nlohmann_json_j.at("intensity_min_correlation").get_to(nlohmann_json_t.intensity_min_correlation);
   nlohmann_json_j.at("intensity_min_peak_margin").get_to(nlohmann_json_t.intensity_min_peak_margin);
+  nlohmann_json_j.at("intensity_peak_exclusion_radius_bins")
+      .get_to(nlohmann_json_t.intensity_peak_exclusion_radius_bins);
   nlohmann_json_j.at("intensity_min_filled_bins").get_to(nlohmann_json_t.intensity_min_filled_bins);
   nlohmann_json_j.at("intensity_disagreement_gate").get_to(nlohmann_json_t.intensity_disagreement_gate);
   nlohmann_json_j.at("intensity_disagreement_min_mps").get_to(nlohmann_json_t.intensity_disagreement_min_mps);
@@ -729,6 +733,13 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("intensity_min_correlation", lio_config.intensity_min_correlation);
   lio_config.intensity_min_peak_margin =
       node->declare_parameter<double>("intensity_min_peak_margin", lio_config.intensity_min_peak_margin);
+  const auto intensity_peak_exclusion_radius_bins = node->declare_parameter<int>(
+      "intensity_peak_exclusion_radius_bins",
+      static_cast<int>(lio_config.intensity_peak_exclusion_radius_bins));
+  lio_config.intensity_peak_exclusion_radius_bins = static_cast<size_t>(
+      intensity_peak_exclusion_radius_bins > 0
+          ? intensity_peak_exclusion_radius_bins
+          : 0);
   const auto intensity_min_filled_bins = node->declare_parameter<int>(
       "intensity_min_filled_bins", static_cast<int>(lio_config.intensity_min_filled_bins));
   lio_config.intensity_min_filled_bins =

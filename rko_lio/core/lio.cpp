@@ -903,6 +903,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       profile_config.max_shift_m = config.intensity_max_shift_m;
       profile_config.min_correlation = config.intensity_min_correlation;
       profile_config.min_peak_margin = config.intensity_min_peak_margin;
+      profile_config.peak_exclusion_radius_bins =
+          config.intensity_peak_exclusion_radius_bins;
       profile_config.min_filled_bins = config.intensity_min_filled_bins;
       // Built at the initial guess (not yet ICP-corrected), against the same origin/axis as
       // the stored reference: the correlation peak then directly measures the translation-
@@ -1157,6 +1159,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         profile_config.max_shift_m = config.intensity_max_shift_m;
         profile_config.min_correlation = config.intensity_min_correlation;
         profile_config.min_peak_margin = config.intensity_min_peak_margin;
+        profile_config.peak_exclusion_radius_bins =
+            config.intensity_peak_exclusion_radius_bins;
         profile_config.min_filled_bins = config.intensity_min_filled_bins;
         // Step 2/3: correlate against the previous scan's stored profile, along *that* stored
         // profile's own axis/origin (not this scan's freshly chosen motion_axis) -- the shift
@@ -1579,6 +1583,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       profile_config.max_shift_m = config.intensity_max_shift_m;
       profile_config.min_correlation = config.intensity_min_correlation;
       profile_config.min_peak_margin = config.intensity_min_peak_margin;
+      profile_config.peak_exclusion_radius_bins =
+          config.intensity_peak_exclusion_radius_bins;
       profile_config.min_filled_bins = config.intensity_min_filled_bins;
       const Eigen::Vector3d origin = centroid_of(world_points);
       const Eigen::Vector3d axis = persistent_direction.axis.head<3>().normalized();

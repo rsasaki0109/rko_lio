@@ -5,6 +5,7 @@
  */
 
 #include <rko_lio/core/intensity_profile.hpp>
+#include <rko_lio/core/correlation_peak_selector.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -101,4 +102,50 @@ TEST_CASE("zero peak margin preserves legacy acceptance", "[intensity_profile]")
 
   REQUIRE(result.valid);
   REQUIRE_FALSE(result.ambiguous);
+}
+
+TEST_CASE("generic peak selector exposes rejection reason", "[correlation_peak_selector]") {
+  const std::vector<rko_lio::core::CorrelationPeakCandidate> candidates = {
+      {-2, 0.92, 50},
+      {-1, 0.95, 50},
+      {0, 0.96, 50},
+      {1, 0.94, 50},
+      {2, 0.93, 50},
+  };
+  rko_lio::core::CorrelationPeakPolicy policy;
+  policy.minimum_score = 0.6;
+  policy.minimum_support = 40;
+  policy.secondary_exclusion_radius = 1;
+  policy.minimum_peak_margin = 0.05;
+
+  const auto selection =
+      rko_lio::core::select_correlation_peak(candidates, policy);
+
+  REQUIRE_FALSE(selection.accepted);
+  REQUIRE(selection.second_best.has_value());
+  REQUIRE(selection.rejection ==
+          rko_lio::core::CorrelationPeakRejection::ambiguous);
+}
+
+TEST_CASE("generic peak selector exclusion radius is policy controlled",
+          "[correlation_peak_selector]") {
+  const std::vector<rko_lio::core::CorrelationPeakCandidate> candidates = {
+      {-2, 0.70, 50},
+      {-1, 0.94, 50},
+      {0, 0.96, 50},
+      {1, 0.93, 50},
+      {2, 0.60, 50},
+  };
+  rko_lio::core::CorrelationPeakPolicy policy;
+  policy.minimum_score = 0.6;
+  policy.minimum_support = 40;
+  policy.minimum_peak_margin = 0.05;
+
+  policy.secondary_exclusion_radius = 0;
+  REQUIRE_FALSE(
+      rko_lio::core::select_correlation_peak(candidates, policy).accepted);
+
+  policy.secondary_exclusion_radius = 1;
+  REQUIRE(
+      rko_lio::core::select_correlation_peak(candidates, policy).accepted);
 }

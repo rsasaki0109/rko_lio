@@ -31,6 +31,8 @@
 
 #pragma once
 
+#include "correlation_peak_selector.hpp"
+
 #include <Eigen/Core>
 
 #include <algorithm>
@@ -47,6 +49,7 @@ struct IntensityProfileConfig {
   double max_shift_m = 1.5;
   double min_correlation = 0.6;
   double min_peak_margin = 0.0;
+  std::size_t peak_exclusion_radius_bins = 1;
   std::size_t min_filled_bins = 40;
 };
 
@@ -195,46 +198,38 @@ inline ProfileShiftResult estimate_profile_shift(const IntensityProfile& profile
     return {dot / static_cast<double>(overlap), overlap};
   };
 
-  double best_correlation = -2.0;
-  long best_shift = 0;
-  std::size_t best_overlap = 0;
-  std::vector<std::pair<double, std::size_t>> correlations;
-  correlations.reserve(static_cast<std::size_t>(2 * max_shift_bins + 1));
+  std::vector<CorrelationPeakCandidate> candidates;
+  candidates.reserve(static_cast<std::size_t>(2 * max_shift_bins + 1));
   for (long shift_bins = -max_shift_bins; shift_bins <= max_shift_bins; ++shift_bins) {
     const auto& [correlation, overlap] = correlation_at(shift_bins);
-    correlations.emplace_back(correlation, overlap);
-    if (correlation > best_correlation) {
-      best_correlation = correlation;
-      best_shift = shift_bins;
-      best_overlap = overlap;
-    }
+    candidates.push_back({shift_bins, correlation, overlap});
   }
 
-  // Adjacent bins describe the width of the same correlation peak. Exclude
-  // them when looking for a competing hypothesis so normal sub-bin peaks are
-  // not mislabeled as ambiguous.
-  double second_best_correlation = -2.0;
-  for (long shift_bins = -max_shift_bins; shift_bins <= max_shift_bins; ++shift_bins) {
-    if (std::abs(shift_bins - best_shift) <= 1) {
-      continue;
-    }
-    const auto& [correlation, overlap] =
-        correlations[static_cast<std::size_t>(shift_bins + max_shift_bins)];
-    if (overlap >= config.min_filled_bins) {
-      second_best_correlation = std::max(second_best_correlation, correlation);
-    }
-  }
+  CorrelationPeakPolicy peak_policy;
+  peak_policy.minimum_score = config.min_correlation;
+  peak_policy.minimum_support = config.min_filled_bins;
+  peak_policy.secondary_exclusion_radius =
+      config.peak_exclusion_radius_bins;
+  peak_policy.minimum_peak_margin = config.min_peak_margin;
+  const CorrelationPeakSelection selection =
+      select_correlation_peak(candidates, peak_policy);
+  const long best_shift = selection.best.offset_index;
+  const double best_correlation = selection.best.score;
 
-  result.overlap_bins = best_overlap;
+  result.overlap_bins = selection.best.support;
   result.correlation = std::clamp(best_correlation, -1.0, 1.0);
-  result.second_best_correlation =
-      std::clamp(second_best_correlation, -1.0, 1.0);
-  result.peak_margin =
-      result.correlation - result.second_best_correlation;
+  result.second_best_correlation = selection.second_best.has_value()
+                                       ? std::clamp(
+                                             selection.second_best->score,
+                                             -1.0, 1.0)
+                                       : -1.0;
+  result.peak_margin = selection.second_best.has_value()
+                           ? result.correlation -
+                                 result.second_best_correlation
+                           : result.correlation + 1.0;
   result.ambiguous =
-      result.peak_margin < std::max(0.0, config.min_peak_margin);
-  if (best_overlap < config.min_filled_bins ||
-      best_correlation < config.min_correlation || result.ambiguous) {
+      selection.rejection == CorrelationPeakRejection::ambiguous;
+  if (!selection.accepted) {
     return result;
   }
 

@@ -36,6 +36,7 @@ compat_target_sources(
   FILE_SET
   HEADERS
   FILES ../../rko_lio/core/lio.hpp
+        ../../rko_lio/core/correlation_peak_selector.hpp
         ../../rko_lio/core/direct_visual_odometry.hpp
         ../../rko_lio/core/degeneracy_aware_solve.hpp
         ../../rko_lio/core/intensity_profile.hpp

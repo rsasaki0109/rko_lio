@@ -422,6 +422,10 @@ public:
      *  non-adjacent shift. Zero preserves the historic best-peak-only gate. */
     double intensity_min_peak_margin = 0.0;
 
+    /** Discrete bins around the best shift treated as the same peak when
+     *  searching for a competing correlation hypothesis. */
+    size_t intensity_peak_exclusion_radius_bins = 1;
+
     /** Minimum populated profile bins required for both scans in a correlation attempt. */
     size_t intensity_min_filled_bins = 40;
 
