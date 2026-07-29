@@ -7,6 +7,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <optional>
@@ -24,6 +25,8 @@ struct CorrelationPeakCandidate {
   long offset_index = 0;
   double score = -1.0;
   std::size_t support = 0;
+  std::array<long, 3> offset_coordinates{};
+  std::size_t offset_dimensions = 0;
 };
 
 struct CorrelationPeakPolicy {
@@ -50,6 +53,29 @@ struct CorrelationPeakSelection {
       CorrelationPeakRejection::no_candidates;
 };
 
+inline bool correlation_peak_offsets_are_neighbours(
+    const CorrelationPeakCandidate& lhs,
+    const CorrelationPeakCandidate& rhs,
+    const std::size_t radius) {
+  if (lhs.offset_dimensions == 0 || rhs.offset_dimensions == 0) {
+    return std::abs(lhs.offset_index - rhs.offset_index) <=
+           static_cast<long>(radius);
+  }
+  if (lhs.offset_dimensions != rhs.offset_dimensions ||
+      lhs.offset_dimensions > lhs.offset_coordinates.size()) {
+    return false;
+  }
+  for (std::size_t dimension = 0; dimension < lhs.offset_dimensions;
+       ++dimension) {
+    if (std::abs(lhs.offset_coordinates[dimension] -
+                 rhs.offset_coordinates[dimension]) >
+        static_cast<long>(radius)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /** Select the best supported correlation hypothesis and reject aliases.
  *
  * Immediate neighbours of the best discrete offset describe the width of the
@@ -70,8 +96,10 @@ inline CorrelationPeakSelection select_correlation_peak(
       [](const auto& lhs, const auto& rhs) { return lhs.score < rhs.score; });
   for (const auto& candidate : candidates) {
     if (candidate.support < policy.minimum_support ||
-        std::abs(candidate.offset_index - result.best.offset_index) <=
-            static_cast<long>(policy.secondary_exclusion_radius)) {
+        correlation_peak_offsets_are_neighbours(
+            candidate,
+            result.best,
+            policy.secondary_exclusion_radius)) {
       continue;
     }
     if (!result.second_best.has_value() ||

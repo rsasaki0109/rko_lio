@@ -193,3 +193,25 @@ TEST_CASE("generic peak selector exclusion radius is policy controlled",
   REQUIRE(
       rko_lio::core::select_correlation_peak(candidates, policy).accepted);
 }
+
+TEST_CASE("generic peak selector excludes multidimensional neighbours",
+          "[correlation_peak_selector]") {
+  const std::vector<rko_lio::core::CorrelationPeakCandidate> candidates = {
+      {0, 0.96, 50, {0, 0, 0}, 2},
+      {1, 0.95, 50, {1, 1, 0}, 2},
+      {2, 0.93, 50, {2, 0, 0}, 2},
+  };
+  rko_lio::core::CorrelationPeakPolicy policy;
+  policy.minimum_score = 0.6;
+  policy.minimum_support = 40;
+  policy.secondary_exclusion_radius = 1;
+  policy.minimum_peak_margin = 0.05;
+
+  const auto selection =
+      rko_lio::core::select_correlation_peak(candidates, policy);
+
+  REQUIRE(selection.second_best.has_value());
+  REQUIRE(selection.second_best->offset_coordinates[0] == 2);
+  REQUIRE(selection.rejection ==
+          rko_lio::core::CorrelationPeakRejection::ambiguous);
+}
