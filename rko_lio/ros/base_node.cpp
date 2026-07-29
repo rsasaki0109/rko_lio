@@ -1729,7 +1729,8 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
                 "applied_correction_longitudinal_m,"
                 "applied_correction_lateral_m,applied_correction_m,"
                 "disagreement_streak,disagreement_measured,"
-                "correction_applied\n";
+                "correction_applied,intensity_channel_correlation,"
+                "height_channel_correlation\n";
         for (const auto& diagnostic : lio->intensity_peak_diagnostics) {
           file << std::fixed << std::setprecision(9)
                << core::to_seconds(diagnostic.time) << ","
@@ -1763,7 +1764,9 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
                << diagnostic.applied_correction_m << ","
                << diagnostic.disagreement_streak << ","
                << (diagnostic.disagreement_measured ? 1 : 0) << ","
-               << (diagnostic.correction_applied ? 1 : 0) << "\n";
+               << (diagnostic.correction_applied ? 1 : 0) << ","
+               << diagnostic.intensity_channel_correlation << ","
+               << diagnostic.height_channel_correlation << "\n";
         }
         std::cout << "Intensity peak diagnostics written to " << peak_file
                   << "\n";

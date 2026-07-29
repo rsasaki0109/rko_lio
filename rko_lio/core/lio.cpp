@@ -1247,6 +1247,12 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                shift.has_competing_peak,
                shift.ambiguous,
                shift.valid});
+          intensity_peak_diagnostics.back()
+              .intensity_channel_correlation =
+              shift.intensity_correlation;
+          intensity_peak_diagnostics.back()
+              .height_channel_correlation =
+              shift.height_correlation;
           if (base_qualified) {
             ++intensity_peak_margin_sample_count;
             intensity_peak_margin_sum += shift.peak_margin;

@@ -102,6 +102,8 @@ struct IntensityPeakDiagnostic {
   std::size_t disagreement_streak = 0;
   bool disagreement_measured = false;
   bool correction_applied = false;
+  double intensity_channel_correlation = -2.0;
+  double height_channel_correlation = -2.0;
 };
 
 struct VisualObservabilityDiagnosticsSample {

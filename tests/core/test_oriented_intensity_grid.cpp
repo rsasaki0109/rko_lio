@@ -92,6 +92,15 @@ TEST_CASE("oriented intensity grid recovers a two-dimensional translation",
   REQUIRE(std::abs(result.longitudinal_shift_m + 1.0) < 0.2);
   REQUIRE(std::abs(result.lateral_shift_m - 1.0) < 0.2);
   REQUIRE(result.correlation > 0.95);
+  REQUIRE(result.intensity_correlation > 0.95);
+  REQUIRE(result.height_correlation > 0.95);
+  REQUIRE(
+      std::abs(
+          result.correlation -
+          (config.intensity_weight * result.intensity_correlation +
+           config.height_weight * result.height_correlation) /
+              (config.intensity_weight + config.height_weight)) <
+      1.0e-12);
   REQUIRE(result.overlap_cells >= config.min_filled_cells);
 }
 

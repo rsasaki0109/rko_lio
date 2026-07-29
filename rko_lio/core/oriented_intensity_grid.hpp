@@ -62,6 +62,19 @@ struct OrientedGridShiftResult {
   std::size_t overlap_cells = 0;
   bool has_competing_peak = false;
   bool ambiguous = false;
+  /** Channel scores at the selected integer-bin peak. The combined score is
+   *  used for peak selection and sub-bin refinement. Keeping the raw channel
+   *  scores makes physical-scene confidence policies possible without
+   *  coupling them to the matcher. */
+  double intensity_correlation = -2.0;
+  double height_correlation = -2.0;
+};
+
+struct OrientedGridCorrelationScore {
+  double combined = -2.0;
+  double intensity = -2.0;
+  double height = -2.0;
+  std::size_t support = 0;
 };
 
 inline OrientedIntensityGrid build_oriented_intensity_grid(
@@ -172,7 +185,7 @@ inline OrientedGridShiftResult estimate_oriented_grid_shift(
 
   auto correlation_at =
       [&](const long longitudinal_shift,
-          const long lateral_shift) -> std::pair<double, std::size_t> {
+          const long lateral_shift) -> OrientedGridCorrelationScore {
     PearsonCorrelationAccumulator intensity_correlation;
     PearsonCorrelationAccumulator height_correlation;
     for (long longitudinal = 0; longitudinal < longitudinal_bins;
@@ -219,10 +232,13 @@ inline OrientedGridShiftResult estimate_oriented_grid_shift(
       weighted_score += config.height_weight * *height_score;
       active_weight += config.height_weight;
     }
-    return {
-        active_weight > 0.0 ? weighted_score / active_weight : -2.0,
-        intensity_correlation.support(),
-    };
+    OrientedGridCorrelationScore score;
+    score.combined =
+        active_weight > 0.0 ? weighted_score / active_weight : -2.0;
+    score.intensity = intensity_score.value_or(-2.0);
+    score.height = height_score.value_or(-2.0);
+    score.support = intensity_correlation.support();
+    return score;
   };
 
   std::vector<CorrelationPeakCandidate> candidates;
@@ -239,12 +255,12 @@ inline OrientedGridShiftResult estimate_oriented_grid_shift(
     for (long lateral_shift = -max_lateral_shift_bins;
          lateral_shift <= max_lateral_shift_bins;
          ++lateral_shift) {
-      const auto [score, support] =
+      const OrientedGridCorrelationScore score =
           correlation_at(longitudinal_shift, lateral_shift);
       candidates.push_back({
           candidate_index++,
-          score,
-          support,
+          score.combined,
+          score.support,
           {longitudinal_shift, lateral_shift, 0},
           2,
       });
@@ -269,21 +285,25 @@ inline OrientedGridShiftResult estimate_oriented_grid_shift(
   result.peak_margin = selection.peak_margin;
   result.ambiguous =
       selection.rejection == CorrelationPeakRejection::ambiguous;
+  const long best_longitudinal =
+      selection.best.offset_coordinates[0];
+  const long best_lateral = selection.best.offset_coordinates[1];
+  const OrientedGridCorrelationScore best_channel_scores =
+      correlation_at(best_longitudinal, best_lateral);
+  result.intensity_correlation = best_channel_scores.intensity;
+  result.height_correlation = best_channel_scores.height;
   if (!selection.accepted) {
     return result;
   }
 
-  const long best_longitudinal =
-      selection.best.offset_coordinates[0];
-  const long best_lateral = selection.best.offset_coordinates[1];
   auto refined_offset =
       [&](const long center,
           const long orthogonal,
           const bool refine_longitudinal) {
     const auto score_at = [&](const long offset) {
       return refine_longitudinal
-                 ? correlation_at(offset, orthogonal).first
-                 : correlation_at(orthogonal, offset).first;
+                 ? correlation_at(offset, orthogonal).combined
+                 : correlation_at(orthogonal, offset).combined;
     };
     const double previous = score_at(center - 1);
     const double current = score_at(center);
