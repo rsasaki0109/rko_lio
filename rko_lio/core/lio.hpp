@@ -35,6 +35,7 @@
 #include "util.hpp"
 #include <array>
 #include <deque>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -417,6 +418,10 @@ public:
     /** Minimum peak normalized cross-correlation required to trust a measured shift. */
     double intensity_min_correlation = 0.6;
 
+    /** Minimum correlation margin between the best shift and the strongest
+     *  non-adjacent shift. Zero preserves the historic best-peak-only gate. */
+    double intensity_min_peak_margin = 0.0;
+
     /** Minimum populated profile bins required for both scans in a correlation attempt. */
     size_t intensity_min_filled_bins = 40;
 
@@ -634,6 +639,10 @@ public:
    */
   std::size_t intensity_disagreement_attempt_count = 0;
   std::size_t intensity_disagreement_valid_shift_count = 0;
+  std::size_t intensity_ambiguous_shift_count = 0;
+  std::size_t intensity_peak_margin_sample_count = 0;
+  double intensity_peak_margin_sum = 0.0;
+  double intensity_peak_margin_min = std::numeric_limits<double>::infinity();
   std::size_t intensity_disagreement_exceeded_threshold_count = 0;
 
   /** Localizability-weighting diagnostics (localizability_weighting).

@@ -255,6 +255,7 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["intensity_profile_half_length_m"] = nlohmann_json_t.intensity_profile_half_length_m;
   nlohmann_json_j["intensity_max_shift_m"] = nlohmann_json_t.intensity_max_shift_m;
   nlohmann_json_j["intensity_min_correlation"] = nlohmann_json_t.intensity_min_correlation;
+  nlohmann_json_j["intensity_min_peak_margin"] = nlohmann_json_t.intensity_min_peak_margin;
   nlohmann_json_j["intensity_min_filled_bins"] = nlohmann_json_t.intensity_min_filled_bins;
   nlohmann_json_j["intensity_disagreement_gate"] = nlohmann_json_t.intensity_disagreement_gate;
   nlohmann_json_j["intensity_disagreement_min_mps"] = nlohmann_json_t.intensity_disagreement_min_mps;
@@ -404,6 +405,7 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
   nlohmann_json_j.at("intensity_profile_half_length_m").get_to(nlohmann_json_t.intensity_profile_half_length_m);
   nlohmann_json_j.at("intensity_max_shift_m").get_to(nlohmann_json_t.intensity_max_shift_m);
   nlohmann_json_j.at("intensity_min_correlation").get_to(nlohmann_json_t.intensity_min_correlation);
+  nlohmann_json_j.at("intensity_min_peak_margin").get_to(nlohmann_json_t.intensity_min_peak_margin);
   nlohmann_json_j.at("intensity_min_filled_bins").get_to(nlohmann_json_t.intensity_min_filled_bins);
   nlohmann_json_j.at("intensity_disagreement_gate").get_to(nlohmann_json_t.intensity_disagreement_gate);
   nlohmann_json_j.at("intensity_disagreement_min_mps").get_to(nlohmann_json_t.intensity_disagreement_min_mps);
@@ -725,6 +727,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("intensity_max_shift_m", lio_config.intensity_max_shift_m);
   lio_config.intensity_min_correlation =
       node->declare_parameter<double>("intensity_min_correlation", lio_config.intensity_min_correlation);
+  lio_config.intensity_min_peak_margin =
+      node->declare_parameter<double>("intensity_min_peak_margin", lio_config.intensity_min_peak_margin);
   const auto intensity_min_filled_bins = node->declare_parameter<int>(
       "intensity_min_filled_bins", static_cast<int>(lio_config.intensity_min_filled_bins));
   lio_config.intensity_min_filled_bins =
@@ -1657,6 +1661,17 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
         intensity_summary["disagreement_corrected_scan_count"] = lio->intensity_disagreement_corrected_scan_count;
         intensity_summary["disagreement_attempt_count"] = lio->intensity_disagreement_attempt_count;
         intensity_summary["disagreement_valid_shift_count"] = lio->intensity_disagreement_valid_shift_count;
+        intensity_summary["ambiguous_shift_count"] = lio->intensity_ambiguous_shift_count;
+        intensity_summary["peak_margin_sample_count"] = lio->intensity_peak_margin_sample_count;
+        intensity_summary["peak_margin_mean"] =
+            lio->intensity_peak_margin_sample_count > 0
+                ? lio->intensity_peak_margin_sum /
+                      static_cast<double>(lio->intensity_peak_margin_sample_count)
+                : 0.0;
+        intensity_summary["peak_margin_min"] =
+            lio->intensity_peak_margin_sample_count > 0
+                ? lio->intensity_peak_margin_min
+                : 0.0;
         intensity_summary["disagreement_exceeded_threshold_count"] =
             lio->intensity_disagreement_exceeded_threshold_count;
       }
