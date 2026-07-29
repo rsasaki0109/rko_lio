@@ -104,9 +104,13 @@ TEST_CASE("zero peak margin preserves legacy acceptance", "[intensity_profile]")
   REQUIRE_FALSE(result.ambiguous);
 }
 
-TEST_CASE("intensity profile preserves the raw scores used by peak policy",
+TEST_CASE("intensity profile reports bounded overlap-local correlation",
           "[intensity_profile]") {
-  const auto profile = make_profile(std::vector<double>(41, 2.0));
+  std::vector<double> texture(41);
+  for (std::size_t i = 0; i < texture.size(); ++i) {
+    texture[i] = 4.0 * std::sin(0.31 * static_cast<double>(i)) + 2.0;
+  }
+  const auto profile = make_profile(texture);
   rko_lio::core::IntensityProfileConfig config;
   config.bin_size_m = 0.25;
   config.max_shift_m = 1.5;
@@ -119,9 +123,29 @@ TEST_CASE("intensity profile preserves the raw scores used by peak policy",
 
   REQUIRE(result.valid);
   REQUIRE(result.has_competing_peak);
-  REQUIRE(result.correlation == 4.0);
-  REQUIRE(result.second_best_correlation == 4.0);
-  REQUIRE(result.peak_margin == 0.0);
+  REQUIRE(result.correlation <= 1.0);
+  REQUIRE(result.correlation >= -1.0);
+  REQUIRE(result.second_best_correlation <= 1.0);
+  REQUIRE(result.second_best_correlation >= -1.0);
+  REQUIRE(result.peak_margin ==
+          result.correlation - result.second_best_correlation);
+}
+
+TEST_CASE("overlap-local correlation rejects zero-variance texture",
+          "[intensity_profile]") {
+  const auto profile = make_profile(std::vector<double>(41, 2.0));
+  rko_lio::core::IntensityProfileConfig config;
+  config.bin_size_m = 0.25;
+  config.max_shift_m = 1.5;
+  config.min_correlation = 0.5;
+  config.min_filled_bins = 20;
+
+  const auto result =
+      rko_lio::core::estimate_profile_shift(profile, profile, config);
+
+  REQUIRE_FALSE(result.valid);
+  REQUIRE(result.correlation == -2.0);
+  REQUIRE_FALSE(result.ambiguous);
 }
 
 TEST_CASE("generic peak selector exposes rejection reason", "[correlation_peak_selector]") {

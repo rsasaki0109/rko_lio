@@ -180,7 +180,11 @@ inline ProfileShiftResult estimate_profile_shift(const IntensityProfile& profile
       std::max<long>(1, static_cast<long>(std::round(config.max_shift_m / config.bin_size_m)));
 
   auto correlation_at = [&](const long shift_bins) -> std::pair<double, std::size_t> {
-    double dot = 0.0;
+    double sum_a = 0.0;
+    double sum_b = 0.0;
+    double sum_aa = 0.0;
+    double sum_bb = 0.0;
+    double sum_ab = 0.0;
     std::size_t overlap = 0;
     for (long i = 0; i < num_bins; ++i) {
       const long j = i - shift_bins;
@@ -190,13 +194,32 @@ inline ProfileShiftResult estimate_profile_shift(const IntensityProfile& profile
       if (!profile_a.filled[static_cast<std::size_t>(i)] || !profile_b.filled[static_cast<std::size_t>(j)]) {
         continue;
       }
-      dot += profile_a.values[static_cast<std::size_t>(i)] * profile_b.values[static_cast<std::size_t>(j)];
+      const double value_a = profile_a.values[static_cast<std::size_t>(i)];
+      const double value_b = profile_b.values[static_cast<std::size_t>(j)];
+      sum_a += value_a;
+      sum_b += value_b;
+      sum_aa += value_a * value_a;
+      sum_bb += value_b * value_b;
+      sum_ab += value_a * value_b;
       ++overlap;
     }
-    if (overlap == 0) {
+    if (overlap < 2) {
       return {-2.0, 0};
     }
-    return {dot / static_cast<double>(overlap), overlap};
+    const double count = static_cast<double>(overlap);
+    const double covariance = sum_ab - sum_a * sum_b / count;
+    const double variance_a = sum_aa - sum_a * sum_a / count;
+    const double variance_b = sum_bb - sum_b * sum_b / count;
+    const double denominator =
+        std::sqrt(std::max(0.0, variance_a) *
+                  std::max(0.0, variance_b));
+    if (denominator <= 1.0e-12) {
+      return {-2.0, overlap};
+    }
+    return {
+        std::clamp(covariance / denominator, -1.0, 1.0),
+        overlap,
+    };
   };
 
   std::vector<CorrelationPeakCandidate> candidates;
@@ -218,10 +241,8 @@ inline ProfileShiftResult estimate_profile_shift(const IntensityProfile& profile
   const double best_correlation = selection.best.score;
 
   result.overlap_bins = selection.best.support;
-  // Preserve the exact scores consumed by the generic policy. These profile
-  // scores are averages of globally standardized bins over a partial overlap,
-  // so they are not guaranteed to remain inside [-1, 1]. Clamping here would
-  // make exported evidence disagree with the actual ambiguity decision.
+  // Preserve the exact scores consumed by the generic policy so exported
+  // evidence always agrees with the actual ambiguity decision.
   result.correlation = best_correlation;
   result.has_competing_peak = selection.second_best.has_value();
   result.second_best_correlation = selection.second_best.has_value()
