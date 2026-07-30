@@ -253,6 +253,13 @@ These take effect only in the corresponding mode and otherwise warn that they ar
 
   Threaded path only. Caps the lidar buffer; older frames are dropped past this.
 
+- **async.output_publish_delay_ms** (`int`, default ``0``)
+
+  Threaded path only. Sleeps for this many milliseconds after publishing each
+  successfully registered LiDAR frame. Keep the default for live sensing. A
+  positive value provides bounded backpressure when an offline producer would
+  otherwise outrun a synchronous downstream consumer such as a graph backend.
+
 - **seq.odom_at_imu_rate_topic** (default ``rko_lio/odom_at_imu_rate``)
 
   IMU-rate output topic name.

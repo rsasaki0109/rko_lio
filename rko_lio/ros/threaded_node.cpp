@@ -38,6 +38,11 @@ namespace rko_lio::ros {
 ThreadedNode::ThreadedNode(const std::string& node_name, const rclcpp::NodeOptions& options) : BaseNode(node_name, options) {
   max_lidar_buffer_size = static_cast<size_t>(node->declare_parameter<int>(
       "async.max_lidar_buffer_size", static_cast<int>(max_lidar_buffer_size)));
+  const int output_publish_delay_ms = node->declare_parameter<int>("async.output_publish_delay_ms", 0);
+  if (output_publish_delay_ms < 0) {
+    throw std::invalid_argument("async.output_publish_delay_ms must be non-negative");
+  }
+  output_publish_delay = std::chrono::milliseconds(output_publish_delay_ms);
   registration_thread = std::jthread([this]() { registration_loop(); });
 }
 
@@ -109,6 +114,7 @@ void ThreadedNode::registration_loop() {
         !imu_buffer.empty() && !lidar_buffer.empty() && imu_buffer.back().time > lidar_buffer.front().timestamps.max;
     buffer_lock.unlock(); // we dont touch the buffers anymore
 
+    bool published_outputs = false;
     try {
       // Fork additions: prepare any pending visual/radar priors for this scan before
       // register_scan consumes them (one-shot; see LIO::register_scan). Default-off unless
@@ -125,6 +131,7 @@ void ThreadedNode::registration_loop() {
         // TODO: first frame is skipped and an empty frame is returned. improve how we handle this
         publish_lidar_outputs(deskewed_frame);
         publish_tf(lio->lidar_state);
+        published_outputs = true;
         if (direct_visual_frame.has_value()) {
           commit_direct_visual_keyframe(std::move(*direct_visual_frame), end_stamp, deskewed_frame);
         }
@@ -133,6 +140,12 @@ void ThreadedNode::registration_loop() {
       // Catch both std::invalid_argument (Keypoints=0 / Δt) and std::runtime_error (Number of
       // correspondences=0). Both are recoverable on kidnap-style bags (fork addition).
       RCLCPP_ERROR_STREAM(node->get_logger(), "Encountered error, dropping frame. Error: " << ex.what());
+    }
+    // Offline frontends can otherwise publish much faster than a synchronous
+    // graph backend can consume loop-search inputs. The default remains zero
+    // for online operation; dataset profiles may opt into bounded pacing.
+    if (published_outputs && output_publish_delay.count() > 0) {
+      std::this_thread::sleep_for(output_publish_delay);
     }
     registration_busy = false;
   }
