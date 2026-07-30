@@ -31,6 +31,7 @@
 
 using rko_lio::core::point_to_voxel;
 using rko_lio::core::voxel_down_sample;
+using rko_lio::core::voxel_down_sample_legacy;
 using rko_lio::core::voxel_down_sample_sorted;
 
 namespace {
@@ -87,6 +88,22 @@ TEST_CASE("voxel_down_sample: doubling voxel size collapses points", "[voxel_dow
   const auto large = voxel_down_sample(points, 1.0);
   REQUIRE(small.size() == 2);
   REQUIRE(large.size() == 1);
+}
+
+TEST_CASE("voxel_down_sample_legacy: keeps the first representative per voxel", "[voxel_down_sample]") {
+  const double voxel_size = 1.0;
+  const std::vector<Eigen::Vector3d> points{{0.1, 0.1, 0.1}, {0.9, 0.9, 0.9}, {1.1, 0.1, 0.1}};
+  const auto result = voxel_down_sample_legacy(points, voxel_size);
+  const auto contains = [&](const Eigen::Vector3d& expected) {
+    return std::any_of(result.begin(), result.end(), [&](const Eigen::Vector3d& actual) {
+      return actual.isApprox(expected);
+    });
+  };
+
+  REQUIRE(result.size() == 2);
+  REQUIRE(contains(points[0]));
+  REQUIRE_FALSE(contains(points[1]));
+  REQUIRE(contains(points[2]));
 }
 
 TEST_CASE("voxel_down_sample_sorted: empty input -> empty output", "[voxel_down_sample_sorted]") {

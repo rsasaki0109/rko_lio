@@ -34,6 +34,9 @@ convergence_criterion: 0.00001
 max_num_threads: 0
 initialization_phase: false
 double_downsample: true
+# Compatibility mode for trajectories calibrated before the input-order voxel
+# sampler. Keep false unless a dataset-specific profile has measured it.
+legacy_voxel_downsample: false
 max_expected_jerk: 3.0
 min_beta: 200.0
 # Lidar per-point timestamp processing - set when the heuristic fails.

@@ -30,6 +30,12 @@ namespace rko_lio::core {
 // single cycle voxel downsample, see https://github.com/PRBonn/kiss-icp/pull/347
 std::vector<Eigen::Vector3d> voxel_down_sample(const std::vector<Eigen::Vector3d>& frame, const double voxel_size);
 
+// Compatibility implementation used by trajectories calibrated before the
+// input-order-preserving sampler was introduced. It keeps the first point in
+// each voxel and emits representatives in std::unordered_map iteration order.
+std::vector<Eigen::Vector3d> voxel_down_sample_legacy(const std::vector<Eigen::Vector3d>& frame,
+                                                      const double voxel_size);
+
 // like voxel_down_sample but output sorted by hash(voxel). used when the output feeds another downsample pass.
 // the spatial hash scatters adjacent voxels far apart, so the next pass's first-write-wins per voxel sees a
 // diverse pick of points instead of one biased by the lidar sweep order, essentially breaking that regular pattern.

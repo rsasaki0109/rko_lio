@@ -153,6 +153,9 @@ public:
     /** Enable double downsampling. */
     bool double_downsample = true;
 
+    /** Preserve the pre-v0.3 unordered-map voxel representative order. */
+    bool legacy_voxel_downsample = false;
+
     /** Voxel-size multiplier used only for ICP keypoints in double-downsample mode. */
     double icp_keypoint_voxel_multiplier = 1.5;
 

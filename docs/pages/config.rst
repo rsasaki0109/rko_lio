@@ -38,6 +38,16 @@ These show up under the top level of a Python config and as ROS launch arguments
   Disabling this for sparse sensors, like a VLP-16 compared to an Ouster-128, can potentially improve results.
   Indoor scenes can also see an improvement by disabling this.
 
+- **legacy_voxel_downsample** (`bool`, default ``False``)
+
+  Emits voxel representatives in the unordered-map iteration order used before
+  the input-order-preserving sampler was introduced.
+
+  Point selection is unchanged, but ordering can change floating-point ICP
+  reductions and therefore the accumulated trajectory. Keep the modern default
+  unless a dataset-specific profile has measured a regression and records the
+  compatibility setting in its benchmark provenance.
+
 - **voxel_size** (`float`, default ``1.0``)
 
   The voxel resolution of the internal local map (in meters).

@@ -21,11 +21,13 @@
 // SOFTWARE.
 
 #include "rko_lio/core/preprocess_scan.hpp"
+#include "rko_lio/core/voxel_down_sample.hpp"
 #include <catch2/catch_test_macros.hpp>
 
 using rko_lio::core::LIO;
 using rko_lio::core::preprocess_scan;
 using rko_lio::core::Vector3dVector;
+using rko_lio::core::voxel_down_sample_legacy;
 
 namespace {
 LIO::Config default_config() {
@@ -81,6 +83,22 @@ TEST_CASE("preprocess_scan: double_downsample = false -> no map_frame", "[prepro
   REQUIRE(result.filtered_frame.size() == frame.size());
 }
 
+TEST_CASE("preprocess_scan: legacy voxel mode preserves compatibility order", "[preprocess_scan]") {
+  LIO::Config cfg = default_config();
+  cfg.double_downsample = false;
+  cfg.legacy_voxel_downsample = true;
+
+  const Vector3dVector frame{
+      {2.1, 0.1, 0.1}, {-3.1, 1.1, 0.1}, {4.1, -2.1, 1.1}, {2.2, 0.2, 0.2}};
+  const auto expected = voxel_down_sample_legacy(frame, cfg.voxel_size);
+  const auto result = preprocess_scan(frame, cfg);
+
+  REQUIRE(result.keypoints.size() == expected.size());
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    REQUIRE(result.keypoints[i].isApprox(expected[i]));
+  }
+}
+
 TEST_CASE("preprocess_scan: double_downsample = true -> all three populated", "[preprocess_scan]") {
   LIO::Config cfg = default_config();
   cfg.double_downsample = true;
@@ -97,4 +115,3 @@ TEST_CASE("preprocess_scan: double_downsample = true -> all three populated", "[
   REQUIRE(result.map_frame.size() >= result.keypoints.size());
   REQUIRE(result.filtered_frame.size() == frame.size());
 }
-

@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <functional>
 #include <tsl/robin_set.h>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -42,6 +43,23 @@ std::vector<Eigen::Vector3d> voxel_down_sample(const std::vector<Eigen::Vector3d
     if (seen.insert(point_to_voxel(point, inv_voxel_size)).second) {
       frame_downsampled.emplace_back(point);
     }
+  }
+  return frame_downsampled;
+}
+
+std::vector<Eigen::Vector3d> voxel_down_sample_legacy(const std::vector<Eigen::Vector3d>& frame,
+                                                      const double voxel_size) {
+  const double inv_voxel_size = 1.0 / voxel_size;
+  std::unordered_map<Eigen::Vector3i, Eigen::Vector3d> grid;
+  grid.reserve(frame.size());
+  for (const auto& point : frame) {
+    grid.try_emplace(point_to_voxel(point, inv_voxel_size), point);
+  }
+
+  std::vector<Eigen::Vector3d> frame_downsampled;
+  frame_downsampled.reserve(grid.size());
+  for (const auto& [_, point] : grid) {
+    frame_downsampled.emplace_back(point);
   }
   return frame_downsampled;
 }

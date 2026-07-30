@@ -283,6 +283,7 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["relocalization_pose_stride"] = nlohmann_json_t.relocalization_pose_stride;
   nlohmann_json_j["relocalization_min_pose_separation"] = nlohmann_json_t.relocalization_min_pose_separation;
   nlohmann_json_j["relocalization_max_iterations"] = nlohmann_json_t.relocalization_max_iterations;
+  nlohmann_json_j["legacy_voxel_downsample"] = nlohmann_json_t.legacy_voxel_downsample;
 }
 template <typename BasicJsonType,
          nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0>
@@ -442,6 +443,8 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
   nlohmann_json_j.at("relocalization_pose_stride").get_to(nlohmann_json_t.relocalization_pose_stride);
   nlohmann_json_j.at("relocalization_min_pose_separation").get_to(nlohmann_json_t.relocalization_min_pose_separation);
   nlohmann_json_j.at("relocalization_max_iterations").get_to(nlohmann_json_t.relocalization_max_iterations);
+  nlohmann_json_t.legacy_voxel_downsample =
+      nlohmann_json_j.value("legacy_voxel_downsample", nlohmann_json_t.legacy_voxel_downsample);
 }
 } // namespace rko_lio::core
 
@@ -518,6 +521,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<bool>("initialization_phase", lio_config.initialization_phase);
   lio_config.max_expected_jerk = node->declare_parameter<double>("max_expected_jerk", lio_config.max_expected_jerk);
   lio_config.double_downsample = node->declare_parameter<bool>("double_downsample", lio_config.double_downsample);
+  lio_config.legacy_voxel_downsample =
+      node->declare_parameter<bool>("legacy_voxel_downsample", lio_config.legacy_voxel_downsample);
   lio_config.min_beta = node->declare_parameter<double>("min_beta", lio_config.min_beta);
   lio_config.icp_keypoint_voxel_multiplier =
       node->declare_parameter<double>("icp_keypoint_voxel_multiplier", lio_config.icp_keypoint_voxel_multiplier);
