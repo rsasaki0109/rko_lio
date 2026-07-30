@@ -13,7 +13,7 @@ jobs:
       IGNORED_FOLDERS: "rko_lio/python|docs|tests/python|tests/core|cmake/dependencies/catch2"
       IGNORED_FILES: "pyproject.toml|CHANGELOG.rst|LICENSE|README.md"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: check
@@ -33,18 +33,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { ros_distro: humble,  container_image: "osrf/ros:humble-desktop" }
-          - { ros_distro: jazzy,   container_image: "osrf/ros:jazzy-desktop" }
-          - { ros_distro: kilted,  container_image: "osrf/ros:kilted-desktop" }
-          - { ros_distro: rolling, container_image: "osrf/ros:rolling-desktop" }
+          - {ros_distro: humble, container_image: "ros:humble-ros-base"}
+          - {ros_distro: jazzy, container_image: "ros:jazzy-ros-base"}
+          - {ros_distro: kilted, container_image: "ros:kilted-ros-base"}
+          - {ros_distro: lyrical, container_image: "ros:lyrical-ros-base",}
+          # - { ros_distro: rolling, container_image: "ros:rolling-ros-base"}
     container:
       image: ${{ matrix.container_image }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install build tools
         run: |
           apt-get update
-          apt-get install -y build-essential cmake
+          apt-get install -y build-essential cmake git
       - name: Source ROS environment, install dependencies, and build
         run: |
           . /opt/ros/${{ matrix.ros_distro }}/setup.sh
@@ -60,18 +61,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { ros_distro: humble,  container_image: "osrf/ros:humble-desktop" }
-          - { ros_distro: jazzy,   container_image: "osrf/ros:jazzy-desktop" }
-          - { ros_distro: kilted,  container_image: "osrf/ros:kilted-desktop" }
-          - { ros_distro: rolling, container_image: "osrf/ros:rolling-desktop" }
+          - {ros_distro: humble, container_image: "ros:humble-ros-base"}
+          - {ros_distro: jazzy, container_image: "ros:jazzy-ros-base"}
+          - {ros_distro: kilted, container_image: "ros:kilted-ros-base"}
+          - {ros_distro: lyrical, container_image: "ros:lyrical-ros-base"}
+          - {ros_distro: rolling, container_image: "ros:rolling-ros-base"}
     container:
       image: ${{ matrix.container_image }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install build tools
         run: |
           apt-get update
-          apt-get install -y build-essential cmake
+          apt-get install -y build-essential cmake git
       - name: Source ROS environment and build with extra CMake args
         run: |
           . /opt/ros/${{ matrix.ros_distro }}/setup.sh
@@ -82,3 +84,19 @@ jobs:
           . /opt/ros/${{ matrix.ros_distro }}/setup.sh
           colcon test --event-handlers console_direct+ --return-code-on-test-failure
           colcon test-result --verbose
+  ros_build_result:
+    if: always()
+    needs: [check_relevant_changes, ros_build_with_rosdep, ros_build_no_rosdep]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "check_relevant_changes: ${{ needs.check_relevant_changes.result }}"
+          echo "ros_build_with_rosdep: ${{ needs.ros_build_with_rosdep.result }}"
+          echo "ros_build_no_rosdep: ${{ needs.ros_build_no_rosdep.result }}"
+          [ "${{ needs.check_relevant_changes.result }}" = success ] || exit 1
+          for result in "${{ needs.ros_build_with_rosdep.result }}" "${{ needs.ros_build_no_rosdep.result }}"; do
+            case "$result" in
+              success|skipped) ;;
+              *) exit 1 ;;
+            esac
+          done

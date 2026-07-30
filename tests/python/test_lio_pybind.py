@@ -30,11 +30,14 @@ def test_lio_init_with_config():
 
 
 @pytest.mark.parametrize(
-    ("raw_timestamps", "header_stamp", "force_absolute"),
-    [([0.0, 0.05, 0.1], 100.0, False), ([100.0, 100.05, 100.1], 100.0, True)],
+    ("raw_timestamps", "header_stamp_ns", "force_absolute"),
+    [
+        ([0.0, 0.05, 0.1], 100_000_000_000, False),
+        ([100.0, 100.05, 100.1], 100_000_000_000, True),
+    ],
 )
 def test_timestamp_offset_applies_after_absolute_time_conversion(
-    raw_timestamps, header_stamp, force_absolute
+    raw_timestamps, header_stamp_ns, force_absolute
 ):
     config = _TimestampProcessingConfig()
     config.offset_seconds = -0.1
@@ -42,9 +45,9 @@ def test_timestamp_offset_applies_after_absolute_time_conversion(
     config.force_relative = not force_absolute
 
     start, end, timestamps = _process_timestamps(
-        _VectorDouble(raw_timestamps), header_stamp, config
+        _VectorDouble(raw_timestamps), header_stamp_ns, config
     )
 
-    assert start == pytest.approx(99.9)
-    assert end == pytest.approx(100.0)
-    assert list(timestamps) == pytest.approx([99.9, 99.95, 100.0])
+    assert start == 99_900_000_000
+    assert end == 100_000_000_000
+    assert list(timestamps) == [99_900_000_000, 99_950_000_000, 100_000_000_000]

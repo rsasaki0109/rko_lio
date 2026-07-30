@@ -66,8 +66,8 @@ public:
       topics.push_back(radar_topic);
     }
     bag = std::make_unique<utils::BufferableBag>(node->declare_parameter<std::string>("bag_path"),
-                                                 std::make_shared<utils::BufferableBag::TFBridge>(node), topics,
-                                                 skip_to_time);
+                                                 std::make_shared<utils::BufferableBag::TFBridge>(*node),
+                                                 topics, skip_to_time);
     total_bag_msgs = bag->message_count();
     bag_progress_publisher = node->create_publisher<std_msgs::msg::Float32MultiArray>("rko_lio/bag_progress", 10);
   }

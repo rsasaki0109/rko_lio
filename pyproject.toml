@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "rko_lio"
-version = "0.2.0"
+version = "0.3.2"
 description = "A Robust Approach for LiDAR-Inertial Odometry Without Sensor-Specific Modelling"
 authors = [{ name = "Meher Malladi", email = "rm.meher97@gmail.com" }]
 readme = "README.md"
@@ -33,7 +33,7 @@ keywords = [
 ]
 dependencies = [
   "numpy~=2.2",
-  "typer>=0.19,<0.25",
+  "typer>=0.19,<0.27",
   "pyyaml~=6.0",
   "pyquaternion>=0.9,<0.10",
   "tqdm~=4.67"
@@ -41,8 +41,8 @@ dependencies = [
 
 [project.optional-dependencies]
 all = [
-  "open3d>=0.18,<0.20",
-  "rerun-sdk>=0.31,<0.32",
+  "plyfile>=1,<2",
+  "rerun-sdk>=0.31,<0.34",
   "rosbags>=0.10,<0.12",
 ]
 
