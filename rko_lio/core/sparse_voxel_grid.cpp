@@ -49,6 +49,16 @@ constexpr std::array<Bonxai::CoordT, 27> shifts{
 
 constexpr uint8_t inner_grid_log2_dim = 2;
 constexpr uint8_t leaf_grid_log2_dim = 3;
+
+inline double axis_bound_sq(const double frac, const double voxel_size, const int offset) {
+  if (offset == 0) {
+    return 0.0;
+  }
+  const double dist = offset > 0 ? (static_cast<double>(offset) * voxel_size - frac)
+                                  : (static_cast<double>(-offset - 1) * voxel_size + frac);
+  const double clamped = std::max(0.0, dist);
+  return clamped * clamped;
+}
 } // namespace
 
 namespace rko_lio::core {
@@ -59,8 +69,7 @@ SparseVoxelGrid::SparseVoxelGrid(const double voxel_size,
     : voxel_size_(voxel_size),
       clipping_distance_(clipping_distance),
       max_points_per_voxel_(max_points_per_voxel),
-      map_(voxel_size, inner_grid_log2_dim, leaf_grid_log2_dim),
-      accessor_(map_.createAccessor()) {}
+      map_(voxel_size, inner_grid_log2_dim, leaf_grid_log2_dim) {}
 
 std::tuple<Eigen::Vector3d, double> SparseVoxelGrid::GetClosestNeighbor(const Eigen::Vector3d& query) const {
   return GetClosestNeighbor(query, 1);
@@ -69,57 +78,82 @@ std::tuple<Eigen::Vector3d, double> SparseVoxelGrid::GetClosestNeighbor(const Ei
 std::tuple<Eigen::Vector3d, double> SparseVoxelGrid::GetClosestNeighbor(const Eigen::Vector3d& query,
                                                                         int voxel_search_radius) const {
   Eigen::Vector3d closest_neighbor = Eigen::Vector3d::Zero();
-  double closest_distance = std::numeric_limits<double>::max();
+  double closest_squared_distance = std::numeric_limits<double>::max();
   const auto const_accessor = map_.createConstAccessor();
   const Bonxai::CoordT voxel = map_.posToCoord(query);
   const int radius = std::max(1, voxel_search_radius);
+  const Bonxai::Point3D origin = map_.coordToPos(voxel);
+  const double frac_x = std::max(0.0, query.x() - origin.x);
+  const double frac_y = std::max(0.0, query.y() - origin.y);
+  const double frac_z = std::max(0.0, query.z() - origin.z);
   if (radius == 1) {
     std::for_each(shifts.cbegin(), shifts.cend(), [&](const Bonxai::CoordT& voxel_shift) {
+      const double bound_sq = axis_bound_sq(frac_x, voxel_size_, voxel_shift.x) +
+                              axis_bound_sq(frac_y, voxel_size_, voxel_shift.y) +
+                              axis_bound_sq(frac_z, voxel_size_, voxel_shift.z);
+      if (bound_sq >= closest_squared_distance) {
+        return;
+      }
       const Bonxai::CoordT query_voxel = voxel + voxel_shift;
       const VoxelBlock* voxel_points = const_accessor.value(query_voxel);
       if (voxel_points != nullptr) {
-        const Eigen::Vector3d& neighbor =
-            *std::min_element(voxel_points->cbegin(), voxel_points->cend(), [&](const auto& lhs, const auto& rhs) {
-              return (lhs - query).norm() < (rhs - query).norm();
-            });
-        double distance = (neighbor - query).norm();
-        if (distance < closest_distance) {
-          closest_neighbor = neighbor;
-          closest_distance = distance;
+        for (const Eigen::Vector3d& point : *voxel_points) {
+          const double squared_distance = (point - query).squaredNorm();
+          if (squared_distance < closest_squared_distance) {
+            closest_neighbor = point;
+            closest_squared_distance = squared_distance;
+          }
         }
       }
     });
+    const double closest_distance = closest_squared_distance == std::numeric_limits<double>::max()
+                                        ? std::numeric_limits<double>::max()
+                                        : std::sqrt(closest_squared_distance);
     return std::make_tuple(closest_neighbor, closest_distance);
   }
 
   for (int dx = -radius; dx <= radius; ++dx) {
+    const double bound_x = axis_bound_sq(frac_x, voxel_size_, dx);
+    if (bound_x >= closest_squared_distance) {
+      continue;
+    }
     for (int dy = -radius; dy <= radius; ++dy) {
+      const double bound_xy = bound_x + axis_bound_sq(frac_y, voxel_size_, dy);
+      if (bound_xy >= closest_squared_distance) {
+        continue;
+      }
       for (int dz = -radius; dz <= radius; ++dz) {
+        const double bound_sq = bound_xy + axis_bound_sq(frac_z, voxel_size_, dz);
+        if (bound_sq >= closest_squared_distance) {
+          continue;
+        }
         const Bonxai::CoordT query_voxel = voxel + CoordT{.x = dx, .y = dy, .z = dz};
         const VoxelBlock* voxel_points = const_accessor.value(query_voxel);
         if (voxel_points == nullptr) {
           continue;
         }
-        const Eigen::Vector3d& neighbor =
-            *std::min_element(voxel_points->cbegin(), voxel_points->cend(), [&](const auto& lhs, const auto& rhs) {
-              return (lhs - query).norm() < (rhs - query).norm();
-            });
-        double distance = (neighbor - query).norm();
-        if (distance < closest_distance) {
-          closest_neighbor = neighbor;
-          closest_distance = distance;
+        for (const Eigen::Vector3d& point : *voxel_points) {
+          const double squared_distance = (point - query).squaredNorm();
+          if (squared_distance < closest_squared_distance) {
+            closest_neighbor = point;
+            closest_squared_distance = squared_distance;
+          }
         }
       }
     }
   }
+  const double closest_distance = closest_squared_distance == std::numeric_limits<double>::max()
+                                      ? std::numeric_limits<double>::max()
+                                      : std::sqrt(closest_squared_distance);
   return std::make_tuple(closest_neighbor, closest_distance);
 }
 
 void SparseVoxelGrid::AddPoints(const std::vector<Eigen::Vector3d>& points) {
   const double map_resolution = std::sqrt(voxel_size_ * voxel_size_ / max_points_per_voxel_);
+  auto accessor = map_.createAccessor();
   std::for_each(points.cbegin(), points.cend(), [&](const Eigen::Vector3d& p) {
     const auto voxel_coordinates = map_.posToCoord(p);
-    VoxelBlock* voxel_points = accessor_.value(voxel_coordinates, /*create_if_missing=*/true);
+    VoxelBlock* voxel_points = accessor.value(voxel_coordinates, /*create_if_missing=*/true);
     if (voxel_points->size() == max_points_per_voxel_ ||
         std::any_of(voxel_points->cbegin(), voxel_points->cend(),
                     [&](const auto& voxel_point) { return (voxel_point - p).norm() < map_resolution; })) {

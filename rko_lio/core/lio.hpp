@@ -76,6 +76,9 @@ public:
     /** Enable double downsampling. */
     bool double_downsample = true;
 
+    /** Voxel-size multiplier used only for ICP keypoints in double-downsample mode. */
+    double icp_keypoint_voxel_multiplier = 1.5;
+
     /** Minimum weight for orientation regularization. */
     double min_beta = 200;
 

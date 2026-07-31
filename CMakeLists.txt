@@ -60,6 +60,16 @@ else()
 
   add_subdirectory(rko_lio/ros)
 
+  if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(
+      test_frontend_performance_contract
+      test/test_frontend_performance_contract.cpp)
+    if(TARGET test_frontend_performance_contract)
+      target_link_libraries(test_frontend_performance_contract rko_lio::core)
+    endif()
+  endif()
+
   # ament macros cannot be in a CMake subdirectory, even rclcpp
   rclcpp_components_register_node(
     online_node_component

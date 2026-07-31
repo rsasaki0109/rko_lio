@@ -130,6 +130,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LIO::Config,
                                    initialization_phase,
                                    max_expected_jerk,
                                    double_downsample,
+                                   icp_keypoint_voxel_multiplier,
                                    min_beta,
                                    degeneracy_aware_solve,
                                    degeneracy_well_conditioned_ratio,
@@ -169,7 +170,12 @@ Node::Node(const std::string& node_name, const rclcpp::NodeOptions& options) {
   tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(*node);
 
   // publishing
-  const rclcpp::QoS publisher_qos((rclcpp::SystemDefaultsQoS().keep_last(1).durability_volatile()));
+  const int publisher_queue_depth = node->declare_parameter<int>("publisher_queue_depth", 1);
+  if (publisher_queue_depth < 1) {
+    throw std::invalid_argument("publisher_queue_depth must be positive");
+  }
+  const rclcpp::QoS publisher_qos(
+      rclcpp::SystemDefaultsQoS().keep_last(static_cast<std::size_t>(publisher_queue_depth)).durability_volatile());
   odom_publisher = node->create_publisher<nav_msgs::msg::Odometry>(odom_topic, publisher_qos);
 
   publish_lidar_acceleration = node->declare_parameter<bool>("publish_lidar_acceleration", publish_lidar_acceleration);
@@ -212,6 +218,8 @@ Node::Node(const std::string& node_name, const rclcpp::NodeOptions& options) {
       node->declare_parameter<bool>("initialization_phase", lio_config.initialization_phase);
   lio_config.max_expected_jerk = node->declare_parameter<double>("max_expected_jerk", lio_config.max_expected_jerk);
   lio_config.double_downsample = node->declare_parameter<bool>("double_downsample", lio_config.double_downsample);
+  lio_config.icp_keypoint_voxel_multiplier = node->declare_parameter<double>(
+      "icp_keypoint_voxel_multiplier", lio_config.icp_keypoint_voxel_multiplier);
   lio_config.min_beta = node->declare_parameter<double>("min_beta", lio_config.min_beta);
   lio_config.degeneracy_aware_solve =
       node->declare_parameter<bool>("degeneracy_aware_solve", lio_config.degeneracy_aware_solve);
