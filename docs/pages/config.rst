@@ -40,13 +40,14 @@ These show up under the top level of a Python config and as ROS launch arguments
 
 - **legacy_voxel_downsample** (`bool`, default ``False``)
 
-  Emits voxel representatives in the unordered-map iteration order used before
-  the input-order-preserving sampler was introduced.
+  Uses the unordered-map voxel sampler from before v0.3 for every downsampling
+  pass. In double-downsample mode this restores both the map input and the ICP
+  keypoint selection.
 
-  Point selection is unchanged, but ordering can change floating-point ICP
-  reductions and therefore the accumulated trajectory. Keep the modern default
-  unless a dataset-specific profile has measured a regression and records the
-  compatibility setting in its benchmark provenance.
+  Ordering and the representatives selected by the second pass can change the
+  accumulated trajectory. Keep the modern default unless a dataset-specific
+  profile has measured a regression and records the compatibility setting in
+  its benchmark provenance.
 
 - **voxel_size** (`float`, default ``1.0``)
 

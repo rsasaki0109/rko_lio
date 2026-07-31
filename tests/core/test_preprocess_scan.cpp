@@ -99,6 +99,27 @@ TEST_CASE("preprocess_scan: legacy voxel mode preserves compatibility order", "[
   }
 }
 
+TEST_CASE("preprocess_scan: legacy voxel mode covers both downsample passes", "[preprocess_scan]") {
+  LIO::Config cfg = default_config();
+  cfg.legacy_voxel_downsample = true;
+
+  const Vector3dVector frame{
+      {2.1, 0.1, 0.1}, {-3.1, 1.1, 0.1}, {4.1, -2.1, 1.1}, {2.2, 0.2, 0.2}};
+  const auto expected_map = voxel_down_sample_legacy(frame, cfg.voxel_size * 0.5);
+  const auto expected_keypoints =
+      voxel_down_sample_legacy(expected_map, cfg.voxel_size * cfg.icp_keypoint_voxel_multiplier);
+  const auto result = preprocess_scan(frame, cfg);
+
+  REQUIRE(result.map_frame.size() == expected_map.size());
+  for (std::size_t i = 0; i < expected_map.size(); ++i) {
+    REQUIRE(result.map_frame[i].isApprox(expected_map[i]));
+  }
+  REQUIRE(result.keypoints.size() == expected_keypoints.size());
+  for (std::size_t i = 0; i < expected_keypoints.size(); ++i) {
+    REQUIRE(result.keypoints[i].isApprox(expected_keypoints[i]));
+  }
+}
+
 TEST_CASE("preprocess_scan: double_downsample = true -> all three populated", "[preprocess_scan]") {
   LIO::Config cfg = default_config();
   cfg.double_downsample = true;

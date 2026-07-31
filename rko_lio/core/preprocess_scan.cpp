@@ -22,8 +22,11 @@ PreprocessingResult preprocess_scan(const Vector3dVector& frame, const LIO::Conf
   };
 
   if (config.double_downsample) {
-    // pass 1 feeds pass 2, and sorting (shuffling) breaks lidar scan pattern leading to improved registration
-    Vector3dVector downsampled_frame = voxel_down_sample_sorted(clipped_frame, config.voxel_size * 0.5);
+    // Compatibility mode must cover both passes: changing pass 1 changes both
+    // the map input and the representatives available to pass 2.
+    Vector3dVector downsampled_frame =
+        config.legacy_voxel_downsample ? voxel_down_sample_legacy(clipped_frame, config.voxel_size * 0.5)
+                                       : voxel_down_sample_sorted(clipped_frame, config.voxel_size * 0.5);
     // pass 2 feeds icp, so unsorted is fine.
     Vector3dVector keypoints = downsample_keypoints(
         downsampled_frame, config.voxel_size * std::max(0.5, config.icp_keypoint_voxel_multiplier));
