@@ -23,6 +23,20 @@ def test_lioconfig_attributes():
     assert config.deskew is False
 
 
+def test_lioconfig_voxel_compatibility_round_trips_to_pybind():
+    config = LIOConfig(
+        legacy_voxel_downsample=True,
+        icp_keypoint_voxel_multiplier=1.25,
+    )
+
+    native = config.to_pybind()
+
+    assert native.legacy_voxel_downsample is True
+    assert native.icp_keypoint_voxel_multiplier == pytest.approx(1.25)
+    assert config.to_dict()["legacy_voxel_downsample"] is True
+    assert config.to_dict()["icp_keypoint_voxel_multiplier"] == pytest.approx(1.25)
+
+
 def test_lio_init_with_config():
     config = LIOConfig()
     lio_obj = LIO(config)

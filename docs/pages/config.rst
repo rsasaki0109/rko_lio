@@ -49,6 +49,15 @@ These show up under the top level of a Python config and as ROS launch arguments
   profile has measured a regression and records the compatibility setting in
   its benchmark provenance.
 
+- **icp_keypoint_voxel_multiplier** (`float`, default ``1.5``)
+
+  Voxel-size multiplier for the ICP keypoint pass in double-downsample mode.
+  It does not change the half-voxel map pass and has no effect when
+  ``double_downsample`` is disabled.
+
+  Keep the default unless a dataset-specific benchmark demonstrates a bounded
+  improvement and records the setting in its provenance.
+
 - **voxel_size** (`float`, default ``1.0``)
 
   The voxel resolution of the internal local map (in meters).

@@ -128,6 +128,10 @@ class LIOConfig:
         Max expected IMU jerk (m/s^3).
     double_downsample : bool, default True
         Double downsamples the incoming scan before registering. Disabling for sparse LiDARs may improve results.
+    legacy_voxel_downsample : bool, default False
+        Restore the complete pre-v0.3 voxel sampling pipeline for compatibility.
+    icp_keypoint_voxel_multiplier : float, default 1.5
+        ICP keypoint voxel-size multiplier used in double-downsample mode.
     min_beta : float, default 200.0
         Minimum scaling on the orientation regularisation weight. Set to -1 to disable the cost.
     """
@@ -144,6 +148,8 @@ class LIOConfig:
     initialization_phase: bool = False
     max_expected_jerk: float = 3.0
     double_downsample: bool = True
+    legacy_voxel_downsample: bool = False
+    icp_keypoint_voxel_multiplier: float = 1.5
     min_beta: float = 200.0
 
     def to_pybind(self) -> _LIOConfig:

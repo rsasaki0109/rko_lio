@@ -37,6 +37,8 @@ double_downsample: true
 # Restore the complete pre-v0.3 voxel sampling pipeline for compatibility.
 # Keep false unless a dataset-specific profile has measured a regression.
 legacy_voxel_downsample: false
+# ICP keypoint voxel-size multiplier used only with double_downsample.
+icp_keypoint_voxel_multiplier: 1.5
 max_expected_jerk: 3.0
 min_beta: 200.0
 # Lidar per-point timestamp processing - set when the heuristic fails.
