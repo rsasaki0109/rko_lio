@@ -472,7 +472,12 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(*node);
 
   // publishing
-  const rclcpp::QoS publisher_qos((rclcpp::SystemDefaultsQoS().keep_last(1).durability_volatile()));
+  const int publisher_queue_depth = node->declare_parameter<int>("publisher_queue_depth", 1);
+  if (publisher_queue_depth < 1) {
+    throw std::invalid_argument("publisher_queue_depth must be positive");
+  }
+  const rclcpp::QoS publisher_qos(
+      rclcpp::SystemDefaultsQoS().keep_last(static_cast<std::size_t>(publisher_queue_depth)).durability_volatile());
   odom_publisher = node->create_publisher<nav_msgs::msg::Odometry>(odom_topic, publisher_qos);
 
   publish_lidar_acceleration = node->declare_parameter<bool>("publish_lidar_acceleration", publish_lidar_acceleration);
