@@ -21,12 +21,11 @@
 # SOFTWARE.
 
 """
-Equivalent logic to the ros wrapper's message buffering.
-A convenience class to buffer IMU and LiDAR messages to ensure the core cpp implementation always
-gets the data in sync.
-The difference is this is not multi-threaded, therefore is a bit slower.
+Equivalent logic to the ros node but mostly synchronous. Only the rerun viz is multi-threaded.
 """
 
+import atexit
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -34,13 +33,13 @@ import yaml
 
 from .config import PipelineConfig
 from .lio import LIO
-from .scoped_profiler import ScopedProfiler
+from .scoped_profiler import ScopedProfiler, profile_func
 from .util import (
     height_colors_from_points,
     info,
+    log_vector,
     quat_xyzw_xyz_to_transform,
     save_scan_as_ply,
-    transform_to_quat_xyzw_xyz,
 )
 
 
@@ -52,8 +51,10 @@ class LIOPipeline:
     def __init__(
         self,
         config: PipelineConfig,
+        map_log_period_s: float = 1.0,
     ):
         self.config = config
+        self.map_log_period_s = map_log_period_s
         self.lio = LIO(config.lio)
         self.extrinsic_imu2base = quat_xyzw_xyz_to_transform(
             config.extrinsic_imu2base_quat_xyzw_xyz
@@ -68,8 +69,14 @@ class LIOPipeline:
             import rerun
 
             self.rerun = rerun
-            self.viz_counter = 0
             self.last_xyz = np.zeros(3)
+            self.cloud_box = LatestMailbox()
+            self.last_map_log_s = -float("inf")
+            self.cloud_thread = threading.Thread(
+                target=self.cloud_log_loop, daemon=True
+            )
+            self.cloud_thread.start()
+            atexit.register(self.close)
             if self.lio.config.initialization_phase:
                 self.rerun.log(
                     "world",
@@ -84,21 +91,23 @@ class LIOPipeline:
         Folder is {log_dir}/{run_name}_{index}.
         Automatically bumps the index (from 0) if similar names exist, to avoid overwriting.
         """
-        if self._output_dir is None:
-            self.config.log_dir.mkdir(parents=True, exist_ok=True)
-            index = 0
-            while True:
-                output_dir = self.config.log_dir / f"{self.config.run_name}_{index}"
-                if not output_dir.exists():
-                    break
-                index += 1
-            output_dir.mkdir()
-            self._output_dir = output_dir
+        if self._output_dir is not None:
+            return self._output_dir
+
+        self.config.log_dir.mkdir(parents=True, exist_ok=True)
+        index = 0
+        while True:
+            output_dir = self.config.log_dir / f"{self.config.run_name}_{index}"
+            if not output_dir.exists():
+                break
+            index += 1
+        output_dir.mkdir()
+        self._output_dir = output_dir
         return self._output_dir
 
     def add_imu(
         self,
-        time: float,
+        time: int,
         acceleration: np.ndarray,
         angular_velocity: np.ndarray,
     ):
@@ -107,135 +116,154 @@ class LIOPipeline:
 
         Parameters
         ----------
-        time : float
-            Measurement timestamp in seconds.
+        time : int
+            Measurement timestamp in nanoseconds (absolute, since the unix epoch).
         acceleration : array of float, shape (3,)
             Acceleration vector in m/s^2.
         angular_velocity : array of float, shape (3,)
             Angular velocity in rad/s.
         """
-        if self.extrinsic_imu2base is not None:
-            self.lio.add_imu_measurement_with_extrinsic(
-                self.extrinsic_imu2base,
-                time=time,
-                acceleration=acceleration,
-                angular_velocity=angular_velocity,
-            )
-        else:
-            self.lio.add_imu_measurement(
-                time=time, acceleration=acceleration, angular_velocity=angular_velocity
-            )
+        self.lio.add_imu_measurement(
+            acceleration=acceleration,
+            angular_velocity=angular_velocity,
+            time=time,
+            extrinsic_imu2base=self.extrinsic_imu2base,
+        )
 
         if self.config.viz:
-            self.rerun.set_time("data_time", timestamp=time)
+            self.rerun.set_time("data_time", timestamp=time * 1e-9)
             log_vector(self.rerun, "imu/acceleration", acceleration)
             log_vector(self.rerun, "imu/angular_velocity", angular_velocity)
 
+    @profile_func("Pipeline - Register Scan")
     def register_scan(
         self,
-        start_time: float,
-        end_time: float,
+        start_time_ns: int,
+        end_time_ns: int,
         scan: np.ndarray,
         timestamps: np.ndarray,
     ):
         """
         Register a lidar scan.
-        Timestamps are assumed to be absolute seconds.
+        Timestamps are assumed to be absolute nanoseconds.
         It is assumed there is sufficient IMU data added to the pipeline before triggering the registration (use the Sequencer).
 
 
         Parameters
         ----------
-        start_time: float
-            Absolute time of the scan recording start
-        end_time: float
-            Absolute time of the scan recording end
+        start_time_ns: int
+            Absolute time of the scan recording start, in nanoseconds.
+        end_time_ns: int
+            Absolute time of the scan recording end, in nanoseconds.
         scan : array of float, shape (N,3)
             Point cloud.
-        timestamps : array of float, shape (N,)
-            Absolute timestamps (seconds) for each point.
+        timestamps : array of int64, shape (N,)
+            Absolute per-point timestamps in nanoseconds.
+
+        Returns
+        -------
+        np.ndarray or None
+            Deskewed scan if successful, None if registration failed
         """
-        with ScopedProfiler("Pipeline - Registration") as registration_timer:
-            if self.config.viz:
-                # needs to be logged before the pybinded register function is called
-                self.rerun.set_time("data_time", timestamp=end_time)
-                stats = self.lio.interval_stats()
-                self.rerun.log(
-                    "imu/imu_count", self.rerun.Scalars(float(stats.imu_count))
+        if self.config.viz:
+            # needs to be logged before the pybinded register function is called
+            self.rerun.set_time("data_time", timestamp=end_time_ns * 1e-9)
+            stats = self.lio.interval_stats()
+            self.rerun.log("imu/imu_count", self.rerun.Scalars(float(stats.imu_count)))
+            log_vector(self.rerun, "imu/avg_acceleration", stats.avg_imu_accel())
+            log_vector(self.rerun, "imu/avg_body_acceleration", stats.avg_body_accel())
+            log_vector(self.rerun, "imu/avg_ang_velocity", stats.avg_ang_vel())
+
+        try:
+            deskewed_scan = self.lio.register_scan(
+                scan,
+                timestamps,
+                extrinsic_lidar2base=self.extrinsic_lidar2base,
+            )
+        except ValueError as e:
+            print(
+                "ERROR: Dropping LiDAR frame as there was an error. Odometry might suffer. Error:",
+                e,
+            )
+            return None
+
+        if self.config.dump_deskewed_scans:
+            save_scan_as_ply(
+                deskewed_scan,
+                end_time_ns,
+                output_dir=self.output_dir / "deskewed_scans",
+            )
+
+        if self.config.viz:
+            self.visualize(end_time_ns, deskewed_scan)
+
+        return deskewed_scan
+
+    @profile_func("Pipeline - Visualization")
+    def visualize(self, end_time_ns: int, deskewed_scan: np.ndarray):
+        scan_time_s = end_time_ns * 1e-9
+        self.rerun.set_time("data_time", timestamp=scan_time_s)
+        pose = self.lio.pose()  # base -> world
+        self.rerun.log(
+            "world/base",
+            self.rerun.Transform3D(translation=pose[:3, 3], mat3x3=pose[:3, :3]),
+        )
+        self.rerun.log("world/base", self.rerun.TransformAxes3D(2.0))
+        self.rerun.log(
+            "world/view_anchor",
+            self.rerun.Transform3D(translation=pose[:3, 3]),
+        )
+        traj_pts = np.array([self.last_xyz, pose[:3, 3]])
+        self.rerun.log(
+            "world/trajectory",
+            self.rerun.LineStrips3D([traj_pts], radii=[0.1], colors=[255, 111, 111]),
+        )
+        self.last_xyz = pose[:3, 3].copy()
+
+        # Hand the heavy work off to the worker thread
+        # Local map is sampled here as the next register_scan mutates it which can race
+        T_lidar2world = pose @ self.extrinsic_lidar2base
+        local_map = None
+        if scan_time_s - self.last_map_log_s >= self.map_log_period_s:
+            pts = self.lio.map_point_cloud()
+            if pts.size > 0:
+                local_map = pts
+                self.last_map_log_s = scan_time_s
+
+        self.cloud_box.put((scan_time_s, deskewed_scan, T_lidar2world, local_map))
+
+    def cloud_log_loop(self):
+        # send_columns binds the timestamp to the data, so we don't race the
+        # main thread's rr.set_time() global timeline state.
+        rr = self.rerun
+        for item in iter(self.cloud_box.get, None):
+            scan_time_s, deskewed_scan, T_lidar2world, local_map = item
+            scan_world = (T_lidar2world[:3, :3] @ deskewed_scan.T).T + T_lidar2world[
+                :3, 3
+            ]
+            time_idx = [rr.TimeColumn("data_time", timestamp=[scan_time_s])]
+            rr.send_columns(
+                "world/deskewed_scan",
+                indexes=time_idx,
+                columns=rr.Points3D.columns(positions=scan_world).partition(
+                    [len(scan_world)]
+                ),
+            )
+            if local_map is not None:
+                rr.send_columns(
+                    "world/local_map",
+                    indexes=time_idx,
+                    columns=rr.Points3D.columns(
+                        positions=local_map,
+                        colors=height_colors_from_points(local_map),
+                    ).partition([len(local_map)]),
                 )
-                log_vector(self.rerun, "imu/avg_acceleration", stats.avg_imu_accel())
-                log_vector(
-                    self.rerun, "imu/avg_body_acceleration", stats.avg_body_accel()
-                )
-                log_vector(self.rerun, "imu/avg_ang_velocity", stats.avg_ang_vel())
 
-            try:
-                if self.extrinsic_lidar2base is not None:
-                    # TODO: rerun the deskewed scan as well, but there is some flickering in the viz for some reason
-                    deskewed_scan = self.lio.register_scan_with_extrinsic(
-                        self.extrinsic_lidar2base,
-                        scan,
-                        timestamps,
-                    )
-                else:
-                    deskewed_scan = self.lio.register_scan(
-                        scan,
-                        timestamps,
-                    )
-            except ValueError as e:
-                print(
-                    "ERROR: Dropping LiDAR frame as there was an error. Odometry might suffer. Error:",
-                    e,
-                )
-                return
-
-            if self.config.dump_deskewed_scans:
-                save_scan_as_ply(
-                    deskewed_scan,
-                    end_time,
-                    output_dir=self.output_dir / "deskewed_scans",
-                )
-
-            if self.config.viz:
-                with ScopedProfiler("Pipeline - Visualization") as _:
-                    pose = self.lio.pose()
-                    self.rerun.log(
-                        "world/lidar",
-                        self.rerun.Transform3D(
-                            translation=pose[:3, 3],
-                            mat3x3=pose[:3, :3],
-                            axis_length=2,
-                        ),
-                    )
-                    self.rerun.log(
-                        "world/view_anchor",
-                        self.rerun.Transform3D(translation=pose[:3, 3]),
-                    )
-                    traj_pts = np.array([self.last_xyz, pose[:3, 3]])
-                    self.rerun.log(
-                        "world/trajectory",
-                        self.rerun.LineStrips3D(
-                            [traj_pts], radii=[0.1], colors=[255, 111, 111]
-                        ),
-                    )
-                    self.last_xyz = pose[:3, 3].copy()
-
-                    self.viz_counter += 1
-                    if self.viz_counter % self.config.viz_every_n_frames != 0:
-                        # logging the point clouds is more expensive
-                        # especially the local map, as we have to iterate over the entire map
-                        # so we publish the lidar every n frames
-                        return
-
-                    local_map_points = self.lio.map_point_cloud()
-                    if local_map_points.size > 0:
-                        self.rerun.log(
-                            "world/local_map",
-                            self.rerun.Points3D(
-                                local_map_points,
-                                colors=height_colors_from_points(local_map_points),
-                            ),
-                        )
+    def close(self):
+        if not self.config.viz:
+            return
+        self.cloud_box.close()
+        self.cloud_thread.join()
 
     def dump_results_to_disk(self):
         """
@@ -246,56 +274,45 @@ class LIOPipeline:
         - Configuration as YAML file.
         """
         traj_file = self.output_dir / f"{self.output_dir.name}_tum.txt"
-        timestamps, poses = self.lio.poses_with_timestamps()
+        timestamps_ns, poses = self.lio.poses_with_timestamps()
         with traj_file.open("w") as f:
-            for t, p in zip(timestamps, poses):
+            for t_ns, p in zip(timestamps_ns, poses):
                 # p: x,y,z,qx,qy,qz,qw
-                line = f"{t:.6f} {p[0]:.6f} {p[1]:.6f} {p[2]:.6f} {p[3]:.6f} {p[4]:.6f} {p[5]:.6f} {p[6]:.6f}\n"
+                t_s = t_ns * 1e-9
+                line = f"{t_s:.6f} {p[0]:.6f} {p[1]:.6f} {p[2]:.6f} {p[3]:.6f} {p[4]:.6f} {p[5]:.6f} {p[6]:.6f}\n"
                 f.write(line)
         info(f"Poses written to {traj_file.resolve()}")
 
         config = self.config.to_dict()
-        config["log_dir"] = config["log_dir"].as_posix()
         settings_file = self.output_dir / "config.yaml"
         with settings_file.open("w") as f:
             yaml.dump(config, f, sort_keys=False)
         info(f"Configuration written to {settings_file.resolve()}")
 
 
-def log_vector(rerun, entity_path_prefix: str, vector):
+class LatestMailbox:
     """
-    Logs a vector as three scalar time-series in rerun.
-
-    Args:
-        rerun: rerun module
-        entity_path_prefix: Base path for scalar logs (e.g. "imu/avg_acceleration")
-        vector: Iterable or np.ndarray with 3 elements (x, y, z)
+    Single-slot, latest-wins handoff between producer and one consumer.
+    Producer never blocks.
     """
-    rerun.log(f"{entity_path_prefix}/x", rerun.Scalars(vector[0]))
-    rerun.log(f"{entity_path_prefix}/y", rerun.Scalars(vector[1]))
-    rerun.log(f"{entity_path_prefix}/z", rerun.Scalars(vector[2]))
 
+    def __init__(self):
+        self.cv = threading.Condition()
+        self.item = None
+        self.closed = False
 
-def log_vector_columns(
-    rerun, entity_path_prefix: str, times: np.ndarray, vectors: np.ndarray
-):
-    """
-    Log a batch of 3D vectors over multiple timestamps in rerun,
-    sending one column batch per vector axis.
+    def put(self, item):
+        with self.cv:
+            self.item = item
+            self.cv.notify()
 
-    Args:
-        rerun: rerun module or rerun instance.
-        entity_path_prefix: base path e.g. 'imu/acceleration'.
-        times: 1D np.ndarray of timestamps (float64).
-        vectors: 2D np.ndarray, shape (N, 3) where columns are x,y,z.
-    """
-    # Common time column to link all components
-    time_col = rerun.TimeColumn("data_time", timestamp=times)
+    def get(self):
+        with self.cv:
+            self.cv.wait_for(lambda: self.item is not None or self.closed)
+            item, self.item = self.item, None
+            return item
 
-    # For each component, prepare scalar column and send
-    for dim, axis_label in enumerate(["x", "y", "z"]):
-        rerun.send_columns(
-            f"{entity_path_prefix}/{axis_label}",
-            indexes=[time_col],
-            columns=rerun.Scalars.columns(scalars=vectors[:, dim]),
-        )
+    def close(self):
+        with self.cv:
+            self.closed = True
+            self.cv.notify()

@@ -27,17 +27,20 @@ if(POLICY CMP0135)
   cmake_policy(SET CMP0135 NEW)
 endif()
 
+option(RKO_LIO_BUILD_ROS "Build the ROS wrapper for RKO LIO" ON)
+option(RKO_LIO_BUILD_TESTS "Build core C++ tests" OFF)
+option(RKO_LIO_FETCH_CONTENT_DEPS
+       "Fetch dependencies via FetchContent instead of using find_package" OFF)
+
 include(cmake/dependencies.cmake)
 include(cmake/compat_target_sources.cmake)
 
 find_package(Eigen3 3.4 REQUIRED CONFIG)
 find_package(Sophus REQUIRED CONFIG)
 find_package(TBB REQUIRED CONFIG)
-find_package(Bonxai REQUIRED CONFIG)
+find_package(tsl-robin-map REQUIRED CONFIG)
 
 add_subdirectory(rko_lio/core)
-
-option(RKO_LIO_BUILD_ROS "Build the ROS wrapper for RKO LIO" ON)
 
 if(NOT RKO_LIO_BUILD_ROS)
   message(STATUS "RKO_LIO_BUILD_ROS is OFF. Skipping ROS Build.")
@@ -63,10 +66,49 @@ else()
   if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     ament_add_gtest(
-      test_frontend_performance_contract
-      test/test_frontend_performance_contract.cpp)
-    if(TARGET test_frontend_performance_contract)
-      target_link_libraries(test_frontend_performance_contract rko_lio::core)
+      test_direct_visual_odometry
+      test/test_direct_visual_odometry.cpp)
+    if(TARGET test_direct_visual_odometry)
+      target_link_libraries(test_direct_visual_odometry rko_lio::core)
+    endif()
+    # test_process_timestamps: superseded by upstream's Catch2-based
+    # tests/core/test_process_timestamps.cpp, which covers the same
+    # process_timestamps() function against the current Nsec-based API.
+    ament_add_gtest(
+      test_voxel_hash_map
+      test/test_voxel_hash_map.cpp)
+    if(TARGET test_voxel_hash_map)
+      target_link_libraries(test_voxel_hash_map rko_lio::core)
+    endif()
+    ament_add_gtest(
+      test_gravity_alignment
+      test/test_gravity_alignment.cpp)
+    if(TARGET test_gravity_alignment)
+      target_link_libraries(test_gravity_alignment rko_lio::core)
+    endif()
+    ament_add_gtest(
+      test_localizability_weighting
+      test/test_localizability_weighting.cpp)
+    if(TARGET test_localizability_weighting)
+      target_link_libraries(test_localizability_weighting rko_lio::core)
+    endif()
+    ament_add_gtest(
+      test_kinematic_velocity_gate
+      test/test_kinematic_velocity_gate.cpp)
+    if(TARGET test_kinematic_velocity_gate)
+      target_link_libraries(test_kinematic_velocity_gate rko_lio::core)
+    endif()
+    ament_add_gtest(
+      test_kinematic_velocity_blend
+      test/test_kinematic_velocity_blend.cpp)
+    if(TARGET test_kinematic_velocity_blend)
+      target_link_libraries(test_kinematic_velocity_blend rko_lio::core)
+    endif()
+    ament_add_gtest(
+      test_kinematic_scene_range_gate
+      test/test_kinematic_scene_range_gate.cpp)
+    if(TARGET test_kinematic_scene_range_gate)
+      target_link_libraries(test_kinematic_scene_range_gate rko_lio::core)
     endif()
   endif()
 
@@ -78,14 +120,45 @@ else()
     EXECUTABLE
     online_node)
 
-  install(
-    TARGETS online_node_component offline_node
-    EXPORT rko_lioTargets
-    RUNTIME DESTINATION lib/${PROJECT_NAME})
+  rclcpp_components_register_node(
+    online_imu_rate_node_component
+    PLUGIN
+    "rko_lio::ros::OnlineImuRateNode"
+    EXECUTABLE
+    online_imu_rate_node)
+
+  if(NOT RKO_LIO_FETCH_CONTENT_DEPS AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.23")
+    install(
+      TARGETS rko_lio.core rko_lio.ros rko_lio.ros.utils
+      EXPORT rko_lioTargets
+      FILE_SET HEADERS)
+
+    ament_export_targets(rko_lioTargets HAS_LIBRARY_TARGET)
+    ament_export_dependencies(
+      Eigen3
+      Sophus
+      tsl-robin-map
+      rclcpp
+      std_msgs
+      tf2
+      tf2_ros
+      sensor_msgs
+      nav_msgs
+      geometry_msgs
+      rosbag2_cpp
+      rosbag2_storage)
+  endif()
+
+  install(TARGETS online_node_component online_imu_rate_node_component offline_node
+          LIBRARY DESTINATION lib
+          RUNTIME DESTINATION lib/${PROJECT_NAME})
 
   install(DIRECTORY config launch DESTINATION share/rko_lio)
 
-  ament_export_targets(rko_lioTargets)
-
   ament_package()
+endif()
+
+if(RKO_LIO_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests/core)
 endif()

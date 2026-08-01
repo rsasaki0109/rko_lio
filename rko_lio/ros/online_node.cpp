@@ -22,14 +22,16 @@
  * SOFTWARE.
  */
 
-#include "node.hpp"
+#include "threaded_node.hpp"
 #include "rko_lio/core/profiler.hpp"
 
 namespace rko_lio::ros {
-class OnlineNode : public Node {
+class OnlineNode : public ThreadedNode {
 public:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub;
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr radar_sub;
   rko_lio::core::Timer timer;
 
   OnlineNode(const OnlineNode&) = delete;
@@ -38,7 +40,7 @@ public:
   OnlineNode& operator=(OnlineNode&&) = delete;
 
   explicit OnlineNode(const rclcpp::NodeOptions& options)
-      : Node("rko_lio_online_node", options), timer("RKO LIO Online Node") {
+      : ThreadedNode("rko_lio_online_node", options), timer("RKO LIO Online Node") {
     const auto qos_imu = rclcpp::SensorDataQoS().keep_last(100);
     const auto qos_lidar = rclcpp::SensorDataQoS().keep_last(10);
 
@@ -48,6 +50,20 @@ public:
     lidar_sub = node->create_subscription<sensor_msgs::msg::PointCloud2>(
         lidar_topic, qos_lidar,
         [this](const sensor_msgs::msg::PointCloud2::ConstSharedPtr& lidar_msg) { lidar_callback(lidar_msg); });
+    if (direct_visual_frontend) {
+      image_sub = node->create_subscription<sensor_msgs::msg::Image>(
+          visual_image_topic, rclcpp::SensorDataQoS().keep_last(20),
+          [this](const sensor_msgs::msg::Image::ConstSharedPtr& image_msg) {
+            image_callback(image_msg);
+          });
+    }
+    if (!radar_topic.empty()) {
+      radar_sub = node->create_subscription<sensor_msgs::msg::PointCloud2>(
+          radar_topic, rclcpp::SensorDataQoS().keep_last(10),
+          [this](const sensor_msgs::msg::PointCloud2::ConstSharedPtr& radar_msg) {
+            radar_callback(radar_msg);
+          });
+    }
   }
 
   rclcpp::node_interfaces::NodeBaseInterface::SharedPtr get_node_base_interface() {

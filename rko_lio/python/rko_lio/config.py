@@ -53,7 +53,7 @@ Description of parameters
 - ``multiplier_to_seconds``:
 
     Factor applied to raw timestamp values to convert them to seconds.
-    Secondsd and nanoseconds are detected automatically when this is 0.0 (default).
+    Seconds and nanoseconds are detected automatically when this is 0.0 (default).
     Specify this for any other case.
     For example, if timestamps are in microseconds, use ``1e-6``.
 
@@ -83,6 +83,7 @@ from .util import error_and_exit
 @dataclass
 class TimestampConfig:
     multiplier_to_seconds: float = 0.0
+    offset_seconds: float = 0.0
     force_absolute: bool = False
     force_relative: bool = False
 
@@ -117,7 +118,7 @@ class LIOConfig:
         Minimum usable range of lidar (meters).
     convergence_criterion : float, default 1e-5
         Convergence threshold for optimization.
-    max_correspondance_distance : float, default 0.5
+    max_correspondence_distance : float, default 0.5
         Max distance for associating points (meters).
     max_num_threads : int, default 0
         Max thread count (0 = autodetect).
@@ -138,7 +139,7 @@ class LIOConfig:
     max_range: float = 100.0
     min_range: float = 1.0
     convergence_criterion: float = 1e-5
-    max_correspondance_distance: float = 0.5
+    max_correspondence_distance: float = 0.5
     max_num_threads: int = 0
     initialization_phase: bool = False
     max_expected_jerk: float = 3.0
@@ -171,7 +172,6 @@ class PipelineConfig:
         Extrinsic transform from lidar frame to base frame.
     viz : bool, default False
         Enable visualization using rerun.
-    viz_every_n_frames : int, default 20
     dump_deskewed_scans : bool, default False
         Save deskewed scans to disk.
     log_dir : Path, default "results"
@@ -185,7 +185,6 @@ class PipelineConfig:
     extrinsic_imu2base_quat_xyzw_xyz: list | None = None
     extrinsic_lidar2base_quat_xyzw_xyz: list | None = None
     viz: bool = False
-    viz_every_n_frames: int = 20
     dump_deskewed_scans: bool = False
     log_dir: Path = Path("results")
     run_name: str | None = None
@@ -225,4 +224,6 @@ class PipelineConfig:
         )
 
     def to_dict(self):
-        return asdict(self)
+        res = asdict(self)
+        res["log_dir"] = res["log_dir"].as_posix()
+        return res

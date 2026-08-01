@@ -34,4 +34,12 @@ std::vector<Eigen::Vector3d> point_cloud2_to_eigen(const sensor_msgs::msg::Point
 
 std::tuple<std::vector<Eigen::Vector3d>, std::vector<double>>
 point_cloud2_to_eigen_with_timestamps(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg);
+
+/**
+ * Per-point reflectivity/intensity, same order as the point cloud. Prefers a "reflectivity"
+ * field (Ouster-calibrated, uint16), falling back to "intensity" (float32) when absent.
+ * Returns an empty vector if the cloud carries neither field or an unsupported datatype --
+ * callers treat that as "intensity unavailable", not an error.
+ */
+std::vector<float> point_cloud2_to_intensity(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg);
 }; // namespace rko_lio::ros::utils

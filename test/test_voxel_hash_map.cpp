@@ -1,0 +1,139 @@
+#include <gtest/gtest.h>
+
+#include "rko_lio/core/voxel_hash_map.hpp"
+
+#include <cmath>
+#include <limits>
+#include <vector>
+
+namespace {
+
+using rko_lio::core::VoxelHashMap;
+
+// Regression coverage for the kidnap-recovery clear()/add_points() sequence used by
+// LIO::recover_with_scan(): clear() the local map, then immediately add_points() again to
+// re-seed it at the relocalized pose.
+//
+// [Merge note, upstream-master-integration] This test used to guard a real use-after-free in
+// this fork's old SparseVoxelGrid (Bonxai-backed): AddPoints() reused a persistent
+// Bonxai::VoxelGrid::Accessor class member across calls for its O(1) repeat-lookup cache, which
+// held raw pointers to the last-visited inner/leaf grid nodes. Clear() (map_.clear(CLEAR_MEMORY))
+// destroyed those nodes but had no way to invalidate the external accessor's cache, so the next
+// AddPoints() call for a point landing in the same inner-grid block as before the clear would
+// write through a dangling pointer.
+//
+// Upstream's replacement, VoxelHashMap (rko_lio/core/voxel_hash_map.{hpp,cpp}), is backed
+// directly by tsl::robin_map and never stores a persistent accessor/iterator as a class member:
+// every add_points()/get_closest_neighbor() call does a fresh map_.try_emplace()/map_.find()
+// against the live map. There is no cache to go stale across clear(), so this specific
+// use-after-free pattern does not exist upstream -- verified by inspection of voxel_hash_map.cpp
+// during the merge. This test is kept (renamed to the new API) as a general regression guard for
+// the clear()+add_points() sequence, not because the UAF risk still applies.
+TEST(VoxelHashMap, AddPointsAfterClearIsVisibleForSameBlock) {
+  constexpr double voxel_size = 0.2;
+  constexpr double clipping_distance = 8.0;
+  constexpr unsigned int max_points_per_voxel = 20;
+  VoxelHashMap grid(voxel_size, clipping_distance, max_points_per_voxel);
+
+  const Eigen::Vector3d first_point(1.0, 1.0, 1.0);
+  grid.add_points({first_point});
+  ASSERT_FALSE(grid.empty());
+  {
+    const auto [neighbor, distance] = grid.get_closest_neighbor(first_point);
+    EXPECT_LT(distance, 1e-9) << "sanity check: point should be found before clear()";
+    (void)neighbor;
+  }
+
+  grid.clear();
+  ASSERT_TRUE(grid.empty());
+
+  const Eigen::Vector3d second_point(1.05, 1.0, 1.0);
+  grid.add_points({second_point});
+
+  EXPECT_FALSE(grid.empty()) << "add_points() after clear() must actually insert into the live grid";
+  const auto [neighbor, distance] = grid.get_closest_neighbor(second_point);
+  EXPECT_LT(distance, 1e-9) << "point added after clear() must be queryable back out of the grid";
+  EXPECT_TRUE(neighbor.isApprox(second_point, 1e-9));
+}
+
+// Same scenario, but repeated across many distinct coordinates and several clear()/add_points()
+// cycles, so the test does not rely on a single lucky coordinate collision.
+TEST(VoxelHashMap, RepeatedClearAndAddPointsRoundTrips) {
+  constexpr double voxel_size = 0.2;
+  constexpr double clipping_distance = 8.0;
+  constexpr unsigned int max_points_per_voxel = 20;
+  VoxelHashMap grid(voxel_size, clipping_distance, max_points_per_voxel);
+
+  for (int cycle = 0; cycle < 5; ++cycle) {
+    std::vector<Eigen::Vector3d> points;
+    for (int i = 0; i < 20; ++i) {
+      points.emplace_back(static_cast<double>(i) * 0.5, static_cast<double>(cycle), 0.0);
+    }
+    grid.add_points(points);
+    grid.clear();
+    ASSERT_TRUE(grid.empty());
+    grid.add_points(points);
+    ASSERT_FALSE(grid.empty());
+    for (const auto& point : points) {
+      const auto [neighbor, distance] = grid.get_closest_neighbor(point);
+      EXPECT_LT(distance, 1e-9);
+      (void)neighbor;
+    }
+    grid.clear();
+  }
+}
+
+TEST(VoxelHashMap, FindsExactNearestPointAcrossVoxelBoundaries) {
+  VoxelHashMap grid(1.0, 100.0, 20U);
+  const std::vector<Eigen::Vector3d> points{
+      {-0.95, 0.10, 0.10}, {0.95, 0.10, 0.10}, {1.05, 0.10, 0.10}, {2.10, 0.10, 0.10}};
+  grid.add_points(points);
+
+  const auto [nearest, distance] = grid.get_closest_neighbor({0.99, 0.10, 0.10}, 2);
+  EXPECT_TRUE(nearest.isApprox(Eigen::Vector3d(0.95, 0.10, 0.10), 1e-12));
+  EXPECT_NEAR(distance, 0.04, 1e-12);
+}
+
+TEST(VoxelHashMap, BranchAndBoundMatchesBruteForceAcrossSignedBoundaries) {
+  constexpr int radius = 3;
+  VoxelHashMap grid(1.0, 100.0, 20U);
+  std::vector<Eigen::Vector3d> points;
+  for (int x = -4; x <= 4; ++x) {
+    for (int y = -4; y <= 4; ++y) {
+      for (int z = -4; z <= 4; ++z) {
+        points.emplace_back(x + 0.13, y + 0.37, z + 0.61);
+      }
+    }
+  }
+  grid.add_points(points);
+
+  const std::vector<Eigen::Vector3d> queries{
+      {-1.000001, -0.000001, 0.999999},
+      {-0.999999, 0.000001, 1.000001},
+      {-0.01, -0.99, 0.50},
+      {0.99, 1.01, -1.01},
+      {2.40, -2.60, 0.20}};
+  for (const auto& query : queries) {
+    const Eigen::Vector3i query_voxel = query.array().floor().cast<int>();
+    Eigen::Vector3d expected = Eigen::Vector3d::Zero();
+    double expected_squared_distance = std::numeric_limits<double>::max();
+    for (const auto& point : points) {
+      const Eigen::Vector3i point_voxel = point.array().floor().cast<int>();
+      if ((point_voxel - query_voxel).cwiseAbs().maxCoeff() > radius) {
+        continue;
+      }
+      const double squared_distance = (point - query).squaredNorm();
+      if (squared_distance < expected_squared_distance) {
+        expected = point;
+        expected_squared_distance = squared_distance;
+      }
+    }
+
+    const auto [actual, distance] = grid.get_closest_neighbor(query, radius);
+    EXPECT_TRUE(actual.isApprox(expected, 1e-12)) << "query: " << query.transpose();
+    EXPECT_NEAR(distance, std::sqrt(expected_squared_distance), 1e-12)
+        << "query: " << query.transpose();
+  }
+}
+
+} // namespace

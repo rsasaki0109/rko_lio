@@ -23,6 +23,7 @@
  */
 
 #pragma once
+#include "persistent_weak_direction.hpp"
 #include <Eigen/Core>
 #include <Eigen/Eigenvalues>
 #include <algorithm>
@@ -34,19 +35,20 @@ namespace Eigen {
 using Matrix3_6d = Matrix<double, 3, 6>;
 using Vector6d = Matrix<double, 6, 1>;
 using Matrix6d = Matrix<double, 6, 6>;
-using Matrix12d = Matrix<double, 12, 12>;
 } // namespace Eigen
 
 namespace rko_lio::core {
 // aliases
 using Vector3dVector = std::vector<Eigen::Vector3d>;
-using Secondsd = std::chrono::duration<double>;
-using TimestampVector = std::vector<Secondsd>;
+using Nsec = std::chrono::nanoseconds;
+using TimestampVector = std::vector<Nsec>;
 
 // constants and util funcs
 constexpr double square(double x) { return x * x; }
 constexpr double GRAVITY_MAG = 9.8107;
 inline Eigen::Vector3d gravity() { return {0, 0, -GRAVITY_MAG}; }
+
+inline double to_seconds(const Nsec d) { return std::chrono::duration<double>(d).count(); }
 
 // ============================================================================
 // [v0.8 Phase 1, diagnostic-only] localizability / ICP-conditioning summary.
@@ -111,11 +113,21 @@ struct IcpDiagnostics {
   Eigen::Vector6d b = Eigen::Vector6d::Zero();
   /** Eigen-decomposition of `H`. */
   LocalizabilitySummary localizability;
+  /** Persistent weak-direction state after observing this scan. */
+  PersistentWeakDirectionState persistent_weak_direction;
+  /** ICP iterations in this scan where the persistent-direction intervention ran. */
+  std::size_t degeneracy_intervention_count = 0;
+};
+
+struct DegeneracyPersistenceDiagnosticsSample {
+  Nsec time{0};
+  PersistentWeakDirectionState persistent_weak_direction;
+  std::size_t intervention_count = 0;
 };
 
 // data structs
 struct State {
-  Secondsd time{0};
+  Nsec time{0};
   Sophus::SE3d pose;
   Eigen::Vector3d velocity = Eigen::Vector3d::Zero();
   Eigen::Vector3d angular_velocity = Eigen::Vector3d::Zero();
@@ -137,20 +149,9 @@ struct ImuBias {
 };
 
 struct ImuControl {
-  Secondsd time{0};
+  Nsec time{0};
   Eigen::Vector3d acceleration = Eigen::Vector3d::Zero();
   Eigen::Vector3d angular_velocity = Eigen::Vector3d::Zero();
-};
-
-struct Timestamps {
-  Secondsd min;
-  Secondsd max;
-  TimestampVector times;
-};
-
-struct LidarFrame {
-  Timestamps timestamps;
-  Vector3dVector points;
 };
 
 /** Accumulated IMU statistics over the interval between consecutive LiDAR scans. */
@@ -206,10 +207,4 @@ struct IntervalStats {
   }
 };
 
-/** Detail: return type for the acceleration Kalman filter containing gravity and variance estimates. */
-struct AccelInfo {
-  /** Variance of the raw imu acceleration magnitude. */
-  double accel_mag_variance;
-  Eigen::Vector3d local_gravity_estimate;
-};
 }; // namespace rko_lio::core

@@ -51,7 +51,7 @@ def dump_config_callback(value: bool):
         from .config import PipelineConfig
 
         with open("config.yaml", "w") as f:
-            yaml.dump(PipelineConfig.default_dict(), f, default_flow_style=False)
+            yaml.dump(PipelineConfig().to_dict(), f, default_flow_style=False)
         info(
             "Default config dumped to config.yaml. Note that the extrinsics are left as an empty list. If you need them, you need to specify them as \[qx, qy, qz, qw, x, y, z]. Delete all the keys you don't need."
         )
@@ -113,12 +113,6 @@ def cli(
         help="Enable Rerun visualization",
         rich_help_panel="Visualisation options",
     ),
-    viz_every_n_frames: int = typer.Option(
-        20,
-        "--viz_frame_skip",
-        help="Publish (rerun) LiDAR information after specified number of frames. A low value will slow down the entire pipeline as logging LiDAR data is expensive.",
-        rich_help_panel="Visualisation options",
-    ),
     rbl_path: Path | None = typer.Option(
         None,
         "--rbl",
@@ -137,9 +131,9 @@ def cli(
         rich_help_panel="Visualisation options",
     ),
     log_results: bool = typer.Option(
-        False,
-        "--log",
-        "-l",
+        True,
+        "--log/--no_log",
+        "-l/-L",
         help="Log trajectory results to disk at 'log_dir' on completion",
         rich_help_panel="Disk logging options",
     ),
@@ -223,24 +217,6 @@ def cli(
     Run RKO_LIO with the selected dataloader and parameters.
     """
 
-    if viz:
-        try:
-            import rerun as rr
-
-            rr.init("rko_lio")
-            rr.spawn(memory_limit="2GB")
-            if reset_viz:
-                rr.log_file_from_path(
-                    Path(__file__).parent / "rko_lio.rbl"
-                    if rbl_path is None
-                    else rbl_path
-                )
-
-        except ImportError:
-            error_and_exit(
-                "Please install rerun with `pip install rerun-sdk` to enable visualization."
-            )
-
     user_config = {}
     if config_fp:
         with open(config_fp, "r") as f:
@@ -252,12 +228,11 @@ def cli(
     user_config["dump_deskewed_scans"] = log_results and (
         dump_deskewed_scans or user_config.get("dump_deskewed_scans", False)
     )
-    invalid_keys = ["viz", "viz_every_n_frames"]
+    invalid_keys = ["viz"]
     for key in invalid_keys:
         if key in user_config:
             warning(f"{key} specified in config will be ignored.")
     user_config["viz"] = viz
-    user_config["viz_every_n_frames"] = viz_every_n_frames
 
     from .config import PipelineConfig
 
@@ -265,18 +240,19 @@ def cli(
 
     from .dataloaders import LidarIMUSequencer, dataloader_factory
 
-    dataloader = dataloader_factory(
-        name=dataloader_name,
-        data_path=data_path,
-        sequence=sequence,
-        imu_topic=imu_topic,
-        lidar_topic=lidar_topic,
-        imu_frame_id=imu_frame,
-        lidar_frame_id=lidar_frame,
-        base_frame_id=base_frame,
-        timestamp_config=pipeline_config.timestamps,
+    dataloader = LidarIMUSequencer(
+        dataloader_factory(
+            name=dataloader_name,
+            data_path=data_path,
+            sequence=sequence,
+            imu_topic=imu_topic,
+            lidar_topic=lidar_topic,
+            imu_frame_id=imu_frame,
+            lidar_frame_id=lidar_frame,
+            base_frame_id=base_frame,
+            timestamp_config=pipeline_config.timestamps,
+        )
     )
-    sequenced_dataloader = LidarIMUSequencer(dataloader)
     print("Loaded dataloader:", dataloader)
 
     from .util import transform_to_quat_xyzw_xyz
@@ -304,8 +280,6 @@ def cli(
             "Fatal: Could not obtain required IMU/Lidar extrinsics. Please specify in a config or as part of your data."
         )
 
-    from .util import transform_to_quat_xyzw_xyz
-
     print("Resolved extrinsics:")
     print("  IMU to Base:", pipeline_config.extrinsic_imu2base_quat_xyzw_xyz)
     print(
@@ -313,15 +287,31 @@ def cli(
         pipeline_config.extrinsic_lidar2base_quat_xyzw_xyz,
     )
 
+    if viz:
+        try:
+            import rerun as rr
+
+            rr.init("rko_lio")
+            rr.spawn(memory_limit="2GB")
+            if reset_viz:
+                rr.log_file_from_path(
+                    Path(__file__).parent / "rko_lio.rbl"
+                    if rbl_path is None
+                    else rbl_path
+                )
+
+        except ImportError:
+            error_and_exit(
+                "Please install rerun with `pip install rerun-sdk` to enable visualization."
+            )
+
     from .lio_pipeline import LIOPipeline
 
     pipeline = LIOPipeline(pipeline_config)
 
     from tqdm import tqdm
 
-    for kind, data_dict in tqdm(
-        sequenced_dataloader, total=len(sequenced_dataloader), desc="data"
-    ):
+    for kind, data_dict in tqdm(dataloader, total=len(dataloader), desc="data"):
         if kind == "imu":
             pipeline.add_imu(**data_dict)
         elif kind == "lidar":

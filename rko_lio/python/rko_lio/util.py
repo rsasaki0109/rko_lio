@@ -114,12 +114,12 @@ def quat_xyzw_xyz_to_transform(quat_xyzw_xyz: np.ndarray | list | None) -> np.nd
 
 def save_scan_as_ply(
     scan: np.ndarray,
-    end_time_seconds: float,
+    end_time_ns: int,
     output_dir: Path,
 ):
     """
     dumps the scan as PLY.
-    The filename is <nanoseconds_as_int>.ply based on end_time_seconds.
+    The filename is <nanoseconds_as_int>.ply.
     """
     if scan is None or len(scan) == 0:
         return
@@ -131,8 +131,47 @@ def save_scan_as_ply(
         )
 
     output_dir.mkdir(exist_ok=True, parents=True)
-    fname = output_dir / f"{int(end_time_seconds * 1e9)}.ply"
+    fname = output_dir / f"{int(end_time_ns)}.ply"
 
     pc = open3d.geometry.PointCloud()
     pc.points = open3d.utility.Vector3dVector(scan)
     open3d.io.write_point_cloud(fname.as_posix(), pc)
+
+
+def log_vector(rerun, entity_path_prefix: str, vector):
+    """
+    Logs a vector as three scalar time-series in rerun.
+
+    Args:
+        rerun: rerun module
+        entity_path_prefix: Base path for scalar logs (e.g. "imu/avg_acceleration")
+        vector: Iterable or np.ndarray with 3 elements (x, y, z)
+    """
+    rerun.log(f"{entity_path_prefix}/x", rerun.Scalars(vector[0]))
+    rerun.log(f"{entity_path_prefix}/y", rerun.Scalars(vector[1]))
+    rerun.log(f"{entity_path_prefix}/z", rerun.Scalars(vector[2]))
+
+
+def log_vector_columns(
+    rerun, entity_path_prefix: str, times: np.ndarray, vectors: np.ndarray
+):
+    """
+    Log a batch of 3D vectors over multiple timestamps in rerun,
+    sending one column batch per vector axis.
+
+    Args:
+        rerun: rerun module or rerun instance.
+        entity_path_prefix: base path e.g. 'imu/acceleration'.
+        times: 1D np.ndarray of timestamps (float64).
+        vectors: 2D np.ndarray, shape (N, 3) where columns are x,y,z.
+    """
+    # Common time column to link all components
+    time_col = rerun.TimeColumn("data_time", timestamp=times)
+
+    # For each component, prepare scalar column and send
+    for dim, axis_label in enumerate(["x", "y", "z"]):
+        rerun.send_columns(
+            f"{entity_path_prefix}/{axis_label}",
+            indexes=[time_col],
+            columns=rerun.Scalars.columns(scalars=vectors[:, dim]),
+        )
