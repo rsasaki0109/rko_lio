@@ -2,6 +2,8 @@
 
 #include "rko_lio/core/voxel_hash_map.hpp"
 
+#include <cmath>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -78,6 +80,59 @@ TEST(VoxelHashMap, RepeatedClearAndAddPointsRoundTrips) {
       (void)neighbor;
     }
     grid.clear();
+  }
+}
+
+TEST(VoxelHashMap, FindsExactNearestPointAcrossVoxelBoundaries) {
+  VoxelHashMap grid(1.0, 100.0, 20U);
+  const std::vector<Eigen::Vector3d> points{
+      {-0.95, 0.10, 0.10}, {0.95, 0.10, 0.10}, {1.05, 0.10, 0.10}, {2.10, 0.10, 0.10}};
+  grid.add_points(points);
+
+  const auto [nearest, distance] = grid.get_closest_neighbor({0.99, 0.10, 0.10}, 2);
+  EXPECT_TRUE(nearest.isApprox(Eigen::Vector3d(0.95, 0.10, 0.10), 1e-12));
+  EXPECT_NEAR(distance, 0.04, 1e-12);
+}
+
+TEST(VoxelHashMap, BranchAndBoundMatchesBruteForceAcrossSignedBoundaries) {
+  constexpr int radius = 3;
+  VoxelHashMap grid(1.0, 100.0, 20U);
+  std::vector<Eigen::Vector3d> points;
+  for (int x = -4; x <= 4; ++x) {
+    for (int y = -4; y <= 4; ++y) {
+      for (int z = -4; z <= 4; ++z) {
+        points.emplace_back(x + 0.13, y + 0.37, z + 0.61);
+      }
+    }
+  }
+  grid.add_points(points);
+
+  const std::vector<Eigen::Vector3d> queries{
+      {-1.000001, -0.000001, 0.999999},
+      {-0.999999, 0.000001, 1.000001},
+      {-0.01, -0.99, 0.50},
+      {0.99, 1.01, -1.01},
+      {2.40, -2.60, 0.20}};
+  for (const auto& query : queries) {
+    const Eigen::Vector3i query_voxel = query.array().floor().cast<int>();
+    Eigen::Vector3d expected = Eigen::Vector3d::Zero();
+    double expected_squared_distance = std::numeric_limits<double>::max();
+    for (const auto& point : points) {
+      const Eigen::Vector3i point_voxel = point.array().floor().cast<int>();
+      if ((point_voxel - query_voxel).cwiseAbs().maxCoeff() > radius) {
+        continue;
+      }
+      const double squared_distance = (point - query).squaredNorm();
+      if (squared_distance < expected_squared_distance) {
+        expected = point;
+        expected_squared_distance = squared_distance;
+      }
+    }
+
+    const auto [actual, distance] = grid.get_closest_neighbor(query, radius);
+    EXPECT_TRUE(actual.isApprox(expected, 1e-12)) << "query: " << query.transpose();
+    EXPECT_NEAR(distance, std::sqrt(expected_squared_distance), 1e-12)
+        << "query: " << query.transpose();
   }
 }
 

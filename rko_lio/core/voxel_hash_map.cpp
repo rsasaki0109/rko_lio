@@ -56,6 +56,16 @@ static const std::array<Voxel, 27> shifts{
     Voxel{1, 0, -1},   Voxel{1, 0, 0},   Voxel{1, 0, 1},  //
     Voxel{1, 1, -1},   Voxel{1, 1, 0},   Voxel{1, 1, 1}};
 
+inline double axis_bound_sq(const double frac, const double voxel_size, const int offset) {
+  if (offset == 0) {
+    return 0.0;
+  }
+  const double distance = offset > 0 ? static_cast<double>(offset) * voxel_size - frac
+                                     : static_cast<double>(-offset - 1) * voxel_size + frac;
+  const double clamped = std::max(0.0, distance);
+  return clamped * clamped;
+}
+
 } // namespace
 
 namespace rko_lio::core {
@@ -70,24 +80,32 @@ VoxelHashMap::VoxelHashMap(const double voxel_size,
 
 std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eigen::Vector3d& query) const {
   Eigen::Vector3d closest_neighbor = Eigen::Vector3d::Zero();
-  double closest_distance = std::numeric_limits<double>::max();
+  double closest_squared_distance = std::numeric_limits<double>::max();
   const Voxel voxel = point_to_voxel(query, inv_voxel_size_);
+  const Eigen::Vector3d fractional = query - voxel.cast<double>() * voxel_size_;
   std::for_each(shifts.cbegin(), shifts.cend(), [&](const Voxel& voxel_shift) {
+    const double bound_sq = axis_bound_sq(fractional.x(), voxel_size_, voxel_shift.x()) +
+                            axis_bound_sq(fractional.y(), voxel_size_, voxel_shift.y()) +
+                            axis_bound_sq(fractional.z(), voxel_size_, voxel_shift.z());
+    if (bound_sq >= closest_squared_distance) {
+      return;
+    }
     const Voxel query_voxel = voxel + voxel_shift;
     const auto search = map_.find(query_voxel);
     if (search != map_.end()) {
       const VoxelBlock& voxel_points = search.value();
-      const Eigen::Vector3d& neighbor =
-          *std::min_element(voxel_points.cbegin(), voxel_points.cend(), [&](const auto& lhs, const auto& rhs) {
-            return (lhs - query).squaredNorm() < (rhs - query).squaredNorm();
-          });
-      double distance = (neighbor - query).norm();
-      if (distance < closest_distance) {
-        closest_neighbor = neighbor;
-        closest_distance = distance;
+      for (const Eigen::Vector3d& point : voxel_points) {
+        const double squared_distance = (point - query).squaredNorm();
+        if (squared_distance < closest_squared_distance) {
+          closest_neighbor = point;
+          closest_squared_distance = squared_distance;
+        }
       }
     }
   });
+  const double closest_distance = closest_squared_distance == std::numeric_limits<double>::max()
+                                      ? std::numeric_limits<double>::max()
+                                      : std::sqrt(closest_squared_distance);
   return std::make_tuple(closest_neighbor, closest_distance);
 }
 
@@ -100,9 +118,22 @@ std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eig
   Eigen::Vector3d closest_neighbor = Eigen::Vector3d::Zero();
   double closest_squared_distance = std::numeric_limits<double>::max();
   const Voxel voxel = point_to_voxel(query, inv_voxel_size_);
+  const Eigen::Vector3d fractional = query - voxel.cast<double>() * voxel_size_;
   for (int dx = -radius; dx <= radius; ++dx) {
+    const double bound_x = axis_bound_sq(fractional.x(), voxel_size_, dx);
+    if (bound_x >= closest_squared_distance) {
+      continue;
+    }
     for (int dy = -radius; dy <= radius; ++dy) {
+      const double bound_xy = bound_x + axis_bound_sq(fractional.y(), voxel_size_, dy);
+      if (bound_xy >= closest_squared_distance) {
+        continue;
+      }
       for (int dz = -radius; dz <= radius; ++dz) {
+        const double bound_sq = bound_xy + axis_bound_sq(fractional.z(), voxel_size_, dz);
+        if (bound_sq >= closest_squared_distance) {
+          continue;
+        }
         const Voxel query_voxel = voxel + Voxel{dx, dy, dz};
         const auto search = map_.find(query_voxel);
         if (search == map_.end()) {
