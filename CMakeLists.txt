@@ -60,6 +60,34 @@ else()
 
   add_subdirectory(rko_lio/ros)
 
+  if(BUILD_TESTING)
+    find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(
+      test_direct_visual_odometry
+      test/test_direct_visual_odometry.cpp)
+    if(TARGET test_direct_visual_odometry)
+      target_link_libraries(test_direct_visual_odometry rko_lio::core)
+    endif()
+    ament_add_gtest(
+      test_fixed_lag_pose_optimizer
+      test/test_fixed_lag_pose_optimizer.cpp)
+    if(TARGET test_fixed_lag_pose_optimizer)
+      target_link_libraries(test_fixed_lag_pose_optimizer rko_lio::core)
+    endif()
+    ament_add_gtest(
+      test_piecewise_gyro_deskew
+      test/test_piecewise_gyro_deskew.cpp)
+    if(TARGET test_piecewise_gyro_deskew)
+      target_link_libraries(test_piecewise_gyro_deskew rko_lio::core)
+    endif()
+    ament_add_gtest(
+      test_sparse_voxel_grid_clear
+      test/test_sparse_voxel_grid_clear.cpp)
+    if(TARGET test_sparse_voxel_grid_clear)
+      target_link_libraries(test_sparse_voxel_grid_clear rko_lio::core)
+    endif()
+  endif()
+
   # ament macros cannot be in a CMake subdirectory, even rclcpp
   rclcpp_components_register_node(
     online_node_component

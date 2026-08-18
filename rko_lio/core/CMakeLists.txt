@@ -27,6 +27,7 @@ add_library(rko_lio::core ALIAS rko_lio.core)
 compat_target_sources(
   rko_lio.core
   PRIVATE lio.cpp
+          direct_visual_odometry.cpp
           sparse_voxel_grid.cpp
           voxel_down_sample.cpp
           process_timestamps.cpp
@@ -35,10 +36,15 @@ compat_target_sources(
   FILE_SET
   HEADERS
   FILES ../../rko_lio/core/lio.hpp
+        ../../rko_lio/core/direct_visual_odometry.hpp
         ../../rko_lio/core/degeneracy_aware_solve.hpp
+        ../../rko_lio/core/fixed_lag_pose_optimizer.hpp
+        ../../rko_lio/core/persistent_weak_direction.hpp
+        ../../rko_lio/core/piecewise_gyro_deskew.hpp
         ../../rko_lio/core/preprocess_scan.hpp
         ../../rko_lio/core/process_timestamps.hpp
         ../../rko_lio/core/profiler.hpp
+        ../../rko_lio/core/selective_visual_fusion.hpp
         ../../rko_lio/core/sparse_voxel_grid.hpp
         ../../rko_lio/core/util.hpp
         ../../rko_lio/core/voxel_down_sample.hpp

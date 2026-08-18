@@ -30,6 +30,7 @@ class OnlineNode : public Node {
 public:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub;
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub;
   rko_lio::core::Timer timer;
 
   OnlineNode(const OnlineNode&) = delete;
@@ -48,6 +49,13 @@ public:
     lidar_sub = node->create_subscription<sensor_msgs::msg::PointCloud2>(
         lidar_topic, qos_lidar,
         [this](const sensor_msgs::msg::PointCloud2::ConstSharedPtr& lidar_msg) { lidar_callback(lidar_msg); });
+    if (direct_visual_frontend) {
+      image_sub = node->create_subscription<sensor_msgs::msg::Image>(
+          visual_image_topic, rclcpp::SensorDataQoS().keep_last(20),
+          [this](const sensor_msgs::msg::Image::ConstSharedPtr& image_msg) {
+            image_callback(image_msg);
+          });
+    }
   }
 
   rclcpp::node_interfaces::NodeBaseInterface::SharedPtr get_node_base_interface() {

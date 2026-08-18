@@ -33,12 +33,15 @@
  * a simple Timer class for quick timing prints, and the SCOPED_PROFILER macro for convenience.
  */
 #pragma once
+#include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <iomanip>
 #include <iostream>
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace rko_lio::core {
 
@@ -158,6 +161,171 @@ struct Timer {
   }
   std::string label;
   TimePoint start_time;
+};
+
+/**
+ * [instrumentation, additive-only] Lightweight gauge for tracking local-map
+ * growth (active voxel count and stored point count) over the course of a
+ * run, so map growth is visible alongside the ScopedProfiler timing output.
+ *
+ * This is purely observational: call sites push samples explicitly (see
+ * `MapGrowthGauge::sample`), and nothing here reads back into or otherwise
+ * influences any numerical computation. Samples are stored in a static map
+ * (keyed by a caller-chosen name, e.g. "RegistrationMap") and a
+ * first/median/last summary is printed to stdout at program exit, mirroring
+ * ScopedProfiler's static-destructor reporting style.
+ */
+class MapGrowthGauge {
+public:
+  struct Sample {
+    std::size_t scan_index;
+    std::size_t active_voxels;
+    std::size_t stored_points;
+  };
+
+  /// Record one growth sample under the given gauge name.
+  static void sample(const std::string& name,
+                     std::size_t scan_index,
+                     std::size_t active_voxels,
+                     std::size_t stored_points) {
+    data().map[name].push_back({scan_index, active_voxels, stored_points});
+  }
+
+  /// Print aggregated gauge results to stdout.
+  static void print_results() { data().print_results(); }
+
+private:
+  class GaugeData {
+  public:
+    std::unordered_map<std::string, std::vector<Sample>> map;
+    GaugeData() = default;
+    GaugeData(const GaugeData&) = delete;
+    GaugeData(GaugeData&&) = delete;
+    GaugeData& operator=(const GaugeData&) = delete;
+    GaugeData& operator=(GaugeData&&) = delete;
+    void print_results() const {
+      if (!map.empty()) {
+        std::cout << "Map growth gauge results\n";
+      }
+      for (const auto& [name, samples] : map) {
+        if (samples.empty()) {
+          continue;
+        }
+        std::vector<Sample> sorted_by_scan = samples;
+        std::sort(sorted_by_scan.begin(), sorted_by_scan.end(),
+                  [](const Sample& a, const Sample& b) { return a.scan_index < b.scan_index; });
+        const Sample& first = sorted_by_scan.front();
+        const Sample& last = sorted_by_scan.back();
+        const Sample& median = sorted_by_scan[sorted_by_scan.size() / 2];
+        std::cout << "\t" << name << ":\n"
+                  << "\t\tSample count: " << samples.size() << "\n"
+                  << "\t\tFirst  -> scan " << first.scan_index << ", active_voxels=" << first.active_voxels
+                  << ", stored_points=" << first.stored_points << "\n"
+                  << "\t\tMedian -> scan " << median.scan_index << ", active_voxels=" << median.active_voxels
+                  << ", stored_points=" << median.stored_points << "\n"
+                  << "\t\tLast   -> scan " << last.scan_index << ", active_voxels=" << last.active_voxels
+                  << ", stored_points=" << last.stored_points << "\n";
+      }
+    }
+    ~GaugeData() { print_results(); }
+  };
+  static inline GaugeData data_{};
+  static GaugeData& data() { return data_; }
+};
+
+/**
+ * [instrumentation, additive-only] Histogram of ICP iteration counts per scan,
+ * plus the mean per-iteration correspondence count, mirroring MapGrowthGauge's
+ * style: call sites push one sample per completed icp() call (see
+ * IcpResult::iterations_used / avg_correspondences_per_iteration in lio.cpp),
+ * and a summary prints to stdout at program exit alongside the other
+ * profiling output. Purely observational -- nothing here is read back into
+ * any pose/map computation.
+ */
+class IcpIterationHistogram {
+public:
+  /// Record one scan's ICP iteration count and its mean correspondences/iteration.
+  static void record(std::size_t iterations, double avg_correspondences_per_iteration) {
+    auto& d = data();
+    ++d.scan_count;
+    d.iteration_sum += iterations;
+    d.max_iterations = std::max(d.max_iterations, iterations);
+    d.correspondences_sum += avg_correspondences_per_iteration;
+    ++d.histogram[bucket_for(iterations)];
+  }
+
+  /// Print aggregated histogram results to stdout.
+  static void print_results() { data().print_results(); }
+
+private:
+  // Buckets: 1, 2, 3, 4, 5, 6-10, 11-20, 21-50, 51-100, 100+
+  static std::string bucket_for(std::size_t iterations) {
+    if (iterations <= 5) {
+      return std::to_string(iterations);
+    }
+    if (iterations <= 10) {
+      return "6-10";
+    }
+    if (iterations <= 20) {
+      return "11-20";
+    }
+    if (iterations <= 50) {
+      return "21-50";
+    }
+    if (iterations <= 100) {
+      return "51-100";
+    }
+    return "100+";
+  }
+
+  static const std::vector<std::string>& bucket_order() {
+    static const std::vector<std::string> order = {"1",  "2",     "3",     "4",      "5",
+                                                    "6-10", "11-20", "21-50", "51-100", "100+"};
+    return order;
+  }
+
+  class Data {
+  public:
+    std::size_t scan_count;
+    std::size_t iteration_sum;
+    std::size_t max_iterations;
+    double correspondences_sum;
+    std::unordered_map<std::string, std::size_t> histogram;
+    // Not using in-class default member initializers here: nested classes'
+    // default member initializers are only usable once the *enclosing*
+    // class's definition is complete, which conflicts with instantiating
+    // `data_` as an IcpIterationHistogram member below (GCC error: "default
+    // member initializer ... required before the end of its enclosing
+    // class"). An explicit constructor sidesteps that rule entirely.
+    Data() : scan_count(0), iteration_sum(0), max_iterations(0), correspondences_sum(0.0) {}
+    Data(const Data&) = delete;
+    Data(Data&&) = delete;
+    Data& operator=(const Data&) = delete;
+    Data& operator=(Data&&) = delete;
+    void print_results() const {
+      if (scan_count == 0) {
+        return;
+      }
+      std::cout << "ICP Iteration Histogram\n"
+                << "\tScans: " << scan_count << "\n"
+                << "\tMean iterations/scan: " << std::fixed << std::setprecision(2)
+                << (static_cast<double>(iteration_sum) / static_cast<double>(scan_count)) << "\n"
+                << "\tMax iterations (any scan): " << max_iterations << "\n"
+                << "\tMean correspondences/iteration (avg over scans): " << std::setprecision(1)
+                << (correspondences_sum / static_cast<double>(scan_count)) << "\n"
+                << "\tHistogram (iterations-to-converge -> scan count):\n";
+      for (const auto& bucket : bucket_order()) {
+        const auto it = histogram.find(bucket);
+        if (it == histogram.end()) {
+          continue;
+        }
+        std::cout << "\t\t" << bucket << ": " << it->second << "\n";
+      }
+    }
+    ~Data() { print_results(); }
+  };
+  static inline Data data_{};
+  static Data& data() { return data_; }
 };
 
 } // namespace rko_lio::core

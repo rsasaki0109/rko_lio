@@ -70,20 +70,36 @@ public:
 
   float total_bag_msgs = 0;
   float processed_bag_msgs = 0;
+  double replay_start_delay_sec = 0.0;
 
   explicit OfflineNode(const rclcpp::NodeOptions& options) : Node("rko_lio_offline_node", options) {
     // increase the lidar buffer limit because we're offline
     max_lidar_buffer_size = 100;
     // bag reading
     const tf2::Duration skip_to_time = tf2::durationFromSec(node->declare_parameter<double>("skip_to_time", 0.0));
+    std::vector<std::string> topics{imu_topic, lidar_topic};
+    if (direct_visual_frontend) {
+      topics.push_back(visual_image_topic);
+    }
     bag = std::make_unique<utils::BufferableBag>(node->declare_parameter<std::string>("bag_path"),
                                                  std::make_shared<utils::BufferableBag::TFBridge>(node),
-                                                 std::vector<std::string>{imu_topic, lidar_topic}, skip_to_time);
+                                                 topics, skip_to_time);
+    replay_start_delay_sec =
+        node->declare_parameter<double>("offline_replay_start_delay_sec", 0.0);
+    if (replay_start_delay_sec < 0.0) {
+      throw std::invalid_argument("offline_replay_start_delay_sec must be non-negative");
+    }
     total_bag_msgs = bag->message_count();
     bag_progress_publisher = node->create_publisher<std_msgs::msg::Float32MultiArray>("rko_lio/bag_progress", 10);
   }
 
   void run() {
+    if (replay_start_delay_sec > 0.0) {
+      RCLCPP_INFO(node->get_logger(),
+                  "Waiting %.3f s before offline replay so output subscribers can connect.",
+                  replay_start_delay_sec);
+      std::this_thread::sleep_for(std::chrono::duration<double>(replay_start_delay_sec));
+    }
     while (rclcpp::ok() && !bag->finished()) {
       bool throttle_bag_reading = false;
       size_t current_lidar_buffer_size = 0;
@@ -114,6 +130,9 @@ public:
       } else if (topic_name == lidar_topic) {
         const auto& lidar_msg = deserialize_next_msg<sensor_msgs::msg::PointCloud2>(serialized_msg);
         lidar_callback(lidar_msg);
+      } else if (direct_visual_frontend && topic_name == visual_image_topic) {
+        const auto& image_msg = deserialize_next_msg<sensor_msgs::msg::Image>(serialized_msg);
+        image_callback(image_msg);
       }
 
       processed_bag_msgs++;
@@ -130,6 +149,12 @@ public:
         }
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    flush_fixed_lag_outputs();
+    if (publish_fixed_lag_finalized) {
+      // Allow reliable DDS writers to hand the final window to recorders and
+      // graph subscribers before main() shuts down the ROS context.
+      std::this_thread::sleep_for(std::chrono::seconds(1));
     }
   }
 };

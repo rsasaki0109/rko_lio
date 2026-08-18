@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "lio.hpp"
+// [instrumentation, additive-only] scoped timer for the deskew transform.
+#include "profiler.hpp"
 
 namespace rko_lio::core {
 
@@ -28,18 +30,21 @@ PreprocessingResult preprocess_scan(const Vector3dVector& frame,
                                     const TimestampVector& timestamps,
                                     Secondsd end_time,
                                     const Functor& relative_pose_at_time,
-                                    const LIO::Config config) {
+                                    const LIO::Config& config) {
   if (!config.deskew) {
     return preprocess_scan(frame, config);
   }
 
-  const Sophus::SE3d scan_to_scan_motion_inverse = relative_pose_at_time(end_time).inverse();
   Vector3dVector deskewed_frame(frame.size());
-  std::transform(frame.cbegin(), frame.cend(), timestamps.cbegin(), deskewed_frame.begin(),
-                 [&](const Eigen::Vector3d& point, Secondsd timestamp) {
-                   const auto pose = scan_to_scan_motion_inverse * relative_pose_at_time(timestamp);
-                   return pose * point;
-                 });
+  {
+    SCOPED_PROFILER("Deskew");
+    const Sophus::SE3d scan_to_scan_motion_inverse = relative_pose_at_time(end_time).inverse();
+    std::transform(frame.cbegin(), frame.cend(), timestamps.cbegin(), deskewed_frame.begin(),
+                   [&](const Eigen::Vector3d& point, Secondsd timestamp) {
+                     const auto pose = scan_to_scan_motion_inverse * relative_pose_at_time(timestamp);
+                     return pose * point;
+                   });
+  }
 
   return preprocess_scan(deskewed_frame, config);
 }

@@ -57,6 +57,57 @@ PYBIND11_MODULE(rko_lio_pybind, m) {
   py::class_<LIO::Config>(m, "_LIOConfig")
       .def(py::init<>())
       .def_readwrite("deskew", &LIO::Config::deskew)
+      .def_readwrite("piecewise_gyro_deskew", &LIO::Config::piecewise_gyro_deskew)
+      .def_readwrite("fixed_lag_multiscan", &LIO::Config::fixed_lag_multiscan)
+      .def_readwrite("fixed_lag_window_size", &LIO::Config::fixed_lag_window_size)
+      .def_readwrite("fixed_lag_neighbor_scans", &LIO::Config::fixed_lag_neighbor_scans)
+      .def_readwrite(
+          "fixed_lag_pairwise_max_iterations",
+          &LIO::Config::fixed_lag_pairwise_max_iterations)
+      .def_readwrite(
+          "fixed_lag_scan_constraint_weight",
+          &LIO::Config::fixed_lag_scan_constraint_weight)
+      .def_readwrite(
+          "fixed_lag_odometry_prior_weight",
+          &LIO::Config::fixed_lag_odometry_prior_weight)
+      .def_readwrite(
+          "fixed_lag_pairwise_max_translation_m",
+          &LIO::Config::fixed_lag_pairwise_max_translation_m)
+      .def_readwrite(
+          "fixed_lag_pairwise_max_rotation_deg",
+          &LIO::Config::fixed_lag_pairwise_max_rotation_deg)
+      .def_readwrite(
+          "fixed_lag_pairwise_min_correspondences",
+          &LIO::Config::fixed_lag_pairwise_min_correspondences)
+      .def_readwrite(
+          "fixed_lag_pairwise_min_inlier_ratio",
+          &LIO::Config::fixed_lag_pairwise_min_inlier_ratio)
+      .def_readwrite(
+          "fixed_lag_pairwise_min_error_reduction",
+          &LIO::Config::fixed_lag_pairwise_min_error_reduction)
+      .def_readwrite(
+          "fixed_lag_max_pose_correction_m",
+          &LIO::Config::fixed_lag_max_pose_correction_m)
+      .def_readwrite(
+          "fixed_lag_max_pose_correction_deg",
+          &LIO::Config::fixed_lag_max_pose_correction_deg)
+      .def_readwrite(
+          "fixed_lag_max_latest_pose_correction_m",
+          &LIO::Config::fixed_lag_max_latest_pose_correction_m)
+      .def_readwrite(
+          "fixed_lag_max_latest_pose_correction_deg",
+          &LIO::Config::fixed_lag_max_latest_pose_correction_deg)
+      .def_readwrite(
+          "fixed_lag_fix_latest_pose",
+          &LIO::Config::fixed_lag_fix_latest_pose)
+      .def_readwrite(
+          "fixed_lag_huber_delta_m", &LIO::Config::fixed_lag_huber_delta_m)
+      .def_readwrite(
+          "fixed_lag_map_max_error_ratio",
+          &LIO::Config::fixed_lag_map_max_error_ratio)
+      .def_readwrite(
+          "fixed_lag_map_min_correspondence_ratio",
+          &LIO::Config::fixed_lag_map_min_correspondence_ratio)
       .def_readwrite("max_iterations", &LIO::Config::max_iterations)
       .def_readwrite("voxel_size", &LIO::Config::voxel_size)
       .def_readwrite("max_points_per_voxel", &LIO::Config::max_points_per_voxel)
@@ -68,13 +119,37 @@ PYBIND11_MODULE(rko_lio_pybind, m) {
       .def_readwrite("initialization_phase", &LIO::Config::initialization_phase)
       .def_readwrite("max_expected_jerk", &LIO::Config::max_expected_jerk)
       .def_readwrite("double_downsample", &LIO::Config::double_downsample)
+      .def_readwrite("icp_keypoint_voxel_multiplier", &LIO::Config::icp_keypoint_voxel_multiplier)
       .def_readwrite("min_beta", &LIO::Config::min_beta)
       .def_readwrite("degeneracy_aware_solve", &LIO::Config::degeneracy_aware_solve)
       .def_readwrite(
           "degeneracy_well_conditioned_ratio", &LIO::Config::degeneracy_well_conditioned_ratio)
       .def_readwrite(
           "degeneracy_multiplicity_relative_gap", &LIO::Config::degeneracy_multiplicity_relative_gap)
-      .def_readwrite("degeneracy_prior_weight", &LIO::Config::degeneracy_prior_weight);
+      .def_readwrite("degeneracy_prior_weight", &LIO::Config::degeneracy_prior_weight)
+      .def_readwrite("degeneracy_persistence_gate", &LIO::Config::degeneracy_persistence_gate)
+      .def_readwrite("degeneracy_persistence_min_scans", &LIO::Config::degeneracy_persistence_min_scans)
+      .def_readwrite("degeneracy_persistence_tracking_ratio", &LIO::Config::degeneracy_persistence_tracking_ratio)
+      .def_readwrite("degeneracy_persistence_min_absolute_cosine",
+                     &LIO::Config::degeneracy_persistence_min_absolute_cosine)
+      .def_readwrite("degeneracy_persistence_min_translation_fraction",
+                     &LIO::Config::degeneracy_persistence_min_translation_fraction)
+      .def_readwrite("degeneracy_adaptive_iteration_budget",
+                     &LIO::Config::degeneracy_adaptive_iteration_budget)
+      .def_readwrite("degeneracy_adaptive_max_iterations",
+                     &LIO::Config::degeneracy_adaptive_max_iterations)
+      .def_readwrite("degeneracy_adaptive_iteration_ratio",
+                     &LIO::Config::degeneracy_adaptive_iteration_ratio)
+      .def_readwrite("degeneracy_adaptive_hold_scans",
+                     &LIO::Config::degeneracy_adaptive_hold_scans)
+      .def_readwrite("degeneracy_multiscan_observability_gate",
+                     &LIO::Config::degeneracy_multiscan_observability_gate)
+      .def_readwrite("degeneracy_observability_window_scans",
+                     &LIO::Config::degeneracy_observability_window_scans)
+      .def_readwrite("degeneracy_observability_min_scans",
+                     &LIO::Config::degeneracy_observability_min_scans)
+      .def_readwrite("degeneracy_observability_max_directional_ratio",
+                     &LIO::Config::degeneracy_observability_max_directional_ratio);
 
   py::class_<LIO>(m, "_LIO")
       .def(py::init<const LIO::Config&>(), "config"_a)
@@ -118,7 +193,7 @@ PYBIND11_MODULE(rko_lio_pybind, m) {
             return self.register_scan(Sophus::SE3d(extrinsic_lidar2base), scan, tsd);
           },
           "extrinsic_lidar2base"_a, "scan"_a, "timestamps"_a)
-      .def("map_point_cloud", [](LIO& self) { return self.map.Pointcloud(); })
+      .def("map_point_cloud", [](LIO& self) { return self.local_map_pointcloud(); })
       .def("pose", [](LIO& self) { return self.lidar_state.pose.matrix(); })
       .def("poses_with_timestamps",
            [](LIO& self) {

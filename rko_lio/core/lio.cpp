@@ -41,6 +41,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <numbers>
 #include <numeric>
 #include <stdexcept>
 
@@ -54,11 +55,18 @@ inline void transform_points(const Sophus::SE3d& T, Vector3dVector& points) {
 }
 
 using LinearSystem = std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double>;
+template <typename VoxelMap>
 LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                                      const rko_lio::core::Vector3dVector& frame,
-                                     const rko_lio::core::SparseVoxelGrid& voxel_map,
+                                     const VoxelMap& voxel_map,
                                      const double& max_correspondance_distance,
-                                     const int voxel_search_radius = 1) {
+                                     const int voxel_search_radius = 1,
+                                     // [instrumentation, additive-only] optional out-param exposing this
+                                     // iteration's raw correspondence count, purely for the ICP iteration/
+                                     // correspondence histogram (see IcpIterationHistogram in profiler.hpp).
+                                     // Defaulted to nullptr so every existing call site is unaffected; the
+                                     // value written here is never read back into the solve below.
+                                     int* correspondences_out = nullptr) {
   auto linear_system_reduce = [](LinearSystem lhs, const LinearSystem& rhs) {
     auto& [lhs_H, lhs_b, lhs_chi] = lhs;
     const auto& [rhs_H, rhs_b, rhs_chi] = rhs;
@@ -73,15 +81,17 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
     J_r.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
     J_r.block<3, 3>(0, 3) = -1.0 * Sophus::SO3d::hat(source);
     const Eigen::Vector3d residual = source - target;
-    return LinearSystem(J_r.transpose() * J_r,      // JTJ
-                        J_r.transpose() * residual, // JTr
-                        residual.squaredNorm());    // chi
+    return LinearSystem(J_r.transpose() * J_r,
+                        J_r.transpose() * residual,
+                        residual.squaredNorm());
   };
 
   // The only parallel part
   using points_iterator = std::vector<Eigen::Vector3d>::const_iterator;
   std::atomic<int> correspondances_counter = 0;
-  const auto& [H_icp, b_icp, chi_icp] = tbb::parallel_reduce(
+  // A fixed reduction tree keeps primary ICP invariant when optional
+  // frontends add other TBB workloads between scans.
+  const auto& [H_icp, b_icp, chi_icp] = tbb::parallel_deterministic_reduce(
       // Range
       tbb::blocked_range<points_iterator>{frame.cbegin(), frame.cend()},
       // Identity
@@ -105,6 +115,11 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
 
   if (correspondances_counter == 0) {
     throw std::runtime_error("Number of correspondences are 0.");
+  }
+
+  // [instrumentation, additive-only] see parameter comment above.
+  if (correspondences_out != nullptr) {
+    *correspondences_out = correspondances_counter.load();
   }
 
   return {H_icp / correspondances_counter, b_icp / correspondances_counter, 0.5 * chi_icp};
@@ -134,14 +149,29 @@ struct IcpResult {
   Sophus::SE3d pose;
   Eigen::Matrix6d H = Eigen::Matrix6d::Zero();
   Eigen::Vector6d b = Eigen::Vector6d::Zero();
+  std::size_t degeneracy_intervention_count = 0;
+  std::size_t visual_fused_directions = 0;
+  std::size_t visual_unobservable_directions = 0;
+  std::array<double, 6> visual_directional_information_ratios{};
+  std::size_t visual_directional_information_ratio_count = 0;
+  // [instrumentation, additive-only] iterations actually taken by the Gauss-
+  // Newton loop below (1..iteration_budget) and the mean per-iteration
+  // correspondence count, purely for the ICP iteration histogram. Neither
+  // value is read back into the pose/H/b computation.
+  std::size_t iterations_used = 0;
+  double avg_correspondences_per_iteration = 0.0;
 };
 
+template <typename VoxelMap>
 IcpResult icp(const Vector3dVector& frame,
-             const SparseVoxelGrid& voxel_map,
+             const VoxelMap& voxel_map,
              const Sophus::SE3d& initial_guess,
              const LIO::Config& config,
              const std::optional<AccelInfo>& optional_accel_info,
-             const int voxel_search_radius = 1) {
+             const int voxel_search_radius = 1,
+             const PersistentWeakDirectionState& persistent_direction = {},
+             const bool start_with_extended_iteration_budget = false,
+             const std::optional<VisualPosePrior>& visual_pose_prior = std::nullopt) {
   // in case config disables it, or we don't have valid IMU information for this icp loop, beta is -1
   const double beta = (config.min_beta > 0 && optional_accel_info.has_value())
                           ? (config.min_beta * (1 + optional_accel_info->accel_mag_variance))
@@ -152,12 +182,23 @@ IcpResult icp(const Vector3dVector& frame,
   // around purely to hand back to the caller alongside the pose.
   Eigen::Matrix6d last_H = Eigen::Matrix6d::Zero();
   Eigen::Vector6d last_b = Eigen::Vector6d::Zero();
+  std::size_t degeneracy_intervention_count = 0;
 
-  for (size_t i = 0; i < config.max_iterations; ++i) {
+  std::size_t iteration_budget =
+      start_with_extended_iteration_budget
+          ? std::max(config.max_iterations, config.degeneracy_adaptive_max_iterations)
+          : config.max_iterations;
+  // [instrumentation, additive-only] tallies feeding IcpResult::iterations_used
+  // / avg_correspondences_per_iteration; see the struct comment above.
+  std::size_t iterations_used = 0;
+  long long correspondences_sum = 0;
+  for (size_t i = 0; i < iteration_budget; ++i) {
+    int correspondences_this_iteration = 0;
     const auto& [H, b, chi] = std::invoke([&]() -> LinearSystem {
       const auto& [H_icp, b_icp, chi_icp] =
           build_icp_linear_system(
-              current_pose, frame, voxel_map, config.max_correspondance_distance, voxel_search_radius);
+              current_pose, frame, voxel_map, config.max_correspondance_distance, voxel_search_radius,
+              &correspondences_this_iteration);
       if (beta >= 0) {
         const auto& [H_ori, b_ori, chi_ori] =
             build_orientation_linear_system(current_pose, optional_accel_info->local_gravity_estimate);
@@ -167,6 +208,10 @@ IcpResult icp(const Vector3dVector& frame,
     });
     last_H = H;
     last_b = b;
+    if (config.degeneracy_adaptive_iteration_budget &&
+        has_weak_information_direction(H, config.degeneracy_adaptive_iteration_ratio)) {
+      iteration_budget = std::max(iteration_budget, config.degeneracy_adaptive_max_iterations);
+    }
 
     Eigen::Vector6d dx;
     if (config.degeneracy_aware_solve) {
@@ -175,25 +220,83 @@ IcpResult icp(const Vector3dVector& frame,
       solve_config.well_conditioned_ratio = config.degeneracy_well_conditioned_ratio;
       solve_config.multiplicity_relative_gap = config.degeneracy_multiplicity_relative_gap;
       solve_config.degenerate_prior_weight = config.degeneracy_prior_weight;
+      solve_config.require_persistent_direction = config.degeneracy_persistence_gate;
+      solve_config.persistent_direction_min_absolute_cosine =
+          config.degeneracy_persistence_min_absolute_cosine;
+      solve_config.persistent_direction = persistent_direction;
       const DegeneracyAwareSolveResult solve_result = solve_degeneracy_aware(H, b, prior_update, solve_config);
       if (!solve_result.valid) {
         throw std::runtime_error("Degeneracy-aware ICP solve failed.");
       }
       dx = solve_result.update;
+      degeneracy_intervention_count += solve_result.intervention_applied ? 1U : 0U;
     } else {
       dx = H.ldlt().solve(-b);
     }
     current_pose = Sophus::SE3d::exp(dx) * current_pose;
 
-    if (dx.norm() < config.convergence_criterion || i == (config.max_iterations - 1)) {
+    // [instrumentation, additive-only]
+    iterations_used = i + 1;
+    correspondences_sum += correspondences_this_iteration;
+
+    if (dx.norm() < config.convergence_criterion || i == (iteration_budget - 1)) {
       // TODO: proper debug logging
       // std::cout << "iter " << i << ", beta: " << beta << ", chi: " << chi << ", num_assoc: " <<
       // correspondences.size() << "\n";
       break;
     }
   }
-  return {current_pose, last_H, last_b};
+  // [instrumentation, additive-only]
+  const double avg_correspondences_per_iteration =
+      iterations_used > 0 ? static_cast<double>(correspondences_sum) / static_cast<double>(iterations_used) : 0.0;
+  std::size_t visual_fused_directions = 0;
+  std::size_t visual_unobservable_directions = 0;
+  std::array<double, 6> visual_directional_information_ratios{};
+  std::size_t visual_directional_information_ratio_count = 0;
+  if (visual_pose_prior.has_value()) {
+    const Eigen::Vector6d visual_update =
+        (visual_pose_prior->pose * current_pose.inverse()).log();
+    const auto fused = fuse_visual_in_weak_directions(
+        last_H, last_b, visual_update,
+        visual_pose_prior->confidence, config.visual_fusion);
+    visual_unobservable_directions = fused.visual_unobservable_directions;
+    visual_directional_information_ratios =
+        fused.visual_directional_information_ratios;
+    visual_directional_information_ratio_count =
+        fused.visual_directional_information_ratio_count;
+    if (fused.accepted) {
+      const Eigen::Vector6d dx = fused.H.ldlt().solve(-fused.b);
+      if (!dx.allFinite()) {
+        throw std::runtime_error("Selective visual fusion solve failed.");
+      }
+      current_pose = Sophus::SE3d::exp(dx) * current_pose;
+      last_H = fused.H;
+      last_b = fused.b;
+      visual_fused_directions = fused.fused_directions;
+    }
+  }
+  return {current_pose, last_H, last_b, degeneracy_intervention_count,
+          visual_fused_directions, visual_unobservable_directions,
+          visual_directional_information_ratios,
+          visual_directional_information_ratio_count,
+          iterations_used, avg_correspondences_per_iteration};
 }
+
+struct CompositeVoxelMap {
+  const SparseVoxelGrid& frozen;
+  const SparseVoxelGrid& active;
+
+  std::tuple<Eigen::Vector3d, double> GetClosestNeighbor(
+      const Eigen::Vector3d& query,
+      const int voxel_search_radius) const {
+    const auto frozen_result =
+        frozen.GetClosestNeighbor(query, voxel_search_radius);
+    const auto active_result =
+        active.GetClosestNeighbor(query, voxel_search_radius);
+    return std::get<1>(active_result) < std::get<1>(frozen_result) ?
+      active_result : frozen_result;
+  }
+};
 
 struct AlignmentStats {
   int correspondences = 0;
@@ -201,9 +304,10 @@ struct AlignmentStats {
   double mean_error = std::numeric_limits<double>::max();
 };
 
+template <typename VoxelMap>
 AlignmentStats evaluate_alignment(const Sophus::SE3d& pose,
                                   const Vector3dVector& frame,
-                                  const SparseVoxelGrid& voxel_map,
+                                  const VoxelMap& voxel_map,
                                   const double max_correspondance_distance,
                                   const int voxel_search_radius) {
   if (frame.empty()) {
@@ -262,6 +366,7 @@ void LIO::initialize(const Secondsd lidar_time) {
     std::cerr << "[WARNING] Cannot initialize. No imu measurements received.\n";
     // lidar_state.time has the time from the previous lidar, which we didn't log if init_phase was on
     poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+    tracking_poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
     _initialized = true;
     return;
   }
@@ -275,6 +380,7 @@ void LIO::initialize(const Secondsd lidar_time) {
 
   // lidar_state.time has the time from the previous lidar, which we didn't log if init_phase was on
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  tracking_poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
 
   // the pose for the current time gets logged at the end of register_scan in the typical fashion
   lidar_state.time = lidar_time;
@@ -329,10 +435,263 @@ std::optional<AccelInfo> LIO::get_accel_info(const Sophus::SO3d& rotation_estima
 void LIO::update_maps(const Vector3dVector& map_update_frame, const Sophus::SE3d& pose) {
   map.Update(map_update_frame, pose);
 
-  Vector3dVector points_transformed(map_update_frame.size());
-  std::transform(map_update_frame.cbegin(), map_update_frame.cend(), points_transformed.begin(),
-                 [&](const auto& point) { return pose * point; });
-  relocalization_map.AddPoints(points_transformed);
+  // [instrumentation, additive-only] Periodic map-growth gauge: sample the
+  // registration map's active voxel count and stored point count so growth
+  // over a run is visible. Sampled every N scans (count-only, no per-point
+  // work or point copies) to keep overhead negligible; does not affect the
+  // pose/map computation above or below.
+  ++_map_growth_scan_counter;
+  constexpr std::size_t kMapGrowthSampleStride = 25;
+  if (_map_growth_scan_counter == 1 || _map_growth_scan_counter % kMapGrowthSampleStride == 0) {
+    MapGrowthGauge::sample(
+        "RegistrationMap", _map_growth_scan_counter, map.map_.activeCellsCount(), map.ActivePointCount());
+  }
+
+  // The unpruned global map exists only for the opt-in kidnap recovery path.
+  // Avoid transforming, copying, and retaining every map point when recovery
+  // is disabled (the normal SLAM-only configuration).
+  if (config.enable_kidnap_relocalization) {
+    Vector3dVector points_transformed(map_update_frame.size());
+    std::transform(map_update_frame.cbegin(), map_update_frame.cend(), points_transformed.begin(),
+                   [&](const auto& point) { return pose * point; });
+    relocalization_map.AddPoints(points_transformed);
+  }
+}
+
+bool LIO::local_map_empty() const {
+  return config.fixed_lag_multiscan ?
+      (_fixed_lag_frozen_map.Empty() && _fixed_lag_active_map.Empty()) :
+      map.Empty();
+}
+
+Vector3dVector LIO::local_map_pointcloud() const {
+  Vector3dVector points = config.fixed_lag_multiscan ?
+      _fixed_lag_frozen_map.Pointcloud() : map.Pointcloud();
+  if (config.fixed_lag_multiscan) {
+    Vector3dVector active_points = _fixed_lag_active_map.Pointcloud();
+    points.insert(
+        points.end(), std::make_move_iterator(active_points.begin()),
+        std::make_move_iterator(active_points.end()));
+  }
+  return points;
+}
+
+void LIO::reset_fixed_lag_window() {
+  finalize_fixed_lag_window();
+  _fixed_lag_frozen_map.Clear();
+  _fixed_lag_active_map.Clear();
+  _fixed_lag_tracking_pose = Sophus::SE3d{};
+  _fixed_lag_frames.clear();
+  _fixed_lag_scan_constraints.clear();
+}
+
+std::vector<LIO::FinalizedFixedLagPose> LIO::take_finalized_fixed_lag_poses() {
+  std::vector<FinalizedFixedLagPose> finalized;
+  finalized.swap(_finalized_fixed_lag_poses);
+  return finalized;
+}
+
+void LIO::finalize_fixed_lag_window() {
+  for (FixedLagFrame& frame : _fixed_lag_frames) {
+    _finalized_fixed_lag_poses.push_back({frame.time, frame.pose});
+    _fixed_lag_frozen_map.Update(frame.map_update_frame, frame.pose);
+  }
+  _fixed_lag_frames.clear();
+  _fixed_lag_scan_constraints.clear();
+  _fixed_lag_active_map.Clear();
+}
+
+void LIO::rebuild_fixed_lag_active_map() {
+  _fixed_lag_active_map.Clear();
+  for (const FixedLagFrame& frame : _fixed_lag_frames) {
+    _fixed_lag_active_map.Update(frame.map_update_frame, frame.pose);
+  }
+}
+
+Sophus::SE3d LIO::update_fixed_lag_window(
+    const Vector3dVector& map_update_frame,
+    const Vector3dVector& keypoints,
+    const Secondsd& time,
+    const Sophus::SE3d& pose) {
+  const std::size_t window_size = std::max<std::size_t>(2U, config.fixed_lag_window_size);
+  const std::size_t new_index = _fixed_lag_frames.size();
+  const std::size_t neighbor_count = std::min(
+      config.fixed_lag_neighbor_scans, _fixed_lag_frames.size());
+  const std::size_t first_neighbor = _fixed_lag_frames.size() - neighbor_count;
+
+  LIO::Config pairwise_config = config;
+  pairwise_config.max_iterations = std::max<std::size_t>(
+      1U, config.fixed_lag_pairwise_max_iterations);
+  pairwise_config.min_beta = -1.0;
+  pairwise_config.degeneracy_aware_solve = false;
+  pairwise_config.degeneracy_adaptive_iteration_budget = false;
+  pairwise_config.visual_fusion.enabled = false;
+  pairwise_config.fixed_lag_multiscan = false;
+
+  for (std::size_t neighbor_index = first_neighbor;
+       neighbor_index < _fixed_lag_frames.size(); ++neighbor_index) {
+    ++fixed_lag_pairwise_attempt_count;
+    const FixedLagFrame& neighbor = _fixed_lag_frames[neighbor_index];
+    SparseVoxelGrid target(
+        config.voxel_size, config.max_range, config.max_points_per_voxel);
+    target.AddPoints(neighbor.keypoints);
+    const Sophus::SE3d initial_relative = neighbor.pose.inverse() * pose;
+    try {
+      const AlignmentStats initial_alignment = evaluate_alignment(
+          initial_relative, keypoints, target,
+          config.max_correspondance_distance, 1);
+      const IcpResult pairwise = icp(
+          keypoints, target, initial_relative, pairwise_config, std::nullopt);
+      const AlignmentStats refined_alignment = evaluate_alignment(
+          pairwise.pose, keypoints, target,
+          config.max_correspondance_distance, 1);
+      const Eigen::Vector6d correction =
+          (pairwise.pose * initial_relative.inverse()).log();
+      const double rotation_deg = correction.tail<3>().norm() *
+          180.0 / std::numbers::pi;
+      if (correction.head<3>().norm() <=
+              config.fixed_lag_pairwise_max_translation_m &&
+          rotation_deg <= config.fixed_lag_pairwise_max_rotation_deg &&
+          refined_alignment.correspondences >= static_cast<int>(
+              config.fixed_lag_pairwise_min_correspondences) &&
+          refined_alignment.inlier_ratio >=
+              config.fixed_lag_pairwise_min_inlier_ratio &&
+          refined_alignment.mean_error <= initial_alignment.mean_error *
+              (1.0 - config.fixed_lag_pairwise_min_error_reduction)) {
+        _fixed_lag_scan_constraints.push_back({
+            neighbor_index, new_index, pairwise.pose,
+            config.fixed_lag_scan_constraint_weight});
+        ++fixed_lag_pairwise_accept_count;
+      }
+    } catch (const std::exception&) {
+      // A missing pairwise overlap removes one optional factor. The primary
+      // scan-to-map registration has already accepted this frame.
+    }
+  }
+
+  _fixed_lag_frames.push_back({
+      time, pose, pose, map_update_frame, keypoints, poses_with_timestamps.size()});
+
+  std::vector<Sophus::SE3d> initial_poses;
+  initial_poses.reserve(_fixed_lag_frames.size());
+  for (const FixedLagFrame& frame : _fixed_lag_frames) {
+    initial_poses.push_back(frame.pose);
+  }
+  std::vector<FixedLagRelativeConstraint> constraints =
+      _fixed_lag_scan_constraints;
+  for (std::size_t pose_index = 1U; pose_index < _fixed_lag_frames.size(); ++pose_index) {
+    constraints.push_back({
+        0U, pose_index,
+        _fixed_lag_frames.front().odometry_pose.inverse() *
+            _fixed_lag_frames[pose_index].odometry_pose,
+        config.fixed_lag_odometry_prior_weight});
+  }
+
+  FixedLagPoseOptimizerConfig optimizer_config;
+  optimizer_config.huber_delta_m = config.fixed_lag_huber_delta_m;
+  optimizer_config.fix_latest_pose = config.fixed_lag_fix_latest_pose;
+  const FixedLagPoseOptimizerResult optimized =
+      optimize_fixed_lag_poses(initial_poses, constraints, optimizer_config);
+  ++fixed_lag_window_attempt_count;
+  bool accept_optimization = optimized.valid &&
+      optimized.final_cost <= optimized.initial_cost;
+  if (accept_optimization) {
+    for (std::size_t pose_index = 0U; pose_index < optimized.poses.size(); ++pose_index) {
+      // Gate total displacement from primary odometry, not merely this
+      // iteration's increment. Otherwise many individually-small accepted
+      // window solves can accumulate an unbounded trajectory deformation.
+      const Eigen::Vector6d correction =
+          (optimized.poses[pose_index] *
+           _fixed_lag_frames[pose_index].odometry_pose.inverse()).log();
+      const double rotation_deg = correction.tail<3>().norm() *
+          180.0 / std::numbers::pi;
+      const bool latest_pose = pose_index + 1U == optimized.poses.size();
+      if (correction.head<3>().norm() > config.fixed_lag_max_pose_correction_m ||
+          rotation_deg > config.fixed_lag_max_pose_correction_deg ||
+          (latest_pose &&
+           (correction.head<3>().norm() >
+                config.fixed_lag_max_latest_pose_correction_m ||
+            rotation_deg >
+                config.fixed_lag_max_latest_pose_correction_deg))) {
+        accept_optimization = false;
+        break;
+      }
+    }
+  }
+  if (accept_optimization && !_fixed_lag_frames.empty()) {
+    const CompositeVoxelMap target_map{
+        _fixed_lag_frozen_map, _fixed_lag_active_map};
+    if (!_fixed_lag_frozen_map.Empty() || !_fixed_lag_active_map.Empty()) {
+      const AlignmentStats initial_alignment = evaluate_alignment(
+          pose, keypoints, target_map, config.max_correspondance_distance, 1);
+      const AlignmentStats refined_alignment = evaluate_alignment(
+          optimized.poses.back(), keypoints, target_map,
+          config.max_correspondance_distance, 1);
+      const double minimum_correspondences =
+          config.fixed_lag_map_min_correspondence_ratio *
+          static_cast<double>(initial_alignment.correspondences);
+      if (static_cast<double>(refined_alignment.correspondences) <
+              minimum_correspondences ||
+          refined_alignment.mean_error > initial_alignment.mean_error *
+              config.fixed_lag_map_max_error_ratio) {
+        accept_optimization = false;
+      }
+    }
+  }
+  if (accept_optimization) {
+    ++fixed_lag_window_accept_count;
+    for (std::size_t pose_index = 0U; pose_index < optimized.poses.size(); ++pose_index) {
+      FixedLagFrame& frame = _fixed_lag_frames[pose_index];
+      const Eigen::Vector6d applied =
+          (optimized.poses[pose_index] * frame.pose.inverse()).log();
+      const double applied_translation_m = applied.head<3>().norm();
+      const double applied_rotation_deg =
+          applied.tail<3>().norm() * 180.0 / std::numbers::pi;
+      fixed_lag_max_applied_translation_m = std::max(
+          fixed_lag_max_applied_translation_m, applied_translation_m);
+      fixed_lag_max_applied_rotation_deg = std::max(
+          fixed_lag_max_applied_rotation_deg, applied_rotation_deg);
+      ++fixed_lag_applied_pose_count;
+      fixed_lag_applied_translation_squared_sum +=
+          applied_translation_m * applied_translation_m;
+      fixed_lag_applied_rotation_deg_squared_sum +=
+          applied_rotation_deg * applied_rotation_deg;
+      if (pose_index + 1U == optimized.poses.size()) {
+        fixed_lag_max_latest_translation_m = std::max(
+            fixed_lag_max_latest_translation_m, applied_translation_m);
+        fixed_lag_max_latest_rotation_deg = std::max(
+            fixed_lag_max_latest_rotation_deg, applied_rotation_deg);
+      }
+      frame.pose = optimized.poses[pose_index];
+      if (frame.pose_history_index < poses_with_timestamps.size()) {
+        poses_with_timestamps[frame.pose_history_index].second = frame.pose;
+      }
+    }
+  }
+
+  while (_fixed_lag_frames.size() > window_size) {
+    FixedLagFrame marginalized = std::move(_fixed_lag_frames.front());
+    _fixed_lag_frames.pop_front();
+    _finalized_fixed_lag_poses.push_back({marginalized.time, marginalized.pose});
+    _fixed_lag_frozen_map.Update(
+        marginalized.map_update_frame, marginalized.pose);
+    std::vector<FixedLagRelativeConstraint> shifted_constraints;
+    shifted_constraints.reserve(_fixed_lag_scan_constraints.size());
+    for (FixedLagRelativeConstraint constraint : _fixed_lag_scan_constraints) {
+      if (constraint.from == 0U || constraint.to == 0U) {
+        continue;
+      }
+      --constraint.from;
+      --constraint.to;
+      shifted_constraints.push_back(std::move(constraint));
+    }
+    _fixed_lag_scan_constraints = std::move(shifted_constraints);
+  }
+  _fixed_lag_frozen_map.RemovePointsFarFromLocation(
+      _fixed_lag_frames.back().pose.translation());
+  rebuild_fixed_lag_active_map();
+
+  return _fixed_lag_frames.back().pose;
 }
 
 Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
@@ -340,6 +699,7 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
                                       const Secondsd& current_lidar_time,
                                       const Sophus::SE3d& recovery_pose,
                                       const std::string& reason) {
+  reset_fixed_lag_window();
   map.Clear();
   lidar_state.pose = recovery_pose;
   lidar_state.time = current_lidar_time;
@@ -350,11 +710,25 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
   // `recovery_pose` did not come from a normal incremental ICP solve against
   // it, so any previously-recorded H/b would describe a now-irrelevant map.
   lidar_state.icp_diagnostics = std::nullopt;
+  _persistent_weak_direction_tracker.reset();
   _imu_local_rotation = recovery_pose.so3();
   _imu_local_rotation_time = current_lidar_time;
   interval_stats.reset();
-  update_maps(map_update_frame, lidar_state.pose);
+  _deskew_gyro_samples.clear();
+  if (config.fixed_lag_multiscan) {
+    _fixed_lag_tracking_pose = recovery_pose;
+    update_maps(map_update_frame, recovery_pose);
+    const Sophus::SE3d refined_pose = update_fixed_lag_window(
+        map_update_frame, map_update_frame, current_lidar_time, recovery_pose);
+    lidar_state.pose = config.fixed_lag_fix_latest_pose ?
+        _fixed_lag_tracking_pose : refined_pose;
+  } else {
+    update_maps(map_update_frame, lidar_state.pose);
+  }
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  tracking_poses_with_timestamps.emplace_back(
+      lidar_state.time, config.fixed_lag_multiscan ?
+          _fixed_lag_tracking_pose : lidar_state.pose);
   _consecutive_registration_failures = 0;
   std::cout << "[INFO] Kidnap recovery accepted scan at " << current_lidar_time.count() << "s via " << reason
             << ".\n";
@@ -365,8 +739,10 @@ Vector3dVector LIO::drop_failed_scan(const Secondsd& current_lidar_time, const s
   lidar_state.time = current_lidar_time;
   // [v0.8 Phase 1, diagnostic-only] no ICP solve happened for the dropped scan.
   lidar_state.icp_diagnostics = std::nullopt;
+  _persistent_weak_direction_tracker.reset();
   _imu_local_rotation_time = current_lidar_time;
   interval_stats.reset();
+  _deskew_gyro_samples.clear();
   std::cerr << "[WARNING] Dropping scan during kidnap recovery: " << reason << "\n";
   return {};
 }
@@ -480,6 +856,8 @@ void LIO::add_imu_measurement(const ImuControl& base_imu) {
   const Eigen::Vector3d unbiased_ang_vel = base_imu.angular_velocity - imu_bias.gyroscope;
   const Eigen::Vector3d unbiased_accel = base_imu.acceleration - imu_bias.accelerometer;
 
+  _deskew_gyro_samples.push_back({base_imu.time, unbiased_ang_vel});
+
   _imu_local_rotation = _imu_local_rotation * Sophus::SO3d::exp(unbiased_ang_vel * dt);
   _imu_local_rotation_time = base_imu.time;
 
@@ -536,6 +914,31 @@ void LIO::add_imu_measurement(const Sophus::SE3d& extrinsic_imu2base, const ImuC
   this->add_imu_measurement(base_imu);
 }
 
+Sophus::SE3d LIO::predict_pose_at(const Secondsd& time) const {
+  const double dt = (time - lidar_state.time).count();
+  Eigen::Vector3d average_acceleration = Eigen::Vector3d::Zero();
+  Eigen::Vector3d average_angular_velocity = Eigen::Vector3d::Zero();
+  if (config.initialization_phase && !_initialized) {
+    // The registration path assumes zero motion while collecting its
+    // initialization window.
+  } else if (interval_stats.imu_count > 0) {
+    average_acceleration =
+        interval_stats.body_acceleration_sum / interval_stats.imu_count;
+    average_angular_velocity =
+        interval_stats.angular_velocity_sum / interval_stats.imu_count;
+  } else {
+    average_angular_velocity = lidar_state.angular_velocity;
+  }
+  Eigen::Vector6d motion = Eigen::Vector6d::Zero();
+  motion.head<3>() = lidar_state.velocity * dt +
+                     average_acceleration * square(dt) / 2.0;
+  motion.tail<3>() = average_angular_velocity * dt;
+  const Sophus::SE3d& base_pose =
+      config.fixed_lag_multiscan && !config.fixed_lag_fix_latest_pose ?
+          _fixed_lag_tracking_pose : lidar_state.pose;
+  return base_pose * Sophus::SE3d::exp(motion);
+}
+
 // ============================ lidar ===============================
 
 Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVector& timestamps) {
@@ -548,8 +951,21 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
     const auto& preproc_result = preprocess_scan(scan, config);
     if (!config.initialization_phase) {
       // use the first frame for the map only if we're not initializing
-      update_maps(preproc_result.map_update_frame(), lidar_state.pose);
+      if (config.fixed_lag_multiscan) {
+        _fixed_lag_tracking_pose = lidar_state.pose;
+        update_maps(preproc_result.map_update_frame(), _fixed_lag_tracking_pose);
+        const Sophus::SE3d refined_pose = update_fixed_lag_window(
+            preproc_result.map_update_frame(), preproc_result.keypoints,
+            lidar_state.time, lidar_state.pose);
+        lidar_state.pose = config.fixed_lag_fix_latest_pose ?
+            _fixed_lag_tracking_pose : refined_pose;
+      } else {
+        update_maps(preproc_result.map_update_frame(), lidar_state.pose);
+      }
       poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+      tracking_poses_with_timestamps.emplace_back(
+          lidar_state.time, config.fixed_lag_multiscan ?
+              _fixed_lag_tracking_pose : lidar_state.pose);
       std::cout << "[INFO] Odometry map frame initialized with first lidar scan.\n";
     }
     return preproc_result.filtered_frame;
@@ -587,10 +1003,26 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
     Eigen::Matrix<double, 6, 1> tau;
     tau.head<3>() = lidar_state.velocity * dt + (avg_body_accel * square(dt) / 2);
     tau.tail<3>() = avg_ang_vel * dt;
-    return Sophus::SE3d::exp(tau);
+    const Sophus::SE3d constant_twist_pose = Sophus::SE3d::exp(tau);
+    if (!config.piecewise_gyro_deskew || time < lidar_state.time) {
+      return constant_twist_pose;
+    }
+    const Sophus::SO3d integrated_rotation = integrate_piecewise_angular_velocity(
+        _deskew_gyro_samples, lidar_state.time, time, lidar_state.angular_velocity);
+    return Sophus::SE3d(integrated_rotation, constant_twist_pose.translation());
   };
 
-  const Sophus::SE3d initial_guess = lidar_state.pose * relative_pose_at_time(current_lidar_time);
+  const Sophus::SE3d initial_guess = predict_pose_at(current_lidar_time);
+
+  std::optional<VisualPosePrior> visual_pose_prior;
+  if (_visual_pose_prior.has_value() && config.visual_fusion.enabled &&
+      std::abs((_visual_pose_prior->time - current_lidar_time).count()) <=
+          config.visual_prior_max_time_offset_sec) {
+    visual_pose_prior = _visual_pose_prior;
+  }
+  // A camera measurement is single-use even when stale or rejected. This
+  // prevents one visual edge from being silently applied to multiple scans.
+  _visual_pose_prior.reset();
 
   // body acceleration filter
   const auto& accel_filter_info = get_accel_info(initial_guess.so3(), current_lidar_time);
@@ -604,6 +1036,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
         ". Config voxel size = " + std::to_string(config.voxel_size) +
         ". Either the input scan is corrupt (empty) or the downsampling is too aggressive.";
     ++_consecutive_registration_failures;
+    _persistent_weak_direction_tracker.reset();
     if (config.reset_on_registration_failure &&
         _consecutive_registration_failures >= std::max(1, config.recovery_min_failures)) {
       return drop_failed_scan(current_lidar_time, error_msg);
@@ -628,20 +1061,51 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
   // itself, so this covers the remaining "about to attempt icp()" case.
   lidar_state.icp_diagnostics = std::nullopt;
 
-  if (!map.Empty()) {
+  const bool registration_map_empty = map.Empty();
+  if (!registration_map_empty) {
     SCOPED_PROFILER("ICP");
     Sophus::SE3d optimized_pose;
     // [v0.8 Phase 1, diagnostic-only] final ICP linear system, threaded into
     // lidar_state.icp_diagnostics below on success.
     Eigen::Matrix6d icp_H = Eigen::Matrix6d::Zero();
     Eigen::Vector6d icp_b = Eigen::Vector6d::Zero();
+    std::size_t degeneracy_intervention_count = 0;
+    std::size_t visual_fused_directions = 0;
+    std::size_t visual_unobservable_directions = 0;
+    std::array<double, 6> visual_directional_information_ratios{};
+    std::size_t visual_directional_information_ratio_count = 0;
     try {
-      const IcpResult icp_result = icp(preproc_result.keypoints, map, initial_guess, config, accel_filter_info);
+      const auto run_primary_icp = [&](const auto& target_map) {
+        return icp(preproc_result.keypoints,
+                   target_map,
+                   initial_guess,
+                   config,
+                   accel_filter_info,
+                   1,
+                   _persistent_weak_direction_tracker.state(),
+                   config.degeneracy_adaptive_iteration_budget &&
+                       _adaptive_iteration_hold_remaining > 0,
+                   visual_pose_prior);
+      };
+      const IcpResult icp_result = run_primary_icp(map);
+      // [instrumentation, additive-only] see IcpIterationHistogram in
+      // profiler.hpp; purely observational, does not affect optimized_pose.
+      IcpIterationHistogram::record(icp_result.iterations_used, icp_result.avg_correspondences_per_iteration);
       optimized_pose = icp_result.pose;
       icp_H = icp_result.H;
       icp_b = icp_result.b;
+      degeneracy_intervention_count = icp_result.degeneracy_intervention_count;
+      visual_fused_directions = icp_result.visual_fused_directions;
+      visual_unobservable_directions =
+          icp_result.visual_unobservable_directions;
+      visual_directional_information_ratios =
+          icp_result.visual_directional_information_ratios;
+      visual_directional_information_ratio_count =
+          icp_result.visual_directional_information_ratio_count;
     } catch (const std::exception&) {
       ++_consecutive_registration_failures;
+      _persistent_weak_direction_tracker.reset();
+      _adaptive_iteration_hold_remaining = 0;
       if (_consecutive_registration_failures < std::max(1, config.recovery_min_failures)) {
         throw;
       }
@@ -662,9 +1126,24 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
       throw;
     }
 
+    const Sophus::SE3d previous_pose_for_motion =
+        config.fixed_lag_multiscan && !config.fixed_lag_fix_latest_pose ?
+            _fixed_lag_tracking_pose : lidar_state.pose;
+    const Sophus::SE3d tracking_pose = optimized_pose;
+    if (config.fixed_lag_multiscan) {
+      update_maps(preproc_result.map_update_frame(), tracking_pose);
+      _fixed_lag_tracking_pose = tracking_pose;
+      const Sophus::SE3d refined_pose = update_fixed_lag_window(
+          preproc_result.map_update_frame(), preproc_result.keypoints,
+          current_lidar_time, optimized_pose);
+      optimized_pose = config.fixed_lag_fix_latest_pose ?
+          tracking_pose : refined_pose;
+    }
+
     // estimate velocities and accelerations from the new pose
     const double dt = (current_lidar_time - lidar_state.time).count();
-    const Sophus::SE3d motion = lidar_state.pose.inverse() * optimized_pose;
+    const Sophus::SE3d motion =
+        previous_pose_for_motion.inverse() * tracking_pose;
     const Eigen::Vector6d local_velocity = motion.log() / dt;
     const Eigen::Vector3d local_linear_acceleration =
         (local_velocity.head<3>() - motion.so3().inverse() * lidar_state.velocity) / dt;
@@ -678,9 +1157,56 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
     // [v0.8 Phase 1, diagnostic-only] expose the final ICP linear system and
     // its eigen-summary. Purely additive: nothing above this line (the pose/
     // velocity/acceleration estimate) depends on this field.
-    lidar_state.icp_diagnostics = IcpDiagnostics{icp_H, icp_b, LocalizabilitySummary::from_hessian(icp_H)};
+    PersistentWeakDirectionState persistent_direction;
+    if (config.degeneracy_adaptive_iteration_budget) {
+      if (has_weak_information_direction(icp_H, config.degeneracy_adaptive_iteration_ratio)) {
+        _adaptive_iteration_hold_remaining = config.degeneracy_adaptive_hold_scans;
+      } else if (_adaptive_iteration_hold_remaining > 0) {
+        --_adaptive_iteration_hold_remaining;
+      }
+    } else {
+      _adaptive_iteration_hold_remaining = 0;
+    }
+    if (config.degeneracy_persistence_gate) {
+      PersistentWeakDirectionConfig persistence_config;
+      persistence_config.min_consecutive_scans = config.degeneracy_persistence_min_scans;
+      persistence_config.min_absolute_cosine = config.degeneracy_persistence_min_absolute_cosine;
+      persistence_config.min_translation_fraction = config.degeneracy_persistence_min_translation_fraction;
+      persistence_config.require_multiscan_observability =
+          config.degeneracy_multiscan_observability_gate;
+      persistence_config.observability_window_scans = config.degeneracy_observability_window_scans;
+      persistence_config.observability_min_scans = config.degeneracy_observability_min_scans;
+      persistence_config.max_aggregate_directional_information_ratio =
+          config.degeneracy_observability_max_directional_ratio;
+      persistent_direction = _persistent_weak_direction_tracker.observe(icp_H,
+                                                                         config.degeneracy_persistence_tracking_ratio,
+                                                                         config.degeneracy_multiplicity_relative_gap,
+                                                                         persistence_config);
+    } else {
+      _persistent_weak_direction_tracker.reset();
+    }
+    if (visual_pose_prior.has_value()) {
+      ++visual_prior_attempt_count;
+      visual_fused_direction_count += visual_fused_directions;
+      visual_unobservable_direction_count += visual_unobservable_directions;
+      visual_observability_diagnostics.push_back(
+          {current_lidar_time, visual_directional_information_ratios,
+           visual_directional_information_ratio_count});
+      visual_fused_scan_count += visual_fused_directions > 0 ? 1U : 0U;
+    }
+    lidar_state.icp_diagnostics = IcpDiagnostics{icp_H,
+                                                 icp_b,
+                                                 LocalizabilitySummary::from_hessian(icp_H),
+                                                 persistent_direction,
+                                                 degeneracy_intervention_count};
+    if (config.degeneracy_persistence_gate) {
+      degeneracy_persistence_diagnostics.push_back(
+          {current_lidar_time, persistent_direction, degeneracy_intervention_count});
+    }
 
-    _imu_local_rotation = optimized_pose.so3(); // correct the drift in imu integration
+    // IMU propagation drives primary registration, so it must remain on the
+    // unrefined tracking trajectory even when the published map pose changes.
+    _imu_local_rotation = tracking_pose.so3();
   }
   // even if map is empty, time should still update
   lidar_state.time = current_lidar_time;
@@ -688,10 +1214,26 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
 
   // reset imu averages
   interval_stats.reset();
+  _deskew_gyro_samples.clear();
 
-  update_maps(preproc_result.map_update_frame(), lidar_state.pose);
+  if (config.fixed_lag_multiscan) {
+    if (registration_map_empty) {
+      _fixed_lag_tracking_pose = lidar_state.pose;
+      update_maps(preproc_result.map_update_frame(), _fixed_lag_tracking_pose);
+      const Sophus::SE3d refined_pose = update_fixed_lag_window(
+          preproc_result.map_update_frame(), preproc_result.keypoints,
+          current_lidar_time, lidar_state.pose);
+      lidar_state.pose = config.fixed_lag_fix_latest_pose ?
+          _fixed_lag_tracking_pose : refined_pose;
+    }
+  } else {
+    update_maps(preproc_result.map_update_frame(), lidar_state.pose);
+  }
 
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  tracking_poses_with_timestamps.emplace_back(
+      lidar_state.time, config.fixed_lag_multiscan ?
+          _fixed_lag_tracking_pose : lidar_state.pose);
   _consecutive_registration_failures = 0;
 
   return preproc_result.filtered_frame;

@@ -30,12 +30,17 @@
 #include <array>
 #include <cmath>
 
+#include "persistent_weak_direction.hpp"
+
 namespace rko_lio::core {
 
 struct DegeneracyAwareSolveConfig {
   double well_conditioned_ratio = 1.0e-6;
   double multiplicity_relative_gap = 1.0e-8;
   double degenerate_prior_weight = 0.25;
+  bool require_persistent_direction = false;
+  double persistent_direction_min_absolute_cosine = 0.98;
+  PersistentWeakDirectionState persistent_direction;
 };
 
 struct DegeneracyAwareSolveResult {
@@ -43,8 +48,26 @@ struct DegeneracyAwareSolveResult {
   int degenerate_count = 0;
   int non_observable_count = 0;
   bool used_prior = false;
+  bool intervention_applied = false;
   bool valid = false;
 };
+
+inline bool has_weak_information_direction(
+    const Eigen::Matrix<double, 6, 6>& H,
+    const double normalized_eigenvalue_threshold) {
+  if (!H.allFinite()) {
+    return false;
+  }
+  const Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> solver(
+      0.5 * (H + H.transpose()));
+  if (solver.info() != Eigen::Success || !solver.eigenvalues().allFinite()) {
+    return false;
+  }
+  const double trace = solver.eigenvalues().sum();
+  return trace > 1.0e-12 &&
+         solver.eigenvalues().minCoeff() / trace <
+             std::max(0.0, normalized_eigenvalue_threshold);
+}
 
 inline DegeneracyAwareSolveResult solve_degeneracy_aware(
     const Eigen::Matrix<double, 6, 6>& H,
@@ -85,6 +108,44 @@ inline DegeneracyAwareSolveResult solve_degeneracy_aware(
   }
 
   const double prior_weight = std::max(0.0, std::min(1.0, config.degenerate_prior_weight));
+  if (config.require_persistent_direction) {
+    result.update = H.ldlt().solve(-b);
+    if (!result.update.allFinite()) {
+      result.update.setZero();
+      return result;
+    }
+    if (config.persistent_direction.confirmed) {
+      const double min_cosine =
+          std::max(0.0, std::min(1.0, config.persistent_direction_min_absolute_cosine));
+      for (int i = 0; i < 6; ++i) {
+        const bool non_observable = weak[i] && cluster_size[cluster[i]] >= 2;
+        if (!weak[i] || non_observable) {
+          continue;
+        }
+        const Eigen::Matrix<double, 6, 1> axis = eigenvectors.col(i);
+        if (std::abs(axis.dot(config.persistent_direction.axis)) < min_cosine) {
+          continue;
+        }
+        const double legacy_component = axis.dot(result.update);
+        const double geometric_component =
+            eigenvalues(i) > kEigenvalueFloor ? -axis.dot(b) / eigenvalues(i) : 0.0;
+        const double blended_component =
+            (1.0 - prior_weight) * geometric_component + prior_weight * axis.dot(prior_update);
+        result.update += (blended_component - legacy_component) * axis;
+        result.used_prior = prior_weight > 0.0;
+        result.intervention_applied = true;
+        break;
+      }
+    }
+    result.valid = result.update.allFinite();
+    if (!result.valid) {
+      result.update.setZero();
+      result.used_prior = false;
+      result.intervention_applied = false;
+    }
+    return result;
+  }
+
   for (int i = 0; i < 6; ++i) {
     const Eigen::Matrix<double, 6, 1> axis = eigenvectors.col(i);
     const bool non_observable = weak[i] && cluster_size[cluster[i]] >= 2;
@@ -100,6 +161,7 @@ inline DegeneracyAwareSolveResult solve_degeneracy_aware(
       component =
           (1.0 - prior_weight) * geometric_component + prior_weight * axis.dot(prior_update);
       result.used_prior = result.used_prior || prior_weight > 0.0;
+      result.intervention_applied = true;
     }
     result.update += component * axis;
   }
@@ -108,6 +170,7 @@ inline DegeneracyAwareSolveResult solve_degeneracy_aware(
   if (!result.valid) {
     result.update.setZero();
     result.used_prior = false;
+    result.intervention_applied = false;
   }
   return result;
 }

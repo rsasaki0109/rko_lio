@@ -23,6 +23,7 @@
  */
 
 #pragma once
+#include "persistent_weak_direction.hpp"
 #include <Eigen/Core>
 #include <Eigen/Eigenvalues>
 #include <algorithm>
@@ -111,6 +112,16 @@ struct IcpDiagnostics {
   Eigen::Vector6d b = Eigen::Vector6d::Zero();
   /** Eigen-decomposition of `H`. */
   LocalizabilitySummary localizability;
+  /** Persistent weak-direction state after observing this scan. */
+  PersistentWeakDirectionState persistent_weak_direction;
+  /** ICP iterations in this scan where the persistent-direction intervention ran. */
+  std::size_t degeneracy_intervention_count = 0;
+};
+
+struct DegeneracyPersistenceDiagnosticsSample {
+  Secondsd time{0};
+  PersistentWeakDirectionState persistent_weak_direction;
+  std::size_t intervention_count = 0;
 };
 
 // data structs

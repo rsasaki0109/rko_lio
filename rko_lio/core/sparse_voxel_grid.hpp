@@ -24,6 +24,7 @@
 #pragma once
 #include <Eigen/Core>
 #include <bonxai/bonxai.hpp>
+#include <cstddef>
 #include <sophus/se3.hpp>
 
 namespace rko_lio::core {
@@ -41,6 +42,18 @@ struct SparseVoxelGrid {
   void AddPoints(const std::vector<Eigen::Vector3d>& points);
   void RemovePointsFarFromLocation(const Eigen::Vector3d& origin);
   std::vector<Eigen::Vector3d> Pointcloud() const;
+  // [instrumentation, additive-only] Cheap map-growth gauge helper: sums
+  // per-voxel point counts without copying any point data (unlike
+  // Pointcloud()), so it is safe to call periodically for logging.
+  std::size_t ActivePointCount() const;
+  // [NN-search optimization] Returns the exact closest point to `query`
+  // within the fixed voxel neighborhood (searched by squared distance, one
+  // final sqrt on the winner). Uses branch-and-bound AABB pruning to skip
+  // voxels that cannot improve on the current best without touching the
+  // hash map or scanning their points; voxel visitation order is left
+  // unchanged from the pre-optimization implementation so the result
+  // (including exact-tie resolution) is bit-for-bit identical to a naive
+  // exhaustive scan. See the .cpp for the full exactness argument.
   std::tuple<Eigen::Vector3d, double> GetClosestNeighbor(const Eigen::Vector3d& query) const;
   std::tuple<Eigen::Vector3d, double> GetClosestNeighbor(const Eigen::Vector3d& query, int voxel_search_radius) const;
 
@@ -49,9 +62,6 @@ struct SparseVoxelGrid {
   unsigned int max_points_per_voxel_;
   Bonxai::VoxelGrid<VoxelBlock> map_;
 
-private:
-  using AccessorType = typename Bonxai::VoxelGrid<VoxelBlock>::Accessor;
-  AccessorType accessor_;
 };
 
 } // namespace rko_lio::core
