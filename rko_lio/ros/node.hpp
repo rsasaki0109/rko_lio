@@ -31,6 +31,7 @@
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
+#include <map>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -89,6 +90,73 @@ struct DirectVisualDiagnosticsSample {
   double translation_cosine = -1.0;
   double baseline_m = 0.0;
   double predicted_baseline_m = 0.0;
+};
+
+// Benchmark-only, application-owned input acknowledgement evidence.  This is
+// deliberately inert unless the offline wrapper supplies both the v2 contract
+// and an output path.  The normal live callbacks and default offline profile
+// do not read or update this state in any observable way.
+struct BenchmarkConsumerCounters {
+  bool enabled = false;
+  bool ack_backpressure_enabled = false;
+  std::string evidence_path;
+  std::string phase_mode;
+  std::size_t expected_messages = 0;
+  std::map<std::string, std::size_t> expected_topic_counts;
+  std::int64_t required_end_timestamp_ns = 0;
+
+  std::atomic<std::size_t> received_messages{0};
+  std::atomic<std::size_t> processed_messages{0};
+  std::atomic<std::size_t> dropped_messages{0};
+  std::atomic<std::size_t> queue_overflow{0};
+  std::atomic<std::size_t> maximum_registration_queue_messages{0};
+  std::atomic<std::size_t> processing_failures{0};
+  std::atomic<std::size_t> pacing_late_messages{0};
+  std::atomic<std::uint64_t> maximum_callback_latency_ns{0};
+  std::atomic<std::int64_t> first_processed_timestamp_ns{-1};
+  std::atomic<std::int64_t> last_processed_timestamp_ns{-1};
+  std::atomic<bool> eof_observed{false};
+  std::atomic<bool> drain_complete{false};
+
+  void configure(const std::string& output_path,
+                 const std::string& configured_phase_mode,
+                 std::size_t expected,
+                 const std::map<std::string, std::size_t>& topic_counts,
+                 std::int64_t required_end_timestamp);
+  void record_received();
+  void record_processed(std::int64_t timestamp_ns, std::uint64_t latency_ns);
+  void record_drop(bool overflow);
+  void observe_registration_queue(std::size_t queue_size);
+  void record_processing_failure();
+  void record_pacing_late();
+  void mark_eof(bool value);
+  void mark_drained(bool value);
+  std::string failure_reason() const;
+  void set_failure_reason(const std::string& reason);
+
+private:
+  mutable std::mutex failure_mutex_;
+  std::string failure_reason_;
+};
+
+// Snapshot of the asynchronous registration state used only by the additive
+// M6a10-v2 offline benchmark contract.  The snapshot is taken under
+// buffer_mutex so a timeout report never invents a zero backlog or timestamp.
+struct BenchmarkDrainSnapshot {
+  std::size_t lidar_buffer_size = 0;
+  std::size_t imu_buffer_size = 0;
+  std::int64_t front_lidar_min_timestamp_ns = -1;
+  std::int64_t front_lidar_max_timestamp_ns = -1;
+  std::int64_t last_imu_timestamp_ns = -1;
+  std::int64_t timestamp_gap_ns = -1;
+  bool atomic_can_process = false;
+  bool registration_active = false;
+  std::size_t expected_messages = 0;
+  std::size_t received_messages = 0;
+  std::size_t processed_messages = 0;
+  std::size_t dropped_messages = 0;
+  std::size_t queue_overflow = 0;
+  std::size_t processing_failures = 0;
 };
 
 class Node {
@@ -172,6 +240,10 @@ public:
   std::queue<core::ImuControl> imu_buffer;
   std::queue<core::LidarFrame> lidar_buffer;
   size_t max_lidar_buffer_size = 50;
+
+  BenchmarkConsumerCounters benchmark_consumer;
+
+  BenchmarkDrainSnapshot benchmark_drain_snapshot();
 
   Node() = delete;
   Node(const std::string& node_name, const rclcpp::NodeOptions& options);

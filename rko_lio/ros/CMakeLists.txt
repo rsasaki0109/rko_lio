@@ -59,7 +59,7 @@ set_target_properties(rko_lio.ros PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # executable: offline_node
 add_executable(offline_node offline_node.cpp)
-target_link_libraries(offline_node PRIVATE rko_lio::ros)
+target_link_libraries(offline_node PRIVATE rko_lio::ros nlohmann_json::nlohmann_json)
 set_target_properties(offline_node PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # component: online_node_component

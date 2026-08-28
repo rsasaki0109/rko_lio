@@ -55,6 +55,8 @@ inline void transform_points(const Sophus::SE3d& T, Vector3dVector& points) {
 }
 
 using LinearSystem = std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double>;
+using IcpReduction =
+    std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double, std::size_t>;
 template <typename VoxelMap>
 LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                                      const rko_lio::core::Vector3dVector& frame,
@@ -67,12 +69,13 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                                      // Defaulted to nullptr so every existing call site is unaffected; the
                                      // value written here is never read back into the solve below.
                                      int* correspondences_out = nullptr) {
-  auto linear_system_reduce = [](LinearSystem lhs, const LinearSystem& rhs) {
-    auto& [lhs_H, lhs_b, lhs_chi] = lhs;
-    const auto& [rhs_H, rhs_b, rhs_chi] = rhs;
+  auto linear_system_reduce = [](IcpReduction lhs, const IcpReduction& rhs) {
+    auto& [lhs_H, lhs_b, lhs_chi, lhs_correspondences] = lhs;
+    const auto& [rhs_H, rhs_b, rhs_chi, rhs_correspondences] = rhs;
     lhs_H += rhs_H;
     lhs_b += rhs_b;
     lhs_chi += rhs_chi;
+    lhs_correspondences += rhs_correspondences;
     return lhs;
   };
 
@@ -81,48 +84,51 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
     J_r.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
     J_r.block<3, 3>(0, 3) = -1.0 * Sophus::SO3d::hat(source);
     const Eigen::Vector3d residual = source - target;
-    return LinearSystem(J_r.transpose() * J_r,
+    return IcpReduction(J_r.transpose() * J_r,
                         J_r.transpose() * residual,
-                        residual.squaredNorm());
+                        residual.squaredNorm(), 1U);
   };
 
   // The only parallel part
   using points_iterator = std::vector<Eigen::Vector3d>::const_iterator;
-  std::atomic<int> correspondances_counter = 0;
   // A fixed reduction tree keeps primary ICP invariant when optional
-  // frontends add other TBB workloads between scans.
-  const auto& [H_icp, b_icp, chi_icp] = tbb::parallel_deterministic_reduce(
+  // frontends add other TBB workloads between scans.  Keep the integer
+  // correspondence count in the same task-local reduction state: a shared
+  // atomic increment here used to serialize every accepted point even though
+  // H/b/chi were already accumulated without shared writes.
+  const auto& [H_icp, b_icp, chi_icp, correspondences] =
+      tbb::parallel_deterministic_reduce(
       // Range
       tbb::blocked_range<points_iterator>{frame.cbegin(), frame.cend()},
       // Identity
-      LinearSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0),
+      IcpReduction(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0, 0U),
       // 1st Lambda: Parallel computation
-      [&](const tbb::blocked_range<points_iterator>& r, LinearSystem J) -> LinearSystem {
+      [&](const tbb::blocked_range<points_iterator>& r, IcpReduction J) -> IcpReduction {
         return std::transform_reduce(r.begin(), r.end(), J, linear_system_reduce, [&](const auto& point) {
           // Compute data association and linear system
           const Eigen::Vector3d transformed_point = current_pose * point;
           const auto& [closest_neighbor, distance] = voxel_map.GetClosestNeighbor(transformed_point, voxel_search_radius);
           if (distance < max_correspondance_distance) {
-            correspondances_counter++;
             return linear_system_for_one_point(transformed_point, closest_neighbor);
           }
           // TODO (meher): additional 0 add flops, which may hurt single threaded perf slightly
-          return LinearSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0);
+          return IcpReduction(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0, 0U);
         });
       },
       // 2nd Lambda: Parallel reduction of the private Jacobians
       linear_system_reduce);
 
-  if (correspondances_counter == 0) {
+  if (correspondences == 0U) {
     throw std::runtime_error("Number of correspondences are 0.");
   }
 
   // [instrumentation, additive-only] see parameter comment above.
   if (correspondences_out != nullptr) {
-    *correspondences_out = correspondances_counter.load();
+    *correspondences_out = static_cast<int>(correspondences);
   }
 
-  return {H_icp / correspondances_counter, b_icp / correspondances_counter, 0.5 * chi_icp};
+  return {H_icp / static_cast<double>(correspondences),
+          b_icp / static_cast<double>(correspondences), 0.5 * chi_icp};
 }
 
 LinearSystem build_orientation_linear_system(const Sophus::SE3d& current_pose,
@@ -997,6 +1003,12 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
     return {avg_body_accel, avg_ang_vel};
   });
 
+  const std::optional<PiecewiseAngularVelocityIntegrator> piecewise_gyro_integrator =
+      config.piecewise_gyro_deskew
+          ? std::make_optional<PiecewiseAngularVelocityIntegrator>(
+                _deskew_gyro_samples, lidar_state.time, lidar_state.angular_velocity)
+          : std::nullopt;
+
   // compute relative motion using controls
   auto relative_pose_at_time = [&](const Secondsd time) -> Sophus::SE3d {
     const double dt = (time - lidar_state.time).count();
@@ -1007,8 +1019,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan, const TimestampVec
     if (!config.piecewise_gyro_deskew || time < lidar_state.time) {
       return constant_twist_pose;
     }
-    const Sophus::SO3d integrated_rotation = integrate_piecewise_angular_velocity(
-        _deskew_gyro_samples, lidar_state.time, time, lidar_state.angular_velocity);
+    const Sophus::SO3d integrated_rotation = piecewise_gyro_integrator->integrateUntil(time);
     return Sophus::SE3d(integrated_rotation, constant_twist_pose.translation());
   };
 

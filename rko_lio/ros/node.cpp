@@ -221,6 +221,145 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LIO::Config,
 
 namespace rko_lio::ros {
 
+void BenchmarkConsumerCounters::configure(
+    const std::string& output_path,
+    const std::string& configured_phase_mode,
+    const std::size_t expected,
+    const std::map<std::string, std::size_t>& topic_counts,
+    const std::int64_t required_end_timestamp) {
+  if (output_path.empty() || configured_phase_mode.empty()) {
+    return;
+  }
+  enabled = true;
+  ack_backpressure_enabled = configured_phase_mode == "unpaced_ack";
+  evidence_path = output_path;
+  phase_mode = configured_phase_mode;
+  expected_messages = expected;
+  expected_topic_counts = topic_counts;
+  required_end_timestamp_ns = required_end_timestamp;
+}
+
+void BenchmarkConsumerCounters::record_received() {
+  if (enabled) {
+    received_messages.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+void BenchmarkConsumerCounters::record_processed(
+    const std::int64_t timestamp_ns, const std::uint64_t latency_ns) {
+  if (!enabled) {
+    return;
+  }
+  processed_messages.fetch_add(1, std::memory_order_relaxed);
+  std::int64_t first = -1;
+  first_processed_timestamp_ns.compare_exchange_strong(
+      first, timestamp_ns, std::memory_order_relaxed);
+  last_processed_timestamp_ns.store(timestamp_ns, std::memory_order_relaxed);
+  auto previous = maximum_callback_latency_ns.load(std::memory_order_relaxed);
+  while (previous < latency_ns &&
+         !maximum_callback_latency_ns.compare_exchange_weak(
+             previous, latency_ns, std::memory_order_relaxed)) {
+  }
+}
+
+void BenchmarkConsumerCounters::record_drop(const bool overflow) {
+  if (!enabled) {
+    return;
+  }
+  dropped_messages.fetch_add(1, std::memory_order_relaxed);
+  if (overflow) {
+    queue_overflow.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+void BenchmarkConsumerCounters::observe_registration_queue(
+    const std::size_t queue_size) {
+  if (!enabled) {
+    return;
+  }
+  auto previous = maximum_registration_queue_messages.load(std::memory_order_relaxed);
+  while (previous < queue_size &&
+         !maximum_registration_queue_messages.compare_exchange_weak(
+             previous, queue_size, std::memory_order_relaxed)) {
+  }
+}
+
+void BenchmarkConsumerCounters::record_processing_failure() {
+  if (enabled) {
+    processing_failures.fetch_add(1, std::memory_order_relaxed);
+    record_drop(false);
+  }
+}
+
+void BenchmarkConsumerCounters::record_pacing_late() {
+  if (enabled) {
+    pacing_late_messages.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+void BenchmarkConsumerCounters::mark_eof(const bool value) {
+  if (enabled) {
+    eof_observed.store(value, std::memory_order_release);
+  }
+}
+
+void BenchmarkConsumerCounters::mark_drained(const bool value) {
+  if (enabled) {
+    drain_complete.store(value, std::memory_order_release);
+  }
+}
+
+std::string BenchmarkConsumerCounters::failure_reason() const {
+  std::lock_guard lock(failure_mutex_);
+  return failure_reason_;
+}
+
+void BenchmarkConsumerCounters::set_failure_reason(const std::string& reason) {
+  if (!enabled) {
+    return;
+  }
+  std::lock_guard lock(failure_mutex_);
+  if (failure_reason_.empty()) {
+    failure_reason_ = reason;
+  }
+}
+
+BenchmarkDrainSnapshot Node::benchmark_drain_snapshot() {
+  BenchmarkDrainSnapshot snapshot;
+  {
+    std::lock_guard lock(buffer_mutex);
+    snapshot.lidar_buffer_size = lidar_buffer.size();
+    snapshot.imu_buffer_size = imu_buffer.size();
+    if (!lidar_buffer.empty()) {
+      snapshot.front_lidar_min_timestamp_ns =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              lidar_buffer.front().timestamps.min).count();
+      snapshot.front_lidar_max_timestamp_ns =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              lidar_buffer.front().timestamps.max).count();
+    }
+    if (!imu_buffer.empty()) {
+      snapshot.last_imu_timestamp_ns =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              imu_buffer.back().time).count();
+    }
+    if (snapshot.front_lidar_max_timestamp_ns >= 0 &&
+        snapshot.last_imu_timestamp_ns >= 0) {
+      snapshot.timestamp_gap_ns =
+          snapshot.last_imu_timestamp_ns - snapshot.front_lidar_max_timestamp_ns;
+    }
+    snapshot.atomic_can_process = atomic_can_process.load(std::memory_order_acquire);
+    snapshot.registration_active = atomic_registration_active.load(std::memory_order_acquire);
+  }
+  snapshot.expected_messages = benchmark_consumer.expected_messages;
+  snapshot.received_messages = benchmark_consumer.received_messages.load(std::memory_order_relaxed);
+  snapshot.processed_messages = benchmark_consumer.processed_messages.load(std::memory_order_relaxed);
+  snapshot.dropped_messages = benchmark_consumer.dropped_messages.load(std::memory_order_relaxed);
+  snapshot.queue_overflow = benchmark_consumer.queue_overflow.load(std::memory_order_relaxed);
+  snapshot.processing_failures = benchmark_consumer.processing_failures.load(std::memory_order_relaxed);
+  return snapshot;
+}
+
 Node::Node(const std::string& node_name, const rclcpp::NodeOptions& options) {
   node = rclcpp::Node::make_shared(node_name, options);
   imu_topic = node->declare_parameter<std::string>("imu_topic");     // required
@@ -921,6 +1060,7 @@ void Node::imu_callback(const sensor_msgs::msg::Imu::ConstSharedPtr& imu_msg) {
   if (!check_and_set_extrinsics()) {
     // we assume that extrinsics are static. if they change, its better to query the tf directly in the registration
     // loop for each message being processed asynchronously.
+    benchmark_consumer.record_drop(false);
     return;
   }
   {
@@ -943,12 +1083,14 @@ void Node::lidar_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& l
     RCLCPP_INFO_STREAM(node->get_logger(), "Parsed the lidar frame id as: " << lidar_frame);
   }
   if (!check_and_set_extrinsics()) {
+    benchmark_consumer.record_drop(false);
     return;
   }
   {
     std::lock_guard lock(buffer_mutex);
     if (lidar_buffer.size() >= max_lidar_buffer_size) {
       RCLCPP_WARN_STREAM(node->get_logger(), "Registration lidar buffer limit reached. Dropping frame.");
+      benchmark_consumer.record_drop(true);
       sync_condition_variable.notify_one();
       return;
     }
@@ -973,6 +1115,7 @@ void Node::lidar_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& l
     {
       std::lock_guard lock(buffer_mutex);
       lidar_buffer.emplace(timestamps, scan);
+      benchmark_consumer.observe_registration_queue(lidar_buffer.size());
       atomic_can_process = !imu_buffer.empty() && imu_buffer.back().time > lidar_buffer.front().timestamps.max;
     }
     if (atomic_can_process) {
@@ -980,6 +1123,8 @@ void Node::lidar_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& l
     }
   } catch (const std::invalid_argument& ex) {
     RCLCPP_ERROR_STREAM(node->get_logger(), "Encountered error, dropping frame: Error. " << ex.what());
+    benchmark_consumer.record_drop(false);
+    benchmark_consumer.set_failure_reason(ex.what());
   }
 }
 
@@ -1036,6 +1181,8 @@ void Node::registration_loop() {
       // Catch both std::invalid_argument (Keypoints=0 / Δt) and std::runtime_error
       // (Number of correspondences=0). Both are recoverable on kidnap-style bags.
       RCLCPP_ERROR_STREAM(node->get_logger(), "Encountered error, dropping frame. Error: " << ex.what());
+      benchmark_consumer.record_processing_failure();
+      benchmark_consumer.set_failure_reason(ex.what());
     }
     atomic_registration_active = false;
   }

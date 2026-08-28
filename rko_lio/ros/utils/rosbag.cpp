@@ -68,10 +68,12 @@ BufferableBag::BufferableBag(const std::string& bag_path,
                              const std::shared_ptr<TFBridge> tf_bridge,
                              const std::vector<std::string>& topics,
                              const tf2::Duration seek,
-                             const std::chrono::seconds buffer_size)
+                             const std::chrono::seconds buffer_size,
+                             const bool single_message_buffer)
     : tf_bridge_(tf_bridge),
       bag_reader_(std::make_unique<rosbag2_cpp::Reader>()),
       buffer_size_(buffer_size),
+      single_message_buffer_(single_message_buffer),
       topics_(topics) {
   publish_tf_static(bag_path);
   bag_reader_->open(bag_path);
@@ -80,6 +82,10 @@ BufferableBag::BufferableBag(const std::string& bag_path,
   message_count_ = [&]() {
     size_t message_count = 0;
     const auto& metadata = bag_reader_->get_metadata();
+    required_end_timestamp_ns_ =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            metadata.starting_time.time_since_epoch()).count() +
+        metadata.duration.count();
     const auto topic_info = metadata.topics_with_message_count;
     // iterate over all topics
     for (const auto& topic : topics_) {
@@ -87,6 +93,7 @@ BufferableBag::BufferableBag(const std::string& bag_path,
                                    [&](const auto& info) { return info.topic_metadata.name == topic; });
       if (it != topic_info.end()) {
         message_count += it->message_count;
+        topic_message_counts_[topic] = it->message_count;
       }
     }
     return message_count;
@@ -113,7 +120,26 @@ void BufferableBag::close() const { bag_reader_->close(); }
 
 size_t BufferableBag::message_count() const { return message_count_; }
 
+const std::map<std::string, std::size_t>& BufferableBag::topic_message_counts() const {
+  return topic_message_counts_;
+}
+
+std::int64_t BufferableBag::last_message_timestamp_ns() const {
+  return last_message_timestamp_ns_;
+}
+
+std::int64_t BufferableBag::required_end_timestamp_ns() const {
+  return required_end_timestamp_ns_;
+}
+
+std::string BufferableBag::next_topic_name() const {
+  return buffer_.empty() ? std::string{} : buffer_.front().topic_name;
+}
+
 void BufferableBag::BufferMessages() {
+  if (single_message_buffer_ && !buffer_.empty()) {
+    return;
+  }
   auto buffer_is_filled = [&]() -> bool {
     if (buffer_.empty()) {
       return false;
@@ -136,12 +162,16 @@ void BufferableBag::BufferMessages() {
       // buffer
       buffer_.push(*msg);
     }
+    if (single_message_buffer_ && !buffer_.empty()) {
+      break;
+    }
   }
 }
 
 rosbag2_storage::SerializedBagMessage BufferableBag::PopNextMessage() {
   const rosbag2_storage::SerializedBagMessage msg = buffer_.front();
   buffer_.pop();
+  last_message_timestamp_ns_ = GetTimestampsFromRosbagSerializedMsg(msg).count();
   if (bag_reader_->has_next()) {
     BufferMessages();
   }

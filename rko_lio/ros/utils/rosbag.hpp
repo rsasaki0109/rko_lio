@@ -36,6 +36,8 @@
 // stl
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <queue>
 #include <string>
@@ -57,7 +59,8 @@ public:
                 const std::shared_ptr<TFBridge> tf_bridge,
                 const std::vector<std::string>& topics,
                 const tf2::Duration seek = tf2::durationFromSec(0.0),
-                const std::chrono::seconds buffer_size = std::chrono::seconds(1));
+                const std::chrono::seconds buffer_size = std::chrono::seconds(1),
+                bool single_message_buffer = false);
 
   void publish_tf_static(const std::string& bag_path);
   size_t message_count() const;
@@ -65,13 +68,21 @@ public:
   rosbag2_storage::SerializedBagMessage PopNextMessage();
   bool finished() const;
   void close() const;
+  const std::map<std::string, std::size_t>& topic_message_counts() const;
+  std::int64_t last_message_timestamp_ns() const;
+  std::int64_t required_end_timestamp_ns() const;
+  std::string next_topic_name() const;
 
 private:
   std::shared_ptr<TFBridge> tf_bridge_;
   std::unique_ptr<rosbag2_cpp::Reader> bag_reader_;
   std::queue<rosbag2_storage::SerializedBagMessage> buffer_;
   std::chrono::seconds buffer_size_;
+  bool single_message_buffer_ = false;
   std::vector<std::string> topics_;
   size_t message_count_{0};
+  std::map<std::string, std::size_t> topic_message_counts_;
+  std::int64_t last_message_timestamp_ns_{0};
+  std::int64_t required_end_timestamp_ns_{0};
 };
 } // namespace rko_lio::ros::utils

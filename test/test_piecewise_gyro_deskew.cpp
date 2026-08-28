@@ -31,6 +31,7 @@
 namespace {
 
 using rko_lio::core::Secondsd;
+using rko_lio::core::PiecewiseAngularVelocityIntegrator;
 using rko_lio::core::TimedAngularVelocity;
 using rko_lio::core::integrate_piecewise_angular_velocity;
 
@@ -70,4 +71,44 @@ TEST(PiecewiseGyroDeskew, RejectsReversedInterval) {
       integrate_piecewise_angular_velocity(
           {}, Secondsd(2.0), Secondsd(1.0), Eigen::Vector3d::Zero()),
       std::invalid_argument);
+}
+
+TEST(PiecewiseGyroDeskew, PrefixIntegratorMatchesLegacyOrderedProducts) {
+  const std::vector<TimedAngularVelocity> samples{
+      {Secondsd(0.5), Eigen::Vector3d(0.1, -0.2, 0.3)},
+      {Secondsd(1.0), Eigen::Vector3d(-0.4, 0.2, 0.1)},
+      {Secondsd(1.0), Eigen::Vector3d(0.3, 0.1, -0.2)},
+      {Secondsd(1.4), Eigen::Vector3d(0.2, -0.5, 0.4)},
+      {Secondsd(1.8), Eigen::Vector3d(-0.1, 0.6, 0.2)}};
+  const Secondsd start_time(1.0);
+  const Eigen::Vector3d fallback(0.7, -0.8, 0.9);
+  const PiecewiseAngularVelocityIntegrator integrator(samples, start_time, fallback);
+
+  for (const double end_time : {1.0, 1.1, 1.4, 1.65, 1.8, 2.0}) {
+    const Sophus::SO3d expected = integrate_piecewise_angular_velocity(
+        samples, start_time, Secondsd(end_time), fallback);
+    const Sophus::SO3d actual = integrator.integrateUntil(Secondsd(end_time));
+    EXPECT_EQ(actual.matrix(), expected.matrix()) << "end_time=" << end_time;
+  }
+}
+
+TEST(PiecewiseGyroDeskew, PrefixIntegratorRejectsReversedInterval) {
+  const PiecewiseAngularVelocityIntegrator integrator(
+      {}, Secondsd(2.0), Eigen::Vector3d::Zero());
+  EXPECT_THROW(integrator.integrateUntil(Secondsd(1.0)), std::invalid_argument);
+}
+
+TEST(PiecewiseGyroDeskew, PrefixIntegratorPreservesLegacyForOutOfOrderSamples) {
+  const std::vector<TimedAngularVelocity> samples{
+      {Secondsd(1.3), Eigen::Vector3d(0.2, 0.1, -0.3)},
+      {Secondsd(1.2), Eigen::Vector3d(-0.4, 0.5, 0.1)}};
+  const Secondsd start_time(1.0);
+  const Secondsd end_time(1.7);
+  const Eigen::Vector3d fallback(0.1, -0.2, 0.3);
+  const PiecewiseAngularVelocityIntegrator integrator(samples, start_time, fallback);
+
+  EXPECT_EQ(
+      integrator.integrateUntil(end_time).matrix(),
+      integrate_piecewise_angular_velocity(
+          samples, start_time, end_time, fallback).matrix());
 }
