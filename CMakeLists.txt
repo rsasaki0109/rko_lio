@@ -38,6 +38,8 @@ option(BUILD_TESTING "Build ROS package tests" ON)
 set(BUILD_TESTING "${BUILD_TESTING}")
 
 include(cmake/dependencies.cmake)
+# Retain the choice on later configure runs that omit -DBUILD_TESTING.
+set(BUILD_TESTING "${BUILD_TESTING}" CACHE BOOL "Build ROS package tests" FORCE)
 include(cmake/compat_target_sources.cmake)
 
 find_package(Eigen3 3.4 REQUIRED CONFIG)
