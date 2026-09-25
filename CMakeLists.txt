@@ -72,6 +72,11 @@ else()
 
   if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(test_latest_pending experiments/latest_pending/test_latest_pending.cpp)
+    if(TARGET test_latest_pending)
+      target_link_libraries(test_latest_pending rko_lio::ros)
+    endif()
+
     ament_add_gtest(
       test_direct_visual_odometry
       test/test_direct_visual_odometry.cpp)
