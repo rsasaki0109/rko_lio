@@ -265,12 +265,13 @@ LinearSystem build_orientation_linear_system(const Sophus::SE3d& current_pose,
   const Sophus::SO3d& current_rotation = current_pose.so3();
   const Eigen::Vector3d predicted_gravity =
       current_rotation.inverse() * (-1 * gravity()); // points upwards, same as local_gravity_estimate
-  const Eigen::Vector3d residual = predicted_gravity - local_gravity_estimate;
+  const auto constraint = robust_gravity_direction(predicted_gravity, local_gravity_estimate);
+  const Eigen::Vector3d& residual = constraint.residual;
 
   Eigen::Matrix3_6d J_ori = Eigen::Matrix3_6d::Zero();
   J_ori.block<3, 3>(0, 3) = current_rotation.inverse().matrix() * Sophus::SO3d::hat(-1 * gravity()).matrix();
 
-  const auto loss = robust_gravity_residual(residual.squaredNorm());
+  const auto& loss = constraint.loss;
   return LinearSystem{loss.weight * (J_ori.transpose() * J_ori),
                       loss.weight * (J_ori.transpose() * residual), loss.cost};
 }
