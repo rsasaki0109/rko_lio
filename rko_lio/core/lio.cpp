@@ -43,6 +43,9 @@
 // stl
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -55,6 +58,37 @@ namespace {
 constexpr double EPSILON = 1e-8;
 constexpr auto EPSILON_TIME = std::chrono::nanoseconds(10);
 using namespace rko_lio::core;
+
+// Experimental observation only. This worktree is not a production feature.
+// The offline registration worker owns these streams; nothing feeds back into LIO.
+struct GravityTrace {
+  std::ofstream kf, icp;
+  GravityTrace() {
+    const char* prefix = std::getenv("RKO_GRAVITY_TRACE_PREFIX");
+    if (!prefix || !*prefix) return;
+    kf.open(std::string(prefix) + ".kf.csv");
+    icp.open(std::string(prefix) + ".icp.csv");
+    if (!kf || !icp) throw std::runtime_error("Cannot open gravity trace files");
+    kf << std::setprecision(17);
+    icp << std::setprecision(17);
+    kf << "stamp_ns,imu_count,dt,variance";
+    for (const auto* name : {"mean_accel", "filtered_body_accel", "covariance_diag", "gravity_estimate", "predicted_gravity", "initial_pose_log"})
+      for (int j = 0; j < (std::string(name) == "initial_pose_log" ? 6 : 3); ++j) kf << ',' << name << j;
+    kf << '\n';
+    icp << "stamp_ns,iteration,beta,chi_icp,chi_orientation";
+    for (const auto* name : {"H_icp", "H_orientation"})
+      for (int j = 0; j < 36; ++j) icp << ',' << name << j;
+    for (const auto* name : {"b_icp", "b_orientation", "pose_log"})
+      for (int j = 0; j < 6; ++j) icp << ',' << name << j;
+    icp << '\n';
+  }
+};
+GravityTrace& gravity_trace() { static GravityTrace trace; return trace; }
+template <typename Derived>
+void trace_values(std::ofstream& stream, const Eigen::MatrixBase<Derived>& value) {
+  for (Eigen::Index r = 0; r < value.rows(); ++r)
+    for (Eigen::Index c = 0; c < value.cols(); ++c) stream << ',' << value(r, c);
+}
 
 inline void transform_points(const Sophus::SE3d& T, Vector3dVector& points) {
   std::transform(points.begin(), points.end(), points.begin(), [&](const auto& point) { return T * point; });
@@ -303,7 +337,8 @@ IcpResult icp(const Vector3dVector& frame,
              const std::optional<VisualPosePrior>& visual_pose_prior = std::nullopt,
              const std::optional<Sophus::SE3d>& degeneracy_prior_pose = std::nullopt,
              const std::optional<Eigen::Vector3d>& localizability_axis = std::nullopt,
-             const double localizability_boost = 0.0) {
+             const double localizability_boost = 0.0,
+             const Nsec trace_stamp = Nsec::zero()) {
   // in case config disables it, or we don't have valid IMU information for this icp loop, beta is -1
   const double beta = (config.min_beta > 0 && optional_accel_info.has_value())
                           ? (config.min_beta * (1 + optional_accel_info->accel_mag_variance))
@@ -330,6 +365,15 @@ IcpResult icp(const Vector3dVector& frame,
       if (beta >= 0) {
         const auto& [H_ori, b_ori, chi_ori] =
             build_orientation_linear_system(current_pose, optional_accel_info->local_gravity_estimate);
+        if (auto& stream = gravity_trace().icp; stream.is_open()) {
+          stream << trace_stamp.count() << ',' << i << ',' << beta << ',' << chi_icp << ',' << chi_ori;
+          trace_values(stream, H_icp);
+          trace_values(stream, H_ori);
+          trace_values(stream, b_icp);
+          trace_values(stream, b_ori);
+          trace_values(stream, current_pose.log());
+          stream << '\n';
+        }
         return {H_icp + H_ori / beta, b_icp + b_ori / beta, chi_icp + chi_ori / beta};
       }
       return {H_icp, b_icp, chi_icp};
@@ -957,6 +1001,18 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                                               config.max_expected_jerk);
   mean_body_acceleration = kf_step.updated.mean;
   body_acceleration_covariance = kf_step.updated.covariance;
+  if (auto& stream = gravity_trace().kf; stream.is_open() && kf_step.info.has_value()) {
+    stream << current_lidar_time.count() << ',' << interval_stats.imu_count << ','
+           << to_seconds(current_lidar_time - lidar_state.time) << ',' << kf_step.info->accel_mag_variance;
+    trace_values(stream, interval_stats.imu_acceleration_sum / interval_stats.imu_count);
+    trace_values(stream, mean_body_acceleration);
+    trace_values(stream, body_acceleration_covariance.diagonal());
+    trace_values(stream, kf_step.info->local_gravity_estimate);
+    trace_values(stream, initial_guess.so3().inverse() * (-gravity()));
+    trace_values(stream, initial_guess.log());
+    stream << '\n';
+  }
+
 
   auto preproc_result =
       config.deskew ? preprocess_scan(deskew_scan(scan, timestamps, current_lidar_time, relative_pose_at_time), config)
@@ -1035,7 +1091,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                                        config.degeneracy_adaptive_iteration_budget &&
                                            _adaptive_iteration_hold_remaining > 0,
                                        visual_pose_prior, degeneracy_prior_pose, localizability_axis,
-                                       config.localizability_boost);
+                                       config.localizability_boost, current_lidar_time);
       if (icp_result.weighting_stats.boosted > 0) {
         ++localizability_weighted_scan_count;
         localizability_boosted_fraction_sum += static_cast<double>(icp_result.weighting_stats.boosted) /
