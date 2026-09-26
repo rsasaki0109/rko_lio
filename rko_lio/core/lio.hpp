@@ -580,6 +580,11 @@ public:
 
   explicit LIO(const Config& config_);
 
+  /** Whether a seeded pose has a finalized world orientation for publication. */
+  bool has_initialized_pose() const {
+    return lidar_state.time > Nsec{0} && (!config.initialization_phase || _initialized);
+  }
+
   /** Add an IMU measurement expressed in the base frame. */
   void add_imu_measurement(const ImuControl& base_imu);
 

@@ -17,17 +17,22 @@ TEST(InitializedOutput, BootstrapWaitsForWorldOrientationWithoutLosingStoredPose
   config.initialization_phase = true;
   config.max_num_threads = 1;
   LIO lio(config);
+  EXPECT_FALSE(lio.has_initialized_pose());
   const auto scan = cloud();
   EXPECT_TRUE(lio.register_scan(scan, TimestampVector(scan.size(), 1s)).empty());
   EXPECT_TRUE(lio.poses_with_timestamps.empty());
+  EXPECT_GT(lio.imu_state.time, 0ns);
+  EXPECT_FALSE(lio.has_initialized_pose());
   for (int i = 1; i <= 10; ++i) {
     ImuControl imu;
     imu.time = 1s + i * 5ms;
     imu.angular_velocity = Eigen::Vector3d::Zero();
     imu.acceleration = Eigen::Vector3d(0, 0, -GRAVITY_MAG);
     lio.add_imu_measurement(imu);
+    EXPECT_FALSE(lio.has_initialized_pose());
   }
   EXPECT_FALSE(lio.register_scan(scan, TimestampVector(scan.size(), 1050ms)).empty());
+  EXPECT_TRUE(lio.has_initialized_pose());
   ASSERT_EQ(lio.poses_with_timestamps.size(), 2u);
   EXPECT_EQ(lio.poses_with_timestamps[0].first, 1s);
   EXPECT_EQ(lio.poses_with_timestamps[1].first, 1050ms);
@@ -41,8 +46,10 @@ TEST(InitializedOutput, ExplicitNoInitializationStillPublishesFirstScan) {
   config.initialization_phase = false;
   config.max_num_threads = 1;
   LIO lio(config);
+  EXPECT_FALSE(lio.has_initialized_pose());
   const auto scan = cloud();
   EXPECT_FALSE(lio.register_scan(scan, TimestampVector(scan.size(), 1s)).empty());
+  EXPECT_TRUE(lio.has_initialized_pose());
   ASSERT_EQ(lio.poses_with_timestamps.size(), 1u);
   EXPECT_LT(lio.lidar_state.pose.log().norm(), 1e-12);
 }
