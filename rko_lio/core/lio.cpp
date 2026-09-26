@@ -838,7 +838,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     const double dt = to_seconds(time - lidar_state.time);
     Eigen::Vector6d tau;
     tau.head<3>() = lidar_state.velocity * dt + (avg_body_accel * square(dt) / 2);
-    tau.tail<3>() = avg_ang_vel * dt;
+    // Diagnostic ablation: preserve translation deskew, scan times and IMU pose prediction.
+    tau.tail<3>().setZero();
     return Sophus::SE3d::exp(tau);
   };
 
