@@ -530,12 +530,15 @@ void LIO::initialize(const Nsec lidar_time) {
 Vector3dVector LIO::bootstrap_first_scan(const Vector3dVector& scan, const Nsec current_lidar_time) {
   lidar_state.time = current_lidar_time;
   imu_state = lidar_state;
-  auto preproc = preprocess_scan(scan, config);
-  if (!config.initialization_phase) {
-    update_maps(config.double_downsample ? preproc.map_frame : preproc.keypoints, lidar_state.pose);
-    poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
-    std::cout << "[INFO] Odometry map frame initialized with first lidar scan.\n";
+  // Initialization needs the next IMU interval before this pose has a valid
+  // world orientation. Do not publish a cloud/odometry pair in a provisional frame.
+  if (config.initialization_phase) {
+    return {};
   }
+  auto preproc = preprocess_scan(scan, config);
+  update_maps(config.double_downsample ? preproc.map_frame : preproc.keypoints, lidar_state.pose);
+  poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  std::cout << "[INFO] Odometry map frame initialized with first lidar scan.\n";
   return std::move(preproc.filtered_frame);
 }
 
