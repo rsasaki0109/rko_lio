@@ -492,6 +492,7 @@ LIO::LIO(const Config& config_)
 // ==========================
 
 void LIO::initialize(const Nsec lidar_time) {
+  gyro_deskew_history.clear();
   if (interval_stats.imu_count == 0) {
     std::cerr << "[WARNING] Cannot initialize. No imu measurements received.\n";
     // lidar_state.time has the time from the previous lidar, which we didn't log if init_phase was on
@@ -596,6 +597,7 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
   _kinematic_blend_speed_last_rejected_time_sec = -1.0;
   imu_state = lidar_state;
   interval_stats.reset();
+  gyro_deskew_history.clear();
   update_maps(map_update_frame, lidar_state.pose);
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
   _consecutive_registration_failures = 0;
@@ -618,6 +620,7 @@ Vector3dVector LIO::drop_failed_scan(const Nsec& current_lidar_time, const std::
   _kinematic_blend_speed_last_rejected_time_sec = -1.0;
   imu_state = lidar_state;
   interval_stats.reset();
+  gyro_deskew_history.clear();
   std::cerr << "[WARNING] Dropping scan during kidnap recovery: " << reason << "\n";
   return {};
 }
@@ -724,6 +727,8 @@ void LIO::add_imu_measurement(const ImuControl& base_imu) {
 
   const Eigen::Vector3d local_gravity = imu_state.pose.so3().inverse() * gravity();
   const Eigen::Vector3d compensated_accel = unbiased_accel + local_gravity;
+
+  gyro_deskew_history.add(imu_state.time, base_imu.time, unbiased_ang_vel);
 
   // imu state update
   Eigen::Vector6d tau;
@@ -833,13 +838,21 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
 
   const auto [avg_body_accel, avg_ang_vel] = motion_priors_from_imu(current_lidar_time);
 
-  // compute relative motion using controls
+  const Nsec earliest = std::min(lidar_state.time, *std::min_element(timestamps.begin(), timestamps.end()));
+  const bool samplewise_rotation = gyro_deskew_history.finish_scan(current_lidar_time) &&
+                                   gyro_deskew_history.covers(earliest, current_lidar_time);
+  const Sophus::SO3d rotation_origin = samplewise_rotation
+      ? gyro_deskew_history.at(lidar_state.time).value() : Sophus::SO3d();
+
+  // Keep the existing translation curve and prediction; replace only deskew rotation.
   auto relative_pose_at_time = [&](const Nsec time) -> Sophus::SE3d {
     const double dt = to_seconds(time - lidar_state.time);
     Eigen::Vector6d tau;
     tau.head<3>() = lidar_state.velocity * dt + (avg_body_accel * square(dt) / 2);
     tau.tail<3>() = avg_ang_vel * dt;
-    return Sophus::SE3d::exp(tau);
+    Sophus::SE3d pose = Sophus::SE3d::exp(tau);
+    if (samplewise_rotation) pose.so3() = rotation_origin.inverse() * gyro_deskew_history.at(time).value();
+    return pose;
   };
 
   const Sophus::SE3d initial_guess = predict_pose_at(current_lidar_time);
