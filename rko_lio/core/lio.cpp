@@ -23,6 +23,7 @@
  */
 
 #include "lio.hpp"
+#include "robust_gravity_residual.hpp"
 #include "degeneracy_aware_solve.hpp"
 #include "gravity_alignment.hpp"
 #include "kinematic_scene_range_gate.hpp"
@@ -269,7 +270,9 @@ LinearSystem build_orientation_linear_system(const Sophus::SE3d& current_pose,
   Eigen::Matrix3_6d J_ori = Eigen::Matrix3_6d::Zero();
   J_ori.block<3, 3>(0, 3) = current_rotation.inverse().matrix() * Sophus::SO3d::hat(-1 * gravity()).matrix();
 
-  return LinearSystem{J_ori.transpose() * J_ori, J_ori.transpose() * residual, 0.5 * residual.squaredNorm()};
+  const auto loss = robust_gravity_residual(residual.squaredNorm());
+  return LinearSystem{loss.weight * (J_ori.transpose() * J_ori),
+                      loss.weight * (J_ori.transpose() * residual), loss.cost};
 }
 
 // [v0.8 Phase 1, diagnostic-only] icp()'s full result: the optimized pose
