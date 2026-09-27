@@ -75,7 +75,7 @@ void ThreadedNode::lidar_callback(const sensor_msgs::msg::PointCloud2::ConstShar
     const std::vector<float> intensities = process_lidar_intensity(lidar_msg);
     {
       std::lock_guard lock(buffer_mutex);
-      // Experimental latest-pending policy: preserve a valid queued frame if
+      // Preserve a valid queued frame if
       // conversion fails, and recheck capacity after conversion under the lock.
       if (lidar_buffer.size() >= max_lidar_buffer_size) {
         lidar_buffer.pop();

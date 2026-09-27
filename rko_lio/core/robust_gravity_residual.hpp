@@ -9,8 +9,8 @@ struct GravityResidualLoss {
   double cost;
 };
 
-// Experimental fixed-scale Tukey loss on the gravity-vector innovation.
-// One g is a hypothesis to evaluate, not a calibrated sensor-noise bound.
+// Fixed-scale Tukey loss on the gravity-vector innovation.
+// The one-g scale is not a calibrated sensor-noise bound.
 // No history or dataset-specific switches; the IRLS weight is recomputed
 // at each ICP iterate. The input is a finite squared residual norm.
 inline GravityResidualLoss robust_gravity_residual(double squared_error) {

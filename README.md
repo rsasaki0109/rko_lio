@@ -107,6 +107,19 @@ More details are available in the [ROS docs](https://prbonn.github.io/rko_lio/pa
 
 The same note [above about extrinsics](#extrinsics-and-convention) applies here as well. Though you probably have a well defined TF tree and need not concern yourself with this (I hope).
 
+## Threaded frontend queue and tests
+
+`async.max_lidar_buffer_size` must be positive. A full queue replaces the oldest
+pending LiDAR scan only after the new scan converts successfully. The scan
+currently being registered is unaffected; IMU readiness follows the new queue
+head. Converting incoming scans before overflow can cost more CPU.
+
+With ROS `BUILD_TESTING=ON`, `test_latest_pending` checks replacement, failed
+conversion, IMU readiness, worker wakeup/shutdown, and invalid capacity using the
+real callbacks. Run with
+`ctest --test-dir <build/rko_lio> -R test_latest_pending --output-on-failure`. These tests check queue contracts, not trajectory accuracy
+or DDS delivery under load.
+
 ## Citation
 
 If you found this work useful, please consider leaving a star :star: on this repository and citing our paper ([RA-L](https://doi.org/10.1109/LRA.2026.3685966) | [arXiv](https://arxiv.org/abs/2509.06593)):
