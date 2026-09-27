@@ -83,10 +83,16 @@ std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eig
   double closest_squared_distance = std::numeric_limits<double>::max();
   const Voxel voxel = point_to_voxel(query, inv_voxel_size_);
   const Eigen::Vector3d fractional = query - voxel.cast<double>() * voxel_size_;
+  std::array<std::array<double, 3>, 3> axis_bounds;
+  for (int axis = 0; axis < 3; ++axis) {
+    for (int offset = -1; offset <= 1; ++offset) {
+      axis_bounds[axis][offset + 1] = axis_bound_sq(fractional[axis], voxel_size_, offset);
+    }
+  }
   std::for_each(shifts.cbegin(), shifts.cend(), [&](const Voxel& voxel_shift) {
-    const double bound_sq = axis_bound_sq(fractional.x(), voxel_size_, voxel_shift.x()) +
-                            axis_bound_sq(fractional.y(), voxel_size_, voxel_shift.y()) +
-                            axis_bound_sq(fractional.z(), voxel_size_, voxel_shift.z());
+    const double bound_sq = axis_bounds[0][voxel_shift.x() + 1] +
+                            axis_bounds[1][voxel_shift.y() + 1] +
+                            axis_bounds[2][voxel_shift.z() + 1];
     if (bound_sq >= closest_squared_distance) {
       return;
     }
