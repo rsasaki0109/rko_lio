@@ -188,22 +188,24 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                                      const std::optional<Eigen::Vector3d>& localizability_axis = std::nullopt,
                                      const double localizability_boost = 0.0,
                                      IcpWeightingStats* weighting_stats = nullptr) {
-  // H, b, chi, weight sum. The weight sum replaces the correspondence count in
+  // H, b, chi, weight sum, correspondence count, boosted count.
+  // The weight sum replaces the correspondence count in
   // the H/b normalization; with weighting disabled every weight is exactly 1
   // and the result is bit-identical to the historical count-normalized system.
-  using WeightedSystem = std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double, double>;
+  using WeightedSystem = std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double, double, int, int>;
   auto linear_system_reduce = [](WeightedSystem lhs, const WeightedSystem& rhs) {
-    auto& [lhs_H, lhs_b, lhs_chi, lhs_w] = lhs;
-    const auto& [rhs_H, rhs_b, rhs_chi, rhs_w] = rhs;
+    auto& [lhs_H, lhs_b, lhs_chi, lhs_w, lhs_count, lhs_boosted] = lhs;
+    const auto& [rhs_H, rhs_b, rhs_chi, rhs_w, rhs_count, rhs_boosted] = rhs;
     lhs_H += rhs_H;
     lhs_b += rhs_b;
     lhs_chi += rhs_chi;
     lhs_w += rhs_w;
+    lhs_count += rhs_count;
+    lhs_boosted += rhs_boosted;
     return lhs;
   };
 
   const bool weighting_enabled = localizability_axis.has_value() && localizability_boost > 0.0;
-  std::atomic<int> boosted_counter = 0;
 
   auto linear_system_for_one_point = [&](const Eigen::Vector3d& source, const Eigen::Vector3d& target) {
     Eigen::Matrix3_6d J_r;
@@ -213,24 +215,20 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
     double weight = 1.0;
     if (weighting_enabled) {
       weight = localizability_weight(voxel_map.voxel_normal(target), *localizability_axis, localizability_boost);
-      if (weight > 1.0) {
-        boosted_counter++;
-      }
     }
     return WeightedSystem(weight * J_r.transpose() * J_r,      // JTJ
                           weight * J_r.transpose() * residual, // JTr
                           weight * residual.squaredNorm(),     // chi
-                          weight);
+                          weight, 1, weight > 1.0 ? 1 : 0);
   };
 
   // The only parallel part
   using points_iterator = std::vector<Eigen::Vector3d>::const_iterator;
-  std::atomic<int> correspondences_counter = 0;
-  const auto& [H_icp, b_icp, chi_icp, weight_sum] = tbb::parallel_reduce(
+  const auto& [H_icp, b_icp, chi_icp, weight_sum, correspondences_counter, boosted_counter] = tbb::parallel_reduce(
       // Range
       tbb::blocked_range<points_iterator>{frame.cbegin(), frame.cend()},
       // Identity
-      WeightedSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0, 0.0),
+      WeightedSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0, 0.0, 0, 0),
       // 1st Lambda: Parallel computation
       [&](const tbb::blocked_range<points_iterator>& r, WeightedSystem J) -> WeightedSystem {
         return std::transform_reduce(r.begin(), r.end(), J, linear_system_reduce, [&](const auto& point) {
@@ -239,11 +237,10 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
           const auto& [closest_neighbor, distance] =
               voxel_map.get_closest_neighbor(transformed_point, voxel_search_radius);
           if (distance < max_correspondence_distance) {
-            correspondences_counter++;
             return linear_system_for_one_point(transformed_point, closest_neighbor);
           }
           // TODO (meher): additional 0 add flops, which may hurt single threaded perf slightly
-          return WeightedSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0, 0.0);
+          return WeightedSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0, 0.0, 0, 0);
         });
       },
       // 2nd Lambda: Parallel reduction of the private Jacobians
