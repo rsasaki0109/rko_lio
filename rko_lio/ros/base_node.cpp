@@ -34,6 +34,7 @@
 #include <numbers>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 using namespace std::literals;
@@ -975,17 +976,17 @@ std::tuple<core::Timestamps, core::Vector3dVector>
 BaseNode::process_lidar_msg(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& lidar_msg) const {
   const core::Nsec header_stamp = utils::to_ns(lidar_msg->header.stamp);
   if (lio->config.deskew) {
-    const auto& [scan, raw_timestamps] = utils::point_cloud2_to_eigen_with_timestamps(lidar_msg);
-    const core::Timestamps& timestamps = core::process_timestamps(raw_timestamps, header_stamp, timestamp_proc_config);
-    return {timestamps, scan};
+    auto [scan, raw_timestamps] = utils::point_cloud2_to_eigen_with_timestamps(lidar_msg);
+    auto timestamps = core::process_timestamps(raw_timestamps, header_stamp, timestamp_proc_config);
+    return {std::move(timestamps), std::move(scan)};
   }
   RCLCPP_WARN_STREAM_ONCE(node->get_logger(), "Deskewing is disabled. Populating timestamps with static header time.");
-  const core::Vector3dVector scan = utils::point_cloud2_to_eigen(lidar_msg);
+  auto scan = utils::point_cloud2_to_eigen(lidar_msg);
   const core::Nsec corrected_stamp =
       header_stamp + std::chrono::duration_cast<core::Nsec>(std::chrono::duration<double>(
                          timestamp_proc_config.offset_seconds));
   return {{.min = corrected_stamp, .max = corrected_stamp, .times = core::TimestampVector(scan.size(), corrected_stamp)},
-          scan};
+          std::move(scan)};
 }
 
 std::vector<float>

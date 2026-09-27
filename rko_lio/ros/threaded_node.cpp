@@ -28,6 +28,7 @@
 #include "rko_lio/ros/utils/utils.hpp"
 // other
 #include <stdexcept>
+#include <utility>
 
 namespace {
 using namespace std::literals;
@@ -69,10 +70,10 @@ void ThreadedNode::lidar_callback(const sensor_msgs::msg::PointCloud2::ConstShar
     return;
   }
   try {
-    const auto [timestamps, scan] = process_lidar_msg(lidar_msg);
+    auto [timestamps, scan] = process_lidar_msg(lidar_msg);
     // Fork addition: per-point reflectivity/intensity, only parsed when an intensity-based
     // feature is enabled (see BaseNode::process_lidar_intensity).
-    const std::vector<float> intensities = process_lidar_intensity(lidar_msg);
+    auto intensities = process_lidar_intensity(lidar_msg);
     {
       std::lock_guard lock(buffer_mutex);
       // Preserve a valid queued frame if
@@ -81,7 +82,7 @@ void ThreadedNode::lidar_callback(const sensor_msgs::msg::PointCloud2::ConstShar
         lidar_buffer.pop();
         RCLCPP_WARN_STREAM(node->get_logger(), "Registration lidar buffer limit reached. Dropping oldest pending frame.");
       }
-      lidar_buffer.emplace(timestamps, scan, intensities);
+      lidar_buffer.emplace(std::move(timestamps), std::move(scan), std::move(intensities));
       atomic_can_process = !imu_buffer.empty() && imu_buffer.back().time > lidar_buffer.front().timestamps.max;
     }
     if (atomic_can_process) {
