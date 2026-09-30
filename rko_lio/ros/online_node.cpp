@@ -24,6 +24,7 @@
 
 #include "threaded_node.hpp"
 #include "rko_lio/core/profiler.hpp"
+#include <rclcpp/qos_overriding_options.hpp>
 
 namespace rko_lio::ros {
 class OnlineNode : public ThreadedNode {
@@ -47,9 +48,12 @@ public:
     imu_sub = node->create_subscription<sensor_msgs::msg::Imu>(
         imu_topic, qos_imu, [this](const sensor_msgs::msg::Imu::ConstSharedPtr& imu_msg) { imu_callback(imu_msg); });
 
+    rclcpp::SubscriptionOptions lidar_options;
+    lidar_options.qos_overriding_options =
+        rclcpp::QosOverridingOptions({rclcpp::QosPolicyKind::Reliability});
     lidar_sub = node->create_subscription<sensor_msgs::msg::PointCloud2>(
         lidar_topic, qos_lidar,
-        [this](const sensor_msgs::msg::PointCloud2::ConstSharedPtr& lidar_msg) { lidar_callback(lidar_msg); });
+        [this](const sensor_msgs::msg::PointCloud2::ConstSharedPtr& lidar_msg) { lidar_callback(lidar_msg); }, lidar_options);
     if (direct_visual_frontend) {
       image_sub = node->create_subscription<sensor_msgs::msg::Image>(
           visual_image_topic, rclcpp::SensorDataQoS().keep_last(20),

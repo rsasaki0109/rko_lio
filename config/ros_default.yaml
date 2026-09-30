@@ -17,6 +17,9 @@ publish_local_map: true
 map_topic: /rko_lio/local_map
 publish_deskewed_scan: true
 odom_at_imu_rate: false
+# Offline only: wait for odometry and, when enabled, deskewed-scan subscribers.
+# Zero preserves immediate processing; a positive timeout fails if readers never match.
+output_subscriber_timeout_sec: 0.0
 # IMU-rate seq pipeline (used when launched with odom_at_imu_rate:=true and mode:=online):
 # seq.odom_at_imu_rate_topic: rko_lio/odom_at_imu_rate
 # seq.tf_at_imu_rate: false

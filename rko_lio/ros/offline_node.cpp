@@ -28,6 +28,8 @@
 // other
 #include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
+#include <chrono>
+#include <cmath>
 
 namespace {
 template <typename T>
@@ -90,7 +92,26 @@ public:
     bag_progress_publisher->publish(progress_msg);
   }
 
-  void run() {
+  bool run() {
+    // Offline processing can finish before DDS discovers map recorders. Opt in
+    // to waiting for both outputs; ordinary trajectory-only runs need no reader.
+    const double subscriber_timeout = node->declare_parameter<double>("output_subscriber_timeout_sec", 0.0);
+    if (!std::isfinite(subscriber_timeout) || subscriber_timeout < 0.0) {
+      RCLCPP_ERROR(node->get_logger(), "output_subscriber_timeout_sec must be finite and nonnegative");
+      return false;
+    }
+    if (subscriber_timeout > 0.0) {
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(subscriber_timeout);
+      while (odom_publisher->get_subscription_count() == 0 ||
+             (publish_deskewed_scan && frame_publisher->get_subscription_count() == 0)) {
+        if (!rclcpp::ok() || std::chrono::steady_clock::now() >= deadline) {
+          RCLCPP_ERROR(node->get_logger(), "Timed out waiting for offline odometry/scan subscribers");
+          return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      RCLCPP_INFO(node->get_logger(), "Offline output subscribers ready; starting bag processing");
+    }
     while (rclcpp::ok() && !bag->finished()) {
       {
         if (lidar_buffer.size() >= 0.9 * max_lidar_buffer_size) {
@@ -151,6 +172,7 @@ public:
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    return true;
   }
 };
 } // namespace rko_lio::ros
@@ -159,7 +181,7 @@ int main(int argc, char** argv) {
   const rko_lio::core::Timer timer("RKO LIO Offline Node");
   rclcpp::init(argc, argv);
   auto node = rko_lio::ros::OfflineNode(rclcpp::NodeOptions());
-  node.run();
+  const bool success = node.run();
   rclcpp::shutdown();
-  return 0;
+  return success ? 0 : 1;
 }
