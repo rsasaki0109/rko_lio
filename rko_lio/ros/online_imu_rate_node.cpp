@@ -90,10 +90,8 @@ public:
     const core::ImuControl imu_data = imu_msg_to_imu_data(*imu_msg);
     lio->add_imu_measurement(extrinsic_imu2base, imu_data);
 
-    if (!(lio->imu_state.time > core::Nsec{0})) {
-      // Skip publishing before the first successful registration: until then,
-      // imu_state has not been seeded from a real lidar pose. add_imu_measurement
-      // leaves imu_state.time at zero in that pre-init phase.
+    if (!lio->has_initialized_pose() || !(lio->imu_state.time > core::Nsec{0})) {
+      // Bootstrap seeds time before gravity alignment finalizes the world frame.
       return;
     }
     publish_odometry(lio->imu_state, odom_at_imu_rate_publisher);

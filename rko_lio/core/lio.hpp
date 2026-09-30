@@ -29,6 +29,7 @@
 
 #pragma once
 #include "intensity_profile.hpp"
+#include "gyro_deskew_history.hpp"
 #include "oriented_intensity_grid.hpp"
 #include "persistent_weak_direction.hpp"
 #include "selective_visual_fusion.hpp"
@@ -576,7 +577,13 @@ public:
   /** IMU measurement statistics since last LiDAR frame. */
   IntervalStats interval_stats;
 
+
   explicit LIO(const Config& config_);
+
+  /** Whether a seeded pose has a finalized world orientation for publication. */
+  bool has_initialized_pose() const {
+    return lidar_state.time > Nsec{0} && (!config.initialization_phase || _initialized);
+  }
 
   /** Add an IMU measurement expressed in the base frame. */
   void add_imu_measurement(const ImuControl& base_imu);
@@ -755,6 +762,8 @@ public:
   double kinematic_blend_last_anchor_refresh_time_sec = -1.0;
 
 private:
+  GyroDeskewHistory gyro_deskew_history;
+
   /**
    * Initialize internal odometry state using the given lidar timestamp.
    * @param lidar_time Current lidar timestamp.

@@ -23,6 +23,7 @@
  */
 
 #include "lio.hpp"
+#include "robust_gravity_residual.hpp"
 #include "degeneracy_aware_solve.hpp"
 #include "gravity_alignment.hpp"
 #include "kinematic_scene_range_gate.hpp"
@@ -264,12 +265,15 @@ LinearSystem build_orientation_linear_system(const Sophus::SE3d& current_pose,
   const Sophus::SO3d& current_rotation = current_pose.so3();
   const Eigen::Vector3d predicted_gravity =
       current_rotation.inverse() * (-1 * gravity()); // points upwards, same as local_gravity_estimate
-  const Eigen::Vector3d residual = predicted_gravity - local_gravity_estimate;
+  const auto constraint = robust_gravity_direction(predicted_gravity, local_gravity_estimate);
+  const Eigen::Vector3d& residual = constraint.residual;
 
   Eigen::Matrix3_6d J_ori = Eigen::Matrix3_6d::Zero();
   J_ori.block<3, 3>(0, 3) = current_rotation.inverse().matrix() * Sophus::SO3d::hat(-1 * gravity()).matrix();
 
-  return LinearSystem{J_ori.transpose() * J_ori, J_ori.transpose() * residual, 0.5 * residual.squaredNorm()};
+  const auto& loss = constraint.loss;
+  return LinearSystem{loss.weight * (J_ori.transpose() * J_ori),
+                      loss.weight * (J_ori.transpose() * residual), loss.cost};
 }
 
 // [v0.8 Phase 1, diagnostic-only] icp()'s full result: the optimized pose
@@ -488,6 +492,7 @@ LIO::LIO(const Config& config_)
 // ==========================
 
 void LIO::initialize(const Nsec lidar_time) {
+  gyro_deskew_history.clear();
   if (interval_stats.imu_count == 0) {
     std::cerr << "[WARNING] Cannot initialize. No imu measurements received.\n";
     // lidar_state.time has the time from the previous lidar, which we didn't log if init_phase was on
@@ -525,12 +530,15 @@ void LIO::initialize(const Nsec lidar_time) {
 Vector3dVector LIO::bootstrap_first_scan(const Vector3dVector& scan, const Nsec current_lidar_time) {
   lidar_state.time = current_lidar_time;
   imu_state = lidar_state;
-  auto preproc = preprocess_scan(scan, config);
-  if (!config.initialization_phase) {
-    update_maps(config.double_downsample ? preproc.map_frame : preproc.keypoints, lidar_state.pose);
-    poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
-    std::cout << "[INFO] Odometry map frame initialized with first lidar scan.\n";
+  // Initialization needs the next IMU interval before this pose has a valid
+  // world orientation. Do not publish a cloud/odometry pair in a provisional frame.
+  if (config.initialization_phase) {
+    return {};
   }
+  auto preproc = preprocess_scan(scan, config);
+  update_maps(config.double_downsample ? preproc.map_frame : preproc.keypoints, lidar_state.pose);
+  poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  std::cout << "[INFO] Odometry map frame initialized with first lidar scan.\n";
   return std::move(preproc.filtered_frame);
 }
 
@@ -592,6 +600,7 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
   _kinematic_blend_speed_last_rejected_time_sec = -1.0;
   imu_state = lidar_state;
   interval_stats.reset();
+  gyro_deskew_history.clear();
   update_maps(map_update_frame, lidar_state.pose);
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
   _consecutive_registration_failures = 0;
@@ -614,6 +623,7 @@ Vector3dVector LIO::drop_failed_scan(const Nsec& current_lidar_time, const std::
   _kinematic_blend_speed_last_rejected_time_sec = -1.0;
   imu_state = lidar_state;
   interval_stats.reset();
+  gyro_deskew_history.clear();
   std::cerr << "[WARNING] Dropping scan during kidnap recovery: " << reason << "\n";
   return {};
 }
@@ -720,6 +730,8 @@ void LIO::add_imu_measurement(const ImuControl& base_imu) {
 
   const Eigen::Vector3d local_gravity = imu_state.pose.so3().inverse() * gravity();
   const Eigen::Vector3d compensated_accel = unbiased_accel + local_gravity;
+
+  gyro_deskew_history.add(imu_state.time, base_imu.time, unbiased_ang_vel);
 
   // imu state update
   Eigen::Vector6d tau;
@@ -829,13 +841,21 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
 
   const auto [avg_body_accel, avg_ang_vel] = motion_priors_from_imu(current_lidar_time);
 
-  // compute relative motion using controls
+  const Nsec earliest = std::min(lidar_state.time, *std::min_element(timestamps.begin(), timestamps.end()));
+  const bool samplewise_rotation = gyro_deskew_history.finish_scan(current_lidar_time) &&
+                                   gyro_deskew_history.covers(earliest, current_lidar_time);
+  const Sophus::SO3d rotation_origin = samplewise_rotation
+      ? gyro_deskew_history.at(lidar_state.time).value() : Sophus::SO3d();
+
+  // Keep the existing translation curve and prediction; replace only deskew rotation.
   auto relative_pose_at_time = [&](const Nsec time) -> Sophus::SE3d {
     const double dt = to_seconds(time - lidar_state.time);
     Eigen::Vector6d tau;
     tau.head<3>() = lidar_state.velocity * dt + (avg_body_accel * square(dt) / 2);
     tau.tail<3>() = avg_ang_vel * dt;
-    return Sophus::SE3d::exp(tau);
+    Sophus::SE3d pose = Sophus::SE3d::exp(tau);
+    if (samplewise_rotation) pose.so3() = rotation_origin.inverse() * gyro_deskew_history.at(time).value();
+    return pose;
   };
 
   const Sophus::SE3d initial_guess = predict_pose_at(current_lidar_time);

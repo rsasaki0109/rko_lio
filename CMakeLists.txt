@@ -72,6 +72,23 @@ else()
 
   if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
+    ament_add_gtest(test_initialized_output test/test_initialized_output.cpp)
+    if(TARGET test_initialized_output)
+      target_link_libraries(test_initialized_output rko_lio::core)
+    endif()
+    ament_add_gtest(test_gyro_deskew_history test/test_gyro_deskew_history.cpp)
+    if(TARGET test_gyro_deskew_history)
+      target_link_libraries(test_gyro_deskew_history rko_lio::core)
+    endif()
+    ament_add_gtest(test_robust_gravity_residual test/test_robust_gravity_residual.cpp)
+    if(TARGET test_robust_gravity_residual)
+      target_link_libraries(test_robust_gravity_residual rko_lio::core)
+    endif()
+    ament_add_gtest(test_latest_pending test/test_latest_pending.cpp)
+    if(TARGET test_latest_pending)
+      target_link_libraries(test_latest_pending rko_lio::ros)
+    endif()
+
     ament_add_gtest(
       test_direct_visual_odometry
       test/test_direct_visual_odometry.cpp)

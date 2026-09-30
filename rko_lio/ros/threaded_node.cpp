@@ -36,8 +36,12 @@ using namespace std::literals;
 namespace rko_lio::ros {
 
 ThreadedNode::ThreadedNode(const std::string& node_name, const rclcpp::NodeOptions& options) : BaseNode(node_name, options) {
-  max_lidar_buffer_size = static_cast<size_t>(node->declare_parameter<int>(
-      "async.max_lidar_buffer_size", static_cast<int>(max_lidar_buffer_size)));
+  const int buffer_size = node->declare_parameter<int>(
+      "async.max_lidar_buffer_size", static_cast<int>(max_lidar_buffer_size));
+  if (buffer_size < 1) {
+    throw std::invalid_argument("async.max_lidar_buffer_size must be positive");
+  }
+  max_lidar_buffer_size = static_cast<size_t>(buffer_size);
   const int output_publish_delay_ms = node->declare_parameter<int>("async.output_publish_delay_ms", 0);
   if (output_publish_delay_ms < 0) {
     throw std::invalid_argument("async.output_publish_delay_ms must be non-negative");
@@ -64,14 +68,6 @@ void ThreadedNode::lidar_callback(const sensor_msgs::msg::PointCloud2::ConstShar
   if (!ensure_frame_and_extrinsics(lidar_frame, lidar_msg->header.frame_id, "LiDAR")) {
     return;
   }
-  {
-    std::lock_guard lock(buffer_mutex);
-    if (lidar_buffer.size() >= max_lidar_buffer_size) {
-      RCLCPP_WARN_STREAM(node->get_logger(), "Registration lidar buffer limit reached. Dropping frame.");
-      sync_condition_variable.notify_one();
-      return;
-    }
-  }
   try {
     const auto [timestamps, scan] = process_lidar_msg(lidar_msg);
     // Fork addition: per-point reflectivity/intensity, only parsed when an intensity-based
@@ -79,6 +75,12 @@ void ThreadedNode::lidar_callback(const sensor_msgs::msg::PointCloud2::ConstShar
     const std::vector<float> intensities = process_lidar_intensity(lidar_msg);
     {
       std::lock_guard lock(buffer_mutex);
+      // Preserve a valid queued frame if
+      // conversion fails, and recheck capacity after conversion under the lock.
+      if (lidar_buffer.size() >= max_lidar_buffer_size) {
+        lidar_buffer.pop();
+        RCLCPP_WARN_STREAM(node->get_logger(), "Registration lidar buffer limit reached. Dropping oldest pending frame.");
+      }
       lidar_buffer.emplace(timestamps, scan, intensities);
       atomic_can_process = !imu_buffer.empty() && imu_buffer.back().time > lidar_buffer.front().timestamps.max;
     }

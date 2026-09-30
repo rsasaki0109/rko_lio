@@ -36,6 +36,7 @@ compat_target_sources(
   FILE_SET
   HEADERS
   FILES ../../rko_lio/core/lio.hpp
+        ../../rko_lio/core/gyro_deskew_history.hpp
         ../../rko_lio/core/correlation_peak_selector.hpp
         ../../rko_lio/core/correlation_score.hpp
         ../../rko_lio/core/direct_visual_odometry.hpp
