@@ -89,7 +89,35 @@ TEST_F(LatestPending, WorkerWaitsForNewFrameImuAndDrainsQueue) {
   EXPECT_FALSE(node.atomic_node_running);
 }
 TEST_F(LatestPending, RejectsNonpositiveCapacity) {
+  const auto context = rclcpp::contexts::get_global_default_context();
+  const auto callbacks_before = context->get_on_shutdown_callbacks().size();
   EXPECT_THROW(ThreadedNode("zero", options(0)), std::invalid_argument);
   EXPECT_THROW(ThreadedNode("negative", options(-1)), std::invalid_argument);
+  EXPECT_EQ(context->get_on_shutdown_callbacks().size(), callbacks_before);
+}
+TEST_F(LatestPending, DestructionUnregistersShutdownCallback) {
+  const auto context = rclcpp::contexts::get_global_default_context();
+  const auto callbacks_before = context->get_on_shutdown_callbacks().size();
+  {
+    ThreadedNode node("queue_test", options());
+    stop(node);
+    EXPECT_GT(context->get_on_shutdown_callbacks().size(), callbacks_before);
+  }
+  EXPECT_EQ(context->get_on_shutdown_callbacks().size(), callbacks_before);
+}
+TEST_F(LatestPending, ShutdownCallbackUsesNodeContext) {
+  const auto context = std::make_shared<rclcpp::Context>();
+  context->init(0, nullptr);
+  const auto global = rclcpp::contexts::get_global_default_context();
+  const auto global_callbacks_before = global->get_on_shutdown_callbacks().size();
+  const auto callbacks_before = context->get_on_shutdown_callbacks().size();
+  {
+    ThreadedNode node("queue_test", options().context(context));
+    stop(node);
+    EXPECT_GT(context->get_on_shutdown_callbacks().size(), callbacks_before);
+    EXPECT_EQ(global->get_on_shutdown_callbacks().size(), global_callbacks_before);
+    context->shutdown("test shutdown while node is alive");
+  }
+  EXPECT_EQ(context->get_on_shutdown_callbacks().size(), callbacks_before);
 }
 } // namespace

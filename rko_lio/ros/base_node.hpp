@@ -118,6 +118,7 @@ public:
   bool dump_results = false;
   std::string results_dir = "results";
   std::string run_name = "rko_lio_run";
+  rclcpp::OnShutdownCallbackHandle shutdown_callback_handle;
 
   bool invert_odom_tf = false;
   bool publish_lidar_acceleration = false;
