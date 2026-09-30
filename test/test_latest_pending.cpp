@@ -115,9 +115,9 @@ TEST_F(LatestPending, ShutdownCallbackUsesNodeContext) {
     ThreadedNode node("queue_test", options().context(context));
     stop(node);
     EXPECT_GT(context->get_on_shutdown_callbacks().size(), callbacks_before);
-    EXPECT_EQ(global->get_on_shutdown_callbacks().size(), global_callbacks_before);
     context->shutdown("test shutdown while node is alive");
   }
   EXPECT_EQ(context->get_on_shutdown_callbacks().size(), callbacks_before);
+  EXPECT_EQ(global->get_on_shutdown_callbacks().size(), global_callbacks_before);
 }
 } // namespace
