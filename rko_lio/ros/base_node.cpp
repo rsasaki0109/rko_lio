@@ -197,6 +197,8 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
       nlohmann_json_t.gravity_alignment_max_magnitude_deviation;
   nlohmann_json_j["gravity_alignment_max_plausible_tilt_rad"] = nlohmann_json_t.gravity_alignment_max_plausible_tilt_rad;
   nlohmann_json_j["gravity_alignment_max_yaw_rate_rad_s"] = nlohmann_json_t.gravity_alignment_max_yaw_rate_rad_s;
+  nlohmann_json_j["gravity_alignment_relevel_map"] = nlohmann_json_t.gravity_alignment_relevel_map;
+  nlohmann_json_j["gravity_alignment_relevel_min_tilt_rad"] = nlohmann_json_t.gravity_alignment_relevel_min_tilt_rad;
   nlohmann_json_j["localizability_weighting"] = nlohmann_json_t.localizability_weighting;
   nlohmann_json_j["localizability_boost"] = nlohmann_json_t.localizability_boost;
   nlohmann_json_j["localizability_min_step_m"] = nlohmann_json_t.localizability_min_step_m;
@@ -352,6 +354,9 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
       .get_to(nlohmann_json_t.gravity_alignment_max_plausible_tilt_rad);
   nlohmann_json_j.at("gravity_alignment_max_yaw_rate_rad_s")
       .get_to(nlohmann_json_t.gravity_alignment_max_yaw_rate_rad_s);
+  nlohmann_json_j.at("gravity_alignment_relevel_map").get_to(nlohmann_json_t.gravity_alignment_relevel_map);
+  nlohmann_json_j.at("gravity_alignment_relevel_min_tilt_rad")
+      .get_to(nlohmann_json_t.gravity_alignment_relevel_min_tilt_rad);
   nlohmann_json_j.at("localizability_weighting").get_to(nlohmann_json_t.localizability_weighting);
   nlohmann_json_j.at("localizability_boost").get_to(nlohmann_json_t.localizability_boost);
   nlohmann_json_j.at("localizability_min_step_m").get_to(nlohmann_json_t.localizability_min_step_m);
@@ -650,6 +655,10 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "gravity_alignment_max_plausible_tilt_rad", lio_config.gravity_alignment_max_plausible_tilt_rad);
   lio_config.gravity_alignment_max_yaw_rate_rad_s = node->declare_parameter<double>(
       "gravity_alignment_max_yaw_rate_rad_s", lio_config.gravity_alignment_max_yaw_rate_rad_s);
+  lio_config.gravity_alignment_relevel_map =
+      node->declare_parameter<bool>("gravity_alignment_relevel_map", lio_config.gravity_alignment_relevel_map);
+  lio_config.gravity_alignment_relevel_min_tilt_rad = node->declare_parameter<double>(
+      "gravity_alignment_relevel_min_tilt_rad", lio_config.gravity_alignment_relevel_min_tilt_rad);
 
   // ---- localizability-aware ICP weighting (fork addition; default-off) ----
   lio_config.localizability_weighting =

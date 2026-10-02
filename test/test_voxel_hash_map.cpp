@@ -2,6 +2,8 @@
 
 #include "rko_lio/core/voxel_hash_map.hpp"
 
+#include <sophus/se3.hpp>
+
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -133,6 +135,28 @@ TEST(VoxelHashMap, BranchAndBoundMatchesBruteForceAcrossSignedBoundaries) {
     EXPECT_TRUE(actual.isApprox(expected, 1e-12)) << "query: " << query.transpose();
     EXPECT_NEAR(distance, std::sqrt(expected_squared_distance), 1e-12)
         << "query: " << query.transpose();
+  }
+}
+
+// LIO::relevel_local_frame relies on transform() moving every stored point rigidly and
+// re-bucketing it, so queries in the new frame find the moved points.
+TEST(VoxelHashMap, TransformMovesEveryPointRigidly) {
+  VoxelHashMap grid(0.5, 100.0, 20);
+  std::vector<Eigen::Vector3d> points;
+  for (int i = 0; i < 40; ++i) {
+    points.emplace_back(0.37 * i, -0.21 * i, 0.05 * i);
+  }
+  grid.add_points(points);
+
+  const Sophus::SE3d transform(Sophus::SO3d::exp(Eigen::Vector3d(0.01, -0.02, 0.3)), Eigen::Vector3d(1.0, 2.0, -0.5));
+  grid.transform(transform);
+
+  EXPECT_EQ(grid.pointcloud().size(), points.size());
+  for (const auto& point : points) {
+    const Eigen::Vector3d moved = transform * point;
+    const auto [neighbor, distance] = grid.get_closest_neighbor(moved);
+    EXPECT_LT(distance, 1e-9) << "point " << point.transpose();
+    EXPECT_TRUE(neighbor.isApprox(moved, 1e-9));
   }
 }
 

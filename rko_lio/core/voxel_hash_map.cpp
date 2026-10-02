@@ -234,6 +234,15 @@ void VoxelHashMap::update(const std::vector<Eigen::Vector3d>& points, const Soph
   remove_points_far_from_location(origin);
 }
 
+void VoxelHashMap::transform(const Sophus::SE3d& transform) {
+  std::vector<Eigen::Vector3d> points = pointcloud();
+  for (Eigen::Vector3d& point : points) {
+    point = transform * point;
+  }
+  clear();
+  add_points(points);
+}
+
 std::vector<Eigen::Vector3d> VoxelHashMap::pointcloud() const {
   std::vector<Eigen::Vector3d> point_cloud;
   point_cloud.reserve(map_.size() * max_points_per_voxel_);

@@ -57,6 +57,8 @@ struct VoxelHashMap {
   void add_points(const std::vector<Eigen::Vector3d>& points);
   void remove_points_far_from_location(const Eigen::Vector3d& origin);
   std::vector<Eigen::Vector3d> pointcloud() const;
+  /** Re-express every stored point as `transform * point`, rebuilding the voxel grid. */
+  void transform(const Sophus::SE3d& transform);
   std::tuple<Eigen::Vector3d, double> get_closest_neighbor(const Eigen::Vector3d& query) const;
   // Widened neighbor search: scans a (2*voxel_search_radius+1)^3 block of voxels instead of the
   // fixed 3x3x3 neighborhood used by the single-argument overload above. Ported from this fork's
