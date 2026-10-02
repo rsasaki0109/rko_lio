@@ -842,6 +842,12 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // recovers from a single dropout. Dropping this scan while advancing the
     // internal clock lets the next scan register normally, and the failure
     // count lets relocalize_after_scan_gap trigger when enabled.
+    // When the IMU kept streaming through the gap, re-anchor at the pose it propagated:
+    // re-anchoring at the pre-gap pose loses the motion made during the gap, and the
+    // next scans then register from a stale heading and position.
+    if (interval_stats.imu_count > 0) {
+      lidar_state.pose = imu_state.pose;
+    }
     ++_consecutive_registration_failures;
     return drop_failed_scan(current_lidar_time,
                             "LiDAR scan gap of " + std::to_string(diff_seconds) +

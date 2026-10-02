@@ -328,3 +328,31 @@ TEST_CASE("register_scan: empty timestamps throws instead of UB", "[register_sca
   const TimestampVector empty_timestamps;
   REQUIRE_THROWS_AS(lio.register_scan(cloud, empty_timestamps), std::invalid_argument);
 }
+
+TEST_CASE("Scan gap re-anchor keeps the motion the IMU propagated", "[register_scan]") {
+  // The LiDAR drops out for ~2 s (> max_scan_delta_sec) while the IMU keeps streaming.
+  constexpr double gap_end = FIRST_SCAN_END + 2.0;
+  const double imu_span = gap_end - 0.05 - FIRST_SCAN_END; // first scan to last IMU sample
+  const auto cloud = make_hollow_cube();
+
+  SECTION("constant yaw rate") {
+    LIO lio((LIO::Config{}));
+    lio.register_scan(cloud, linspace_timestamps(cloud.size(), 0.0, FIRST_SCAN_END));
+    constexpr double yaw_rate = 0.5;
+    feed_imu(lio, FIRST_SCAN_END + 0.05, gap_end - 0.05, 40, {0.0, 0.0, GRAVITY_MAG}, {0.0, 0.0, yaw_rate});
+    REQUIRE(lio.register_scan(cloud, instant_timestamps(cloud.size(), gap_end)).empty());
+    REQUIRE_THAT(to_seconds(lio.lidar_state.time), WithinAbs(gap_end, 1e-9));
+    REQUIRE_THAT(lio.lidar_state.pose.so3().log().z(), WithinAbs(yaw_rate * imu_span, 1e-9));
+    REQUIRE(lio.lidar_state.pose.so3().log().head<2>().norm() < 1e-9);
+  }
+
+  SECTION("constant forward acceleration") {
+    LIO lio((LIO::Config{}));
+    lio.register_scan(cloud, linspace_timestamps(cloud.size(), 0.0, FIRST_SCAN_END));
+    constexpr double accel = 1.0;
+    feed_imu(lio, FIRST_SCAN_END + 0.05, gap_end - 0.05, 40, {accel, 0.0, GRAVITY_MAG}, Eigen::Vector3d::Zero());
+    REQUIRE(lio.register_scan(cloud, instant_timestamps(cloud.size(), gap_end)).empty());
+    REQUIRE_THAT(lio.lidar_state.pose.translation().x(), WithinAbs(0.5 * accel * imu_span * imu_span, 1e-6));
+    REQUIRE(lio.lidar_state.pose.so3().log().norm() < 1e-9);
+  }
+}
