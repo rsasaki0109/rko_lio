@@ -97,7 +97,6 @@ TEST(VoxelHashMap, FindsExactNearestPointAcrossVoxelBoundaries) {
 }
 
 TEST(VoxelHashMap, BranchAndBoundMatchesBruteForceAcrossSignedBoundaries) {
-  constexpr int radius = 3;
   VoxelHashMap grid(1.0, 100.0, 20U);
   std::vector<Eigen::Vector3d> points;
   for (int x = -4; x <= 4; ++x) {
@@ -115,26 +114,28 @@ TEST(VoxelHashMap, BranchAndBoundMatchesBruteForceAcrossSignedBoundaries) {
       {-0.01, -0.99, 0.50},
       {0.99, 1.01, -1.01},
       {2.40, -2.60, 0.20}};
-  for (const auto& query : queries) {
-    const Eigen::Vector3i query_voxel = query.array().floor().cast<int>();
-    Eigen::Vector3d expected = Eigen::Vector3d::Zero();
-    double expected_squared_distance = std::numeric_limits<double>::max();
-    for (const auto& point : points) {
-      const Eigen::Vector3i point_voxel = point.array().floor().cast<int>();
-      if ((point_voxel - query_voxel).cwiseAbs().maxCoeff() > radius) {
-        continue;
+  for (const int radius : {1, 3}) {
+    for (const auto& query : queries) {
+      const Eigen::Vector3i query_voxel = query.array().floor().cast<int>();
+      Eigen::Vector3d expected = Eigen::Vector3d::Zero();
+      double expected_squared_distance = std::numeric_limits<double>::max();
+      for (const auto& point : points) {
+        const Eigen::Vector3i point_voxel = point.array().floor().cast<int>();
+        if ((point_voxel - query_voxel).cwiseAbs().maxCoeff() > radius) {
+          continue;
+        }
+        const double squared_distance = (point - query).squaredNorm();
+        if (squared_distance < expected_squared_distance) {
+          expected = point;
+          expected_squared_distance = squared_distance;
+        }
       }
-      const double squared_distance = (point - query).squaredNorm();
-      if (squared_distance < expected_squared_distance) {
-        expected = point;
-        expected_squared_distance = squared_distance;
-      }
-    }
 
-    const auto [actual, distance] = grid.get_closest_neighbor(query, radius);
-    EXPECT_TRUE(actual.isApprox(expected, 1e-12)) << "query: " << query.transpose();
-    EXPECT_NEAR(distance, std::sqrt(expected_squared_distance), 1e-12)
-        << "query: " << query.transpose();
+      const auto [actual, distance] = grid.get_closest_neighbor(query, radius);
+      EXPECT_TRUE(actual.isApprox(expected, 1e-12)) << "query: " << query.transpose();
+      EXPECT_NEAR(distance, std::sqrt(expected_squared_distance), 1e-12)
+          << "query: " << query.transpose();
+    }
   }
 }
 
@@ -158,6 +159,20 @@ TEST(VoxelHashMap, TransformMovesEveryPointRigidly) {
     EXPECT_LT(distance, 1e-9) << "point " << point.transpose();
     EXPECT_TRUE(neighbor.isApprox(moved, 1e-9));
   }
+}
+
+TEST(VoxelHashMap, RadiusOnePreservesTieOrderAndEmptySentinel) {
+  VoxelHashMap grid(1.0, 100.0, 20U);
+  const auto [empty_point, empty_distance] = grid.get_closest_neighbor(Eigen::Vector3d::Zero());
+  EXPECT_EQ(empty_distance, std::numeric_limits<double>::max());
+  EXPECT_TRUE(empty_point.isZero());
+  grid.add_points({{0.25, 0.0, 0.0}, {-0.25, 0.0, 0.0}, {0.0, -0.25, 0.0}});
+  const auto [nearest, distance] = grid.get_closest_neighbor(Eigen::Vector3d::Zero());
+  EXPECT_TRUE(nearest == Eigen::Vector3d(-0.25, 0.0, 0.0));
+  EXPECT_DOUBLE_EQ(distance, 0.25);
+  const auto [exact, zero_distance] = grid.get_closest_neighbor(nearest);
+  EXPECT_TRUE(exact == nearest);
+  EXPECT_DOUBLE_EQ(zero_distance, 0.0);
 }
 
 } // namespace
