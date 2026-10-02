@@ -156,6 +156,7 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["max_expected_jerk"] = nlohmann_json_t.max_expected_jerk;
   nlohmann_json_j["double_downsample"] = nlohmann_json_t.double_downsample;
   nlohmann_json_j["icp_keypoint_voxel_multiplier"] = nlohmann_json_t.icp_keypoint_voxel_multiplier;
+  nlohmann_json_j["min_icp_keypoints"] = nlohmann_json_t.min_icp_keypoints;
   nlohmann_json_j["min_beta"] = nlohmann_json_t.min_beta;
   nlohmann_json_j["degeneracy_aware_solve"] = nlohmann_json_t.degeneracy_aware_solve;
   nlohmann_json_j["degeneracy_well_conditioned_ratio"] = nlohmann_json_t.degeneracy_well_conditioned_ratio;
@@ -303,6 +304,7 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
   nlohmann_json_j.at("max_expected_jerk").get_to(nlohmann_json_t.max_expected_jerk);
   nlohmann_json_j.at("double_downsample").get_to(nlohmann_json_t.double_downsample);
   nlohmann_json_j.at("icp_keypoint_voxel_multiplier").get_to(nlohmann_json_t.icp_keypoint_voxel_multiplier);
+  nlohmann_json_j.at("min_icp_keypoints").get_to(nlohmann_json_t.min_icp_keypoints);
   nlohmann_json_j.at("min_beta").get_to(nlohmann_json_t.min_beta);
   nlohmann_json_j.at("degeneracy_aware_solve").get_to(nlohmann_json_t.degeneracy_aware_solve);
   nlohmann_json_j.at("degeneracy_well_conditioned_ratio").get_to(nlohmann_json_t.degeneracy_well_conditioned_ratio);
@@ -536,6 +538,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   lio_config.min_beta = node->declare_parameter<double>("min_beta", lio_config.min_beta);
   lio_config.icp_keypoint_voxel_multiplier =
       node->declare_parameter<double>("icp_keypoint_voxel_multiplier", lio_config.icp_keypoint_voxel_multiplier);
+  lio_config.min_icp_keypoints = static_cast<size_t>(std::max<int64_t>(
+      1, node->declare_parameter<int64_t>("min_icp_keypoints", static_cast<int64_t>(lio_config.min_icp_keypoints))));
 
   // ---- degeneracy-aware ICP solve (fork addition; default-off) ----
   lio_config.degeneracy_aware_solve =
