@@ -575,6 +575,15 @@ void LIO::update_maps(const Vector3dVector& map_update_frame, const Sophus::SE3d
   }
 }
 
+void LIO::relevel_local_frame(const Sophus::SO3d& correction, const Eigen::Vector3d& pivot) {
+  const Sophus::SE3d transform(correction, pivot - correction * pivot);
+  lidar_state.pose = transform * lidar_state.pose;
+  map.transform(transform);
+  for (auto& [_, world_accel] : _gravity_alignment_window) {
+    world_accel = correction * world_accel;
+  }
+}
+
 Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
                                       const Vector3dVector& map_update_frame,
                                       const Nsec& current_lidar_time,
@@ -1779,14 +1788,19 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           mean_world_accel += world_accel;
         }
         mean_world_accel /= static_cast<double>(_gravity_alignment_window.size());
+        const bool relevel = config.gravity_alignment_relevel_map;
         const GravityAlignmentCorrection alignment = compute_gravity_alignment_correction(
             mean_world_accel, GRAVITY_MAG, config.gravity_alignment_max_magnitude_deviation,
-            config.gravity_alignment_gain, config.gravity_alignment_max_correction_rad,
+            relevel ? 1.0 : config.gravity_alignment_gain,
+            relevel ? config.gravity_alignment_max_plausible_tilt_rad : config.gravity_alignment_max_correction_rad,
             config.gravity_alignment_max_plausible_tilt_rad);
-        if (alignment.valid) {
+        if (alignment.valid && (!relevel || alignment.tilt_rad >= config.gravity_alignment_relevel_min_tilt_rad)) {
           ++gravity_alignment_applied_count;
           gravity_alignment_last_tilt_rad = alignment.tilt_rad;
           gravity_alignment_correction_rad_sum += alignment.correction.log().norm();
+          if (relevel) {
+            relevel_local_frame(alignment.correction, optimized_pose.translation());
+          }
           optimized_pose.so3() = alignment.correction * optimized_pose.so3();
         }
       }

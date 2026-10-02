@@ -304,6 +304,20 @@ public:
      *  the alignment goes dormant instead of injecting a false correction. */
     double gravity_alignment_max_yaw_rate_rad_s = 0.05;
 
+    /** Apply the gravity alignment as a rigid re-levelling of the local frame instead of
+     *  rotating only the new pose: the pose, the previous pose, the local map and the window
+     *  are all rotated about the current position. A pose-only correction disagrees with the
+     *  still-tilted local map, so the next registrations pull most of it back. The full
+     *  measured tilt is applied at once whenever it reaches gravity_alignment_relevel_min_tilt_rad
+     *  (gravity_alignment_gain and gravity_alignment_max_correction_rad are unused). Each
+     *  re-level rebuilds the local map once (~150 ms for 0.85 M points). The kidnap-recovery
+     *  map is not re-levelled. */
+    bool gravity_alignment_relevel_map = false;
+
+    /** Measured window tilt (rad) that triggers a re-level when gravity_alignment_relevel_map
+     *  is on. */
+    double gravity_alignment_relevel_min_tilt_rad = 0.005;
+
     /** Accelerometer-consistency velocity gate (see kinematic_velocity_gate.hpp). Clamps the
      *  per-scan velocity change along the previous motion direction to the measured body
      *  acceleration plus kinematic_gate_accel_margin, breaking the geometric zero-motion
@@ -791,6 +805,9 @@ private:
 
   /** Update the sliding local map and, when enabled, the unpruned recovery map. */
   void update_maps(const Vector3dVector& map_update_frame, const Sophus::SE3d& pose);
+  /** Rotate the local frame (previous pose, local map, gravity window) by `correction`
+   *  about `pivot`; see Config::gravity_alignment_relevel_map. */
+  void relevel_local_frame(const Sophus::SO3d& correction, const Eigen::Vector3d& pivot);
 
   /** True if odometry initialization has been completed. */
   bool _initialized = false;
