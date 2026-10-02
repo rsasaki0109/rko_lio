@@ -329,6 +329,31 @@ TEST_CASE("register_scan: empty timestamps throws instead of UB", "[register_sca
   REQUIRE_THROWS_AS(lio.register_scan(cloud, empty_timestamps), std::invalid_argument);
 }
 
+TEST_CASE("Scans below min_icp_keypoints are not registered", "[register_scan]") {
+  // A mostly occluded scan: a few dozen keypoints that ICP could slide on.
+  Vector3dVector sparse;
+  for (int i = 0; i < 30; ++i) {
+    sparse.emplace_back(2.0 + 1.5 * i, (i % 2) ? 3.0 : -3.0, 0.3 * (i % 5));
+  }
+  const auto cloud = make_hollow_cube();
+  for (const size_t min_keypoints : {size_t{10}, size_t{100}}) {
+    LIO::Config config;
+    config.min_icp_keypoints = min_keypoints;
+    LIO lio(config);
+    lio.register_scan(cloud, linspace_timestamps(cloud.size(), 0.0, FIRST_SCAN_END));
+    feed_static_imu(lio, FIRST_SCAN_END + 0.05, SECOND_SCAN_END - 0.05, 10);
+    const auto register_sparse = [&] {
+      lio.register_scan(sparse, instant_timestamps(sparse.size(), SECOND_SCAN_END));
+    };
+    if (min_keypoints > sparse.size()) {
+      REQUIRE_THROWS_AS(register_sparse(), std::invalid_argument);
+      REQUIRE(lio.poses_with_timestamps.size() == 1);
+    } else {
+      REQUIRE_NOTHROW(register_sparse());
+    }
+  }
+}
+
 TEST_CASE("Scan gap re-anchor keeps the motion the IMU propagated", "[register_scan]") {
   // The LiDAR drops out for ~2 s (> max_scan_delta_sec) while the IMU keeps streaming.
   constexpr double gap_end = FIRST_SCAN_END + 2.0;

@@ -160,6 +160,11 @@ public:
     /** Voxel-size multiplier used only for ICP keypoints in double-downsample mode. */
     double icp_keypoint_voxel_multiplier = 1.5;
 
+    /** Scans with fewer ICP keypoints are not registered. A mostly occluded scan (sensor
+     *  covered by a hand or the body) can still yield a few dozen keypoints, and ICP on those
+     *  can slide along a weakly observed direction and write the error into the map. */
+    size_t min_icp_keypoints = 10;
+
     /** Minimum weight for orientation regularization. */
     double min_beta = 200;
 

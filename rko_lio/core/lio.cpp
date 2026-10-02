@@ -997,7 +997,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       config.deskew ? preprocess_scan(deskew_scan(scan, timestamps, current_lidar_time, relative_pose_at_time), config)
                     : preprocess_scan(scan, config);
 
-  if (preproc_result.keypoints.size() < 10) {
+  if (preproc_result.keypoints.size() < std::max<size_t>(1, config.min_icp_keypoints)) {
     const std::string error_msg =
         "Keypoints for ICP registration = " + std::to_string(preproc_result.keypoints.size()) +
         ", this is too little for ICP and likely unintended. Input scan size = " + std::to_string(scan.size()) +
