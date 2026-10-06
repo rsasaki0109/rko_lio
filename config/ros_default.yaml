@@ -24,6 +24,10 @@ output_subscriber_timeout_sec: 0.0
 # seq.odom_at_imu_rate_topic: rko_lio/odom_at_imu_rate
 # seq.tf_at_imu_rate: false
 
+# Unit of the IMU linear acceleration: mps2, g (Livox drivers publish g), or auto
+# (decided from the first sample: below half of g in m/s^2 means g).
+imu_acceleration_unit: mps2
+
 # lio config
 # Fixed LiDAR timestamp correction in seconds, applied to every point timestamp.
 lidar_time_offset_sec: 0.0

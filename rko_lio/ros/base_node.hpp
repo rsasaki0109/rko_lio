@@ -123,6 +123,9 @@ public:
   bool invert_odom_tf = false;
   bool publish_lidar_acceleration = false;
   bool publish_deskewed_scan = false;
+  // See core/imu_acceleration_unit.hpp; the scale is fixed by the first IMU message.
+  std::string imu_acceleration_unit = "mps2";
+  double imu_acceleration_scale = 0.0;
   bool publish_local_map = false;
 
   Sophus::SE3d extrinsic_imu2base;
@@ -215,6 +218,9 @@ public:
   bool ensure_frame_and_extrinsics(std::string& target_frame,
                                    const std::string& msg_frame,
                                    std::string_view kind);
+
+  // imu_msg_to_imu_data with the acceleration converted to m/s^2.
+  core::ImuControl imu_data_in_mps2(const sensor_msgs::msg::Imu& imu_msg);
 
   std::tuple<core::Timestamps, core::Vector3dVector>
   process_lidar_msg(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& lidar_msg) const;
