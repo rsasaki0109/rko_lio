@@ -148,6 +148,13 @@ public:
     /** Enable initialization phase. */
     bool initialization_phase = false;
 
+    /** Average the IMU over at least this long of LiDAR time before initializing (s).
+     *  0 keeps the single-interval initialization. Scans inside the window are
+     *  neither registered nor published, as for the first scan. Assumes the sensor
+     *  is still; one interval (~0.1 s, 20 samples on a MID-360) is noisy enough on
+     *  a vehicle to leave degrees of tilt in the map frame. */
+    double initialization_window_sec = 0.0;
+
     /** Maximum expected jerk (m/s³). */
     double max_expected_jerk = 3;
 
@@ -816,6 +823,15 @@ private:
 
   /** True if odometry initialization has been completed. */
   bool _initialized = false;
+
+  /** IMU sums collected for initialization (see Config::initialization_window_sec). */
+  Eigen::Vector3d _initialization_accel_sum = Eigen::Vector3d::Zero();
+  Eigen::Vector3d _initialization_gyro_sum = Eigen::Vector3d::Zero();
+  int _initialization_imu_count = 0;
+  Nsec _initialization_start_time{0};
+
+  /** Add this interval's IMU to the initialization sums. */
+  void collect_initialization_interval();
 
   /** Timestamp of the most recent real IMU measurement. */
   Nsec _last_real_imu_time{0};

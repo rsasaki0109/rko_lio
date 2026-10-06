@@ -36,6 +36,7 @@ max_correspondence_distance: 0.5
 convergence_criterion: 0.00001
 max_num_threads: 0
 initialization_phase: false
+initialization_window_sec: 0.0
 double_downsample: true
 # Restore the complete pre-v0.3 voxel sampling pipeline for compatibility.
 # Keep false unless a dataset-specific profile has measured a regression.

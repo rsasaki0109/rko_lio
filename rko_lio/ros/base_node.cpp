@@ -153,6 +153,7 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["max_correspondence_distance"] = nlohmann_json_t.max_correspondence_distance;
   nlohmann_json_j["max_num_threads"] = nlohmann_json_t.max_num_threads;
   nlohmann_json_j["initialization_phase"] = nlohmann_json_t.initialization_phase;
+  nlohmann_json_j["initialization_window_sec"] = nlohmann_json_t.initialization_window_sec;
   nlohmann_json_j["max_expected_jerk"] = nlohmann_json_t.max_expected_jerk;
   nlohmann_json_j["double_downsample"] = nlohmann_json_t.double_downsample;
   nlohmann_json_j["icp_keypoint_voxel_multiplier"] = nlohmann_json_t.icp_keypoint_voxel_multiplier;
@@ -301,6 +302,7 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
   nlohmann_json_j.at("max_correspondence_distance").get_to(nlohmann_json_t.max_correspondence_distance);
   nlohmann_json_j.at("max_num_threads").get_to(nlohmann_json_t.max_num_threads);
   nlohmann_json_j.at("initialization_phase").get_to(nlohmann_json_t.initialization_phase);
+  nlohmann_json_j.at("initialization_window_sec").get_to(nlohmann_json_t.initialization_window_sec);
   nlohmann_json_j.at("max_expected_jerk").get_to(nlohmann_json_t.max_expected_jerk);
   nlohmann_json_j.at("double_downsample").get_to(nlohmann_json_t.double_downsample);
   nlohmann_json_j.at("icp_keypoint_voxel_multiplier").get_to(nlohmann_json_t.icp_keypoint_voxel_multiplier);
@@ -531,6 +533,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       static_cast<int>(node->declare_parameter<int>("max_num_threads", lio_config.max_num_threads));
   lio_config.initialization_phase =
       node->declare_parameter<bool>("initialization_phase", lio_config.initialization_phase);
+  lio_config.initialization_window_sec =
+      node->declare_parameter<double>("initialization_window_sec", lio_config.initialization_window_sec);
   lio_config.max_expected_jerk = node->declare_parameter<double>("max_expected_jerk", lio_config.max_expected_jerk);
   lio_config.double_downsample = node->declare_parameter<bool>("double_downsample", lio_config.double_downsample);
   lio_config.legacy_voxel_downsample =

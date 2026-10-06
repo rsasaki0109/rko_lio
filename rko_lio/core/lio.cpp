@@ -491,9 +491,16 @@ LIO::LIO(const Config& config_)
 //          private
 // ==========================
 
+void LIO::collect_initialization_interval() {
+  _initialization_accel_sum += interval_stats.imu_acceleration_sum;
+  _initialization_gyro_sum += interval_stats.angular_velocity_sum;
+  _initialization_imu_count += interval_stats.imu_count;
+}
+
 void LIO::initialize(const Nsec lidar_time) {
   gyro_deskew_history.clear();
-  if (interval_stats.imu_count == 0) {
+  collect_initialization_interval();
+  if (_initialization_imu_count == 0) {
     std::cerr << "[WARNING] Cannot initialize. No imu measurements received.\n";
     // lidar_state.time has the time from the previous lidar, which we didn't log if init_phase was on
     poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
@@ -501,8 +508,8 @@ void LIO::initialize(const Nsec lidar_time) {
     return;
   }
 
-  const Eigen::Vector3d avg_accel = interval_stats.imu_acceleration_sum / interval_stats.imu_count;
-  const Eigen::Vector3d avg_gyro = interval_stats.angular_velocity_sum / interval_stats.imu_count;
+  const Eigen::Vector3d avg_accel = _initialization_accel_sum / _initialization_imu_count;
+  const Eigen::Vector3d avg_gyro = _initialization_gyro_sum / _initialization_imu_count;
 
   const Sophus::SO3d initial_rotation = align_accel_to_z_world(avg_accel);
   lidar_state.pose.so3() = initial_rotation;
@@ -520,7 +527,7 @@ void LIO::initialize(const Nsec lidar_time) {
   imu_bias.gyroscope = avg_gyro;
 
   _initialized = true;
-  std::cout << "[INFO] Odometry map frame initialized using " << interval_stats.imu_count
+  std::cout << "[INFO] Odometry map frame initialized using " << _initialization_imu_count
             << " IMU measurements. Estimated initial rotation [se(3)] is " << imu_state.pose.so3().log().transpose()
             << "\n";
   std::cout << "[INFO] Estimated accel bias: " << imu_bias.accelerometer.transpose()
@@ -529,6 +536,7 @@ void LIO::initialize(const Nsec lidar_time) {
 
 Vector3dVector LIO::bootstrap_first_scan(const Vector3dVector& scan, const Nsec current_lidar_time) {
   lidar_state.time = current_lidar_time;
+  _initialization_start_time = current_lidar_time;
   imu_state = lidar_state;
   // Initialization needs the next IMU interval before this pose has a valid
   // world orientation. Do not publish a cloud/odometry pair in a provisional frame.
@@ -852,6 +860,17 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     return drop_failed_scan(current_lidar_time,
                             "LiDAR scan gap of " + std::to_string(diff_seconds) +
                                 " seconds exceeds max_scan_delta_sec; re-anchoring at the new timestamp.");
+  }
+
+  if (config.initialization_phase && !_initialized &&
+      to_seconds(current_lidar_time - _initialization_start_time) < config.initialization_window_sec) {
+    // Still averaging the IMU for initialization: keep this scan out, like the first one.
+    collect_initialization_interval();
+    lidar_state.time = current_lidar_time;
+    imu_state = lidar_state;
+    interval_stats.reset();
+    gyro_deskew_history.clear();
+    return {};
   }
 
   const auto [avg_body_accel, avg_ang_vel] = motion_priors_from_imu(current_lidar_time);

@@ -129,6 +129,13 @@ These show up under the top level of a Python config and as ROS launch arguments
   Otherwise, the system will estimate incorrect biases and the odometry might not work as expected.
   Hence, why this is set to ``False`` by default and is opt-in.
 
+- **initialization_window_sec** (`float`, default ``0.0``)
+
+  With ``initialization_phase``, average the IMU over at least this many seconds of LiDAR time before initializing.
+  ``0.0`` uses the single interval between the first two scans.
+  Scans inside the window are neither registered nor published, like the first scan, so the system must stay at rest for the whole window.
+  One interval is only about 20 IMU samples on a Livox MID-360; on a car with the engine running that left 2-3 degrees of roll/pitch error in the map frame, and a 1 s window removes most of it.
+
 - **max_expected_jerk** (`float`, default ``3.0``)
 
   This value is used in a Kalman filter to estimate the true body acceleration.
