@@ -1,0 +1,48 @@
+name: Fork CI
+
+# This fork integrates on fix/configurable-voxel-sampling (lidar_slam_ros2 pins
+# its submodule there), while the upstream workflows only run for master.
+# Build and test the integration branch on the distros lidar_slam_ros2 supports.
+on:
+  pull_request:
+    branches: [fix/configurable-voxel-sampling]
+  push:
+    branches: [fix/configurable-voxel-sampling]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ros_distro: [humble, jazzy]
+    container:
+      image: ros:${{ matrix.ros_distro }}-ros-base
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y build-essential cmake git
+          rosdep init 2>/dev/null || true
+          rosdep update --rosdistro ${{ matrix.ros_distro }}
+          rosdep install --from-paths . --ignore-src -r -y --rosdistro ${{ matrix.ros_distro }}
+      - name: Build with core and ROS tests
+        shell: bash
+        run: |
+          . /opt/ros/${{ matrix.ros_distro }}/setup.bash
+          colcon build --event-handlers console_direct+ --cmake-args \
+            -DCMAKE_BUILD_TYPE=Release -DRKO_LIO_FETCH_CONTENT_DEPS=ON \
+            -DRKO_LIO_BUILD_TESTS=ON -DBUILD_TESTING=ON
+      - name: Test
+        shell: bash
+        run: |
+          . /opt/ros/${{ matrix.ros_distro }}/setup.bash
+          colcon test --event-handlers console_direct+ --return-code-on-test-failure
+          colcon test-result --verbose
