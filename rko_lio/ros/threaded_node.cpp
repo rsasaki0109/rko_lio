@@ -56,7 +56,7 @@ void ThreadedNode::imu_callback(const sensor_msgs::msg::Imu::ConstSharedPtr& imu
   }
   {
     std::lock_guard lock(buffer_mutex);
-    imu_buffer.emplace(imu_msg_to_imu_data(*imu_msg));
+    imu_buffer.emplace(imu_data_in_mps2(*imu_msg));
     atomic_can_process = !lidar_buffer.empty() && imu_buffer.back().time > lidar_buffer.front().timestamps.max;
   }
   if (atomic_can_process) {

@@ -87,7 +87,7 @@ public:
       return;
     }
 
-    const core::ImuControl imu_data = imu_msg_to_imu_data(*imu_msg);
+    const core::ImuControl imu_data = imu_data_in_mps2(*imu_msg);
     lio->add_imu_measurement(extrinsic_imu2base, imu_data);
 
     if (!lio->has_initialized_pose() || !(lio->imu_state.time > core::Nsec{0})) {

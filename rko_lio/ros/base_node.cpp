@@ -23,6 +23,7 @@
  */
 
 #include "base_node.hpp"
+#include "rko_lio/core/imu_acceleration_unit.hpp"
 #include "rko_lio/core/process_timestamps.hpp"
 #include "rko_lio/ros/utils/utils.hpp"
 // other
@@ -465,6 +466,17 @@ core::ImuControl imu_msg_to_imu_data(const sensor_msgs::msg::Imu& imu_msg) {
   return imu_data;
 }
 
+core::ImuControl BaseNode::imu_data_in_mps2(const sensor_msgs::msg::Imu& imu_msg) {
+  core::ImuControl imu_data = imu_msg_to_imu_data(imu_msg);
+  if (!(imu_acceleration_scale > 0.0)) {
+    imu_acceleration_scale = core::acceleration_scale(imu_acceleration_unit, imu_data.acceleration.norm());
+    RCLCPP_INFO(node->get_logger(), "IMU acceleration unit %s: first sample |a| = %.3f, scaling by %.5f",
+                imu_acceleration_unit.c_str(), imu_data.acceleration.norm(), imu_acceleration_scale);
+  }
+  imu_data.acceleration *= imu_acceleration_scale;
+  return imu_data;
+}
+
 BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& options) {
   node = rclcpp::Node::make_shared(node_name, options);
   imu_topic = node->declare_parameter<std::string>("imu_topic");     // required
@@ -496,6 +508,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
         node->create_publisher<geometry_msgs::msg::AccelStamped>("rko_lio/lidar_acceleration", publisher_qos);
   }
 
+  imu_acceleration_unit = node->declare_parameter<std::string>("imu_acceleration_unit", imu_acceleration_unit);
+  core::acceleration_scale(imu_acceleration_unit, 0.0); // reject an unknown unit at startup
   publish_deskewed_scan = node->declare_parameter<bool>("publish_deskewed_scan", publish_deskewed_scan);
   if (publish_deskewed_scan) {
     deskewed_scan_topic = node->declare_parameter<std::string>("deskewed_scan_topic", deskewed_scan_topic);
