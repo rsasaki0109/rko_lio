@@ -815,6 +815,83 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   lio_config.intensity_disagreement_weight = node->declare_parameter<double>(
       "intensity_disagreement_weight", lio_config.intensity_disagreement_weight);
 
+  // ---- photometric registration on LiDAR intensity images (fork addition, default off) ----
+  lio_config.photometric = node->declare_parameter<bool>("photometric", lio_config.photometric);
+  lio_config.photometric_scale = node->declare_parameter<double>("photometric_scale", lio_config.photometric_scale);
+  lio_config.photometric_weak_direction_min_contribution = node->declare_parameter<double>(
+      "photometric_weak_direction_min_contribution", lio_config.photometric_weak_direction_min_contribution);
+  lio_config.photometric_normal_row_step =
+      node->declare_parameter<int>("photometric_normal_row_step", lio_config.photometric_normal_row_step);
+  lio_config.photometric_normal_col_step =
+      node->declare_parameter<int>("photometric_normal_col_step", lio_config.photometric_normal_col_step);
+  photometric_channel = node->declare_parameter<std::string>("photometric_channel", photometric_channel);
+  {
+    // Beam geometry from the sensor metadata (Ouster: beam_altitude_angles, pixel_shift_by_row,
+    // lidar_origin_to_beam_origin_mm, columns_per_frame).
+    core::LidarImageModel& model = lio_config.photometric_model;
+    const auto altitudes_deg =
+        node->declare_parameter<std::vector<double>>("photometric_model.altitudes_deg", std::vector<double>{});
+    model.altitudes_rad.clear();
+    for (const double degrees : altitudes_deg) {
+      model.altitudes_rad.push_back(degrees * M_PI / 180.0);
+    }
+    const auto pixel_shift =
+        node->declare_parameter<std::vector<int64_t>>("photometric_model.pixel_shift_by_row", std::vector<int64_t>{});
+    model.pixel_shift_by_row.assign(pixel_shift.begin(), pixel_shift.end());
+    model.rows = static_cast<int>(model.altitudes_rad.size());
+    model.cols = static_cast<int>(node->declare_parameter<int>("photometric_model.columns", 1024));
+    model.beam_offset_m = node->declare_parameter<double>("photometric_model.beam_offset_mm", 0.0) * 1e-3;
+    model.u_shift = static_cast<int>(node->declare_parameter<int>("photometric_model.u_shift", 0));
+    model.cloud_to_lidar_z_m =
+        node->declare_parameter<double>("photometric_model.cloud_to_lidar_z_m", model.cloud_to_lidar_z_m);
+    if (lio_config.photometric && !model.valid()) {
+      RCLCPP_WARN(node->get_logger(),
+                  "photometric is enabled but photometric_model is incomplete (altitudes_deg, pixel_shift_by_row, "
+                  "columns); photometric terms will not be used.");
+    }
+
+    core::IntensityImageConfig& image = lio_config.photometric_image;
+    image.intensity_scale = node->declare_parameter<double>("photometric_image.intensity_scale", image.intensity_scale);
+    image.line_removal = node->declare_parameter<bool>("photometric_image.line_removal", image.line_removal);
+    image.line_highpass =
+        node->declare_parameter<std::vector<double>>("photometric_image.line_highpass", std::vector<double>{});
+    image.line_lowpass =
+        node->declare_parameter<std::vector<double>>("photometric_image.line_lowpass", std::vector<double>{});
+    image.brightness_filter =
+        node->declare_parameter<bool>("photometric_image.brightness_filter", image.brightness_filter);
+    image.brightness_window_cols =
+        node->declare_parameter<int>("photometric_image.brightness_window_cols", image.brightness_window_cols);
+    image.brightness_window_rows =
+        node->declare_parameter<int>("photometric_image.brightness_window_rows", image.brightness_window_rows);
+    image.blur = node->declare_parameter<bool>("photometric_image.blur", image.blur);
+    image.min_range_m = node->declare_parameter<double>("photometric_image.min_range_m", image.min_range_m);
+    image.max_range_m = node->declare_parameter<double>("photometric_image.max_range_m", image.max_range_m);
+    image.erosion_margin = node->declare_parameter<int>("photometric_image.erosion_margin", image.erosion_margin);
+    const auto masks =
+        node->declare_parameter<std::vector<int64_t>>("photometric_image.masks", std::vector<int64_t>{});
+    image.masks.clear();
+    for (std::size_t i = 0; i + 3 < masks.size(); i += 4) {
+      image.masks.push_back({static_cast<int>(masks[i]), static_cast<int>(masks[i + 1]),
+                             static_cast<int>(masks[i + 2]), static_cast<int>(masks[i + 3])});
+    }
+
+    core::PhotometricFeatureConfig& features = lio_config.photometric_features;
+    features.patch_size = node->declare_parameter<int>("photometric_features.patch_size", features.patch_size);
+    features.num_features = node->declare_parameter<int>("photometric_features.num_features", features.num_features);
+    features.max_lifetime = node->declare_parameter<int>("photometric_features.max_lifetime", features.max_lifetime);
+    features.margin = node->declare_parameter<int>("photometric_features.margin", features.margin);
+    features.suppression_radius =
+        node->declare_parameter<int>("photometric_features.suppression_radius", features.suppression_radius);
+    features.grad_min = node->declare_parameter<double>("photometric_features.grad_min", features.grad_min);
+    features.ncc_threshold =
+        node->declare_parameter<double>("photometric_features.ncc_threshold", features.ncc_threshold);
+    features.range_threshold_m =
+        node->declare_parameter<double>("photometric_features.range_threshold_m", features.range_threshold_m);
+    features.min_range_m = image.min_range_m;
+    features.max_range_m = image.max_range_m;
+    image.patch_size = features.patch_size;
+  }
+
   // ---- scan-gap re-anchor + kidnap relocalization (fork addition; default preserves legacy
   // behavior for max_scan_delta_sec, kidnap features themselves default-off) ----
   lio_config.max_scan_delta_sec =
@@ -1017,6 +1094,16 @@ std::vector<float>
 BaseNode::process_lidar_intensity(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& lidar_msg) const {
   // Only parsed when an intensity-based feature is enabled: point_cloud2_to_intensity() still
   // iterates the whole cloud, so skip it entirely on the (default) common path.
+  if (lio->config.photometric) {
+    // The photometric images take precedence over the reflectivity-profile features.
+    std::vector<float> values = utils::point_cloud2_field_as_float(lidar_msg, photometric_channel);
+    if (values.empty()) {
+      RCLCPP_WARN_STREAM_ONCE(node->get_logger(), "photometric is enabled but the point cloud on "
+                                                      << lidar_topic << " has no '" << photometric_channel
+                                                      << "' field; photometric terms will not be used.");
+    }
+    return values;
+  }
   const bool intensity_needed = lio->config.intensity_constraint || lio->config.intensity_disagreement_gate;
   if (!intensity_needed) {
     return {};
@@ -1607,6 +1694,22 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
       if (std::ofstream file(radar_file); file.is_open()) {
         file << radar_summary.dump(4) << "\n";
         std::cout << "Radar velocity fusion summary written to " << radar_file << "\n";
+      }
+    }
+    // Photometric registration summary.
+    if (lio->config.photometric) {
+      const nlohmann::json photometric_summary = {
+          {"frame_count", lio->photometric_frame_count},
+          {"scan_count", lio->photometric_scan_count},
+          {"mean_patches_per_scan",
+           lio->photometric_scan_count > 0
+               ? static_cast<double>(lio->photometric_patch_sum) / static_cast<double>(lio->photometric_scan_count)
+               : 0.0},
+          {"tracked_patches_at_end", lio->photometric_features().features().size()}};
+      const std::filesystem::path photometric_file = output_dir / "photometric_summary.json";
+      if (std::ofstream file(photometric_file); file.is_open()) {
+        file << photometric_summary.dump(4) << "\n";
+        std::cout << "Photometric summary written to " << photometric_file << "\n";
       }
     }
     // Sliding-window gravity alignment summary.

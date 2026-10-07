@@ -44,6 +44,7 @@
 // stl
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -294,6 +295,18 @@ struct IcpResult {
   std::size_t visual_directional_information_ratio_count = 0;
   // Final-iteration localizability weighting stats (zeros when disabled).
   IcpWeightingStats weighting_stats;
+  // Photometric patches used in the final iteration (0 when disabled).
+  int photometric_patches = 0;
+};
+
+// Photometric terms added to every ICP iteration (see photometric_features.hpp).
+struct PhotometricTerms {
+  const std::vector<PhotometricFeature>* features = nullptr;
+  const PhotometricFrame* frame = nullptr;
+  const LidarImageModel* model = nullptr;
+  const PhotometricFeatureConfig* config = nullptr;
+  Sophus::SE3d base_from_cloud;
+  double scale = 0.0;
 };
 
 IcpResult icp(const Vector3dVector& frame,
@@ -307,7 +320,8 @@ IcpResult icp(const Vector3dVector& frame,
              const std::optional<VisualPosePrior>& visual_pose_prior = std::nullopt,
              const std::optional<Sophus::SE3d>& degeneracy_prior_pose = std::nullopt,
              const std::optional<Eigen::Vector3d>& localizability_axis = std::nullopt,
-             const double localizability_boost = 0.0) {
+             const double localizability_boost = 0.0,
+             const PhotometricTerms* photometric = nullptr) {
   // in case config disables it, or we don't have valid IMU information for this icp loop, beta is -1
   const double beta = (config.min_beta > 0 && optional_accel_info.has_value())
                           ? (config.min_beta * (1 + optional_accel_info->accel_mag_variance))
@@ -325,12 +339,27 @@ IcpResult icp(const Vector3dVector& frame,
           ? std::max(config.max_iterations, config.degeneracy_adaptive_max_iterations)
           : config.max_iterations;
   IcpWeightingStats weighting_stats;
+  int photometric_patches = 0;
   for (size_t i = 0; i < iteration_budget; ++i) {
     const auto& [H, b, chi] = std::invoke([&]() -> LinearSystem {
-      const auto& [H_icp, b_icp, chi_icp] =
+      auto [H_icp, b_icp, chi_icp] =
           build_icp_linear_system(current_pose, frame, voxel_map, config.max_correspondence_distance,
                                   voxel_search_radius, localizability_axis, localizability_boost,
                                   &weighting_stats);
+      if (photometric != nullptr && weighting_stats.correspondences > 0) {
+        // The ICP system is averaged over correspondences; weight the summed photometric
+        // terms so one photometric residual counts photometric->scale times one ICP residual.
+        const PhotometricSystem photo = build_photometric_system(*photometric->features, *photometric->frame,
+                                                                 *photometric->model, *photometric->config,
+                                                                 current_pose, photometric->base_from_cloud);
+        photometric_patches = photo.patches;
+        if (photo.patches > 0) {
+          const double weight = square(photometric->scale) / weighting_stats.correspondences;
+          H_icp += weight * photo.H;
+          b_icp += weight * photo.b;
+          chi_icp += 0.5 * weight * photo.chi;
+        }
+      }
       if (beta >= 0) {
         const auto& [H_ori, b_ori, chi_ori] =
             build_orientation_linear_system(current_pose, optional_accel_info->local_gravity_estimate);
@@ -404,7 +433,7 @@ IcpResult icp(const Vector3dVector& frame,
   return {current_pose, last_H, last_b, degeneracy_intervention_count,
           visual_fused_directions, visual_unobservable_directions,
           visual_directional_information_ratios,
-          visual_directional_information_ratio_count, weighting_stats};
+          visual_directional_information_ratio_count, weighting_stats, photometric_patches};
 }
 
 struct AlignmentStats {
@@ -476,7 +505,8 @@ namespace rko_lio::core {
 LIO::LIO(const Config& config_)
     : config(config_),
       map(config_.voxel_size, config_.max_range, config_.max_points_per_voxel),
-      relocalization_map(config_.voxel_size, config_.max_range, config_.max_points_per_voxel) {
+      relocalization_map(config_.voxel_size, config_.max_range, config_.max_points_per_voxel),
+      _photometric_features(config_.photometric_features) {
   // Per-voxel normals are only maintained when the localizability weighting can
   // consume them; the default path pays nothing.
   map.set_maintain_normals(config.localizability_weighting);
@@ -875,6 +905,42 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
 
   const Sophus::SE3d initial_guess = predict_pose_at(current_lidar_time);
 
+  // Photometric frame: the organized scan as a filtered intensity image, with the deskew
+  // transform of every point so a deskewed point maps back to the pixel it was captured at.
+  std::optional<PhotometricFrame> photometric_frame;
+  const LidarImageModel& image_model = config.photometric_model;
+  if (config.photometric && intensities != nullptr && intensities->size() == scan.size() && image_model.valid() &&
+      scan.size() == static_cast<std::size_t>(image_model.rows) * image_model.cols) {
+    const Sophus::SE3d& base_from_cloud = _photometric_base_from_cloud;
+    const Sophus::SE3d cloud_from_base = base_from_cloud.inverse();
+    Vector3dVector cloud_points(scan.size());
+    std::transform(scan.cbegin(), scan.cend(), cloud_points.begin(),
+                   [&](const Eigen::Vector3d& point) { return cloud_from_base * point; });
+    std::vector<int> capture_slot(scan.size(), 0);
+    std::vector<Sophus::SE3d> end_from_capture{Sophus::SE3d()};
+    if (config.deskew) {
+      end_from_capture.clear();
+      const Sophus::SE3d end_inverse = relative_pose_at_time(current_lidar_time).inverse();
+      std::unordered_map<Nsec::rep, int> slot_of_time;
+      for (std::size_t i = 0; i < scan.size(); ++i) {
+        const auto [it, inserted] =
+            slot_of_time.try_emplace(timestamps[i].count(), static_cast<int>(end_from_capture.size()));
+        if (inserted) {
+          end_from_capture.push_back(cloud_from_base * end_inverse * relative_pose_at_time(timestamps[i]) *
+                                     base_from_cloud);
+        }
+        capture_slot[i] = it->second;
+      }
+    }
+    photometric_frame = build_photometric_frame(image_model, config.photometric_image, cloud_points, *intensities,
+                                                capture_slot, end_from_capture);
+    if (photometric_frame->valid()) {
+      ++photometric_frame_count;
+    } else {
+      photometric_frame.reset();
+    }
+  }
+
   std::optional<VisualPosePrior> visual_pose_prior;
   if (_visual_pose_prior.has_value() && config.visual_fusion.enabled &&
       std::abs(to_seconds(_visual_pose_prior->time - current_lidar_time)) <= config.visual_prior_max_time_offset_sec) {
@@ -1064,13 +1130,25 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         ++localizability_attempt_count;
       }
     }
+    PhotometricTerms photometric_terms;
+    const bool use_photometric = photometric_frame.has_value() && !_photometric_features.features().empty();
+    if (use_photometric) {
+      photometric_terms.features = &_photometric_features.features();
+      photometric_terms.frame = &*photometric_frame;
+      photometric_terms.model = &image_model;
+      photometric_terms.config = &config.photometric_features;
+      photometric_terms.base_from_cloud = _photometric_base_from_cloud;
+      photometric_terms.scale = config.photometric_scale;
+    }
+    int photometric_patches = 0;
     try {
       const IcpResult icp_result = icp(preproc_result.keypoints, map, initial_guess, config, kf_step.info, 1,
                                        _persistent_weak_direction_tracker.state(),
                                        config.degeneracy_adaptive_iteration_budget &&
                                            _adaptive_iteration_hold_remaining > 0,
                                        visual_pose_prior, degeneracy_prior_pose, localizability_axis,
-                                       config.localizability_boost);
+                                       config.localizability_boost, use_photometric ? &photometric_terms : nullptr);
+      photometric_patches = icp_result.photometric_patches;
       if (icp_result.weighting_stats.boosted > 0) {
         ++localizability_weighted_scan_count;
         localizability_boosted_fraction_sum += static_cast<double>(icp_result.weighting_stats.boosted) /
@@ -1088,6 +1166,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       ++_consecutive_registration_failures;
       _persistent_weak_direction_tracker.reset();
       _previous_intensity_profile.reset();
+      _photometric_features.clear();
       _adaptive_iteration_hold_remaining = 0;
       if (_consecutive_registration_failures < std::max(1, config.recovery_min_failures)) {
         throw;
@@ -1897,6 +1976,16 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       ++radar_prior_attempt_count;
       radar_fused_scan_count += degeneracy_intervention_count > 0 ? 1U : 0U;
     }
+    if (photometric_frame.has_value()) {
+      if (photometric_patches > 0) {
+        ++photometric_scan_count;
+        photometric_patch_sum += static_cast<std::size_t>(photometric_patches);
+      }
+      const std::vector<Eigen::Vector3d> normals = sample_surface_normals(
+          *photometric_frame, config.photometric_normal_row_step, config.photometric_normal_col_step);
+      _photometric_features.update(*photometric_frame, image_model, lidar_state.pose * _photometric_base_from_cloud,
+                                   weak_translation_directions(normals, config.photometric_weak_direction_min_contribution));
+    }
     lidar_state.icp_diagnostics = IcpDiagnostics{icp_H, icp_b, LocalizabilitySummary::from_hessian(icp_H),
                                                  persistent_direction, degeneracy_intervention_count};
     if (config.degeneracy_persistence_gate) {
@@ -1949,6 +2038,7 @@ Vector3dVector LIO::register_scan(const Sophus::SE3d& extrinsic_lidar2base,
                                   const Vector3dVector& scan,
                                   const TimestampVector& timestamps,
                                   const std::vector<float>* intensities) {
+  _photometric_base_from_cloud = extrinsic_lidar2base;
   if (extrinsic_lidar2base.log().norm() < EPSILON) {
     return register_scan(scan, timestamps, intensities);
   }

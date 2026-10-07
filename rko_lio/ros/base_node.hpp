@@ -108,6 +108,8 @@ public:
   std::string imu_topic;
   std::string imu_frame = ""; // default: get from the first imu message
   std::string lidar_topic;
+  /** Point field used for the photometric intensity images. */
+  std::string photometric_channel = "intensity";
   std::string lidar_frame = ""; // default: get from the first lidar message
   std::string base_frame;
   std::string odom_frame = "odom";

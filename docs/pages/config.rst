@@ -185,6 +185,30 @@ The same overrides are surfaced as ROS launch arguments under the ``lidar_timest
 
 (They can also be written as a nested mapping ``lidar_timestamps:\n  force_absolute: true`` -- ``launch_ros`` flattens nested dicts before passing them as parameter overrides, so both forms are equivalent.)
 
+Photometric registration (ROS, fork addition)
+---------------------------------------------
+
+In long, geometrically self-similar tunnels the point-to-point ICP slides along the
+tunnel axis. With ``photometric: true`` the ROS node also renders every organized scan
+as an intensity image and adds photometric patch residuals to each ICP iteration,
+after COIN-LIO (Pfreundschuh et al., ICRA 2024). Patches are chosen where the image
+gradient sees motion along the translation directions few surface normals face.
+It is off by default and needs an organized cloud (Ouster layout) and its metadata.
+
+- **photometric** (`bool`, default ``False``)
+- **photometric_scale** (`float`, default ``0.003``): weight of one photometric residual
+  (filtered intensity unit) relative to one ICP residual (m). On ENWIDE TunnelD the
+  results are flat between ``0.002`` and ``0.01``.
+- **photometric_channel** (`str`, default ``intensity``): point field rendered into the images.
+- **photometric_model.\*:** ``altitudes_deg``, ``pixel_shift_by_row``, ``columns``,
+  ``beam_offset_mm`` and ``cloud_to_lidar_z_m`` from the Ouster metadata.
+- **photometric_image.\*:** line filter kernels, brightness window, static masks, valid range.
+- **photometric_features.\*:** patch size, number of patches, lifetime, NCC threshold.
+
+``config/enwide_os0_photometric.yaml`` is a complete example. Where the intensity images
+carry little texture along the tunnel (a continuous LED strip, bare concrete) the terms
+do not help.
+
 Pipeline parameters (Python)
 ----------------------------
 

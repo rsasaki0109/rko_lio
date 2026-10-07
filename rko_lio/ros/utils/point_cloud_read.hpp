@@ -29,6 +29,9 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 
+#include <string>
+#include <vector>
+
 namespace rko_lio::ros::utils {
 std::vector<Eigen::Vector3d> point_cloud2_to_eigen(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg);
 
@@ -42,4 +45,11 @@ point_cloud2_to_eigen_with_timestamps(const sensor_msgs::msg::PointCloud2::Const
  * callers treat that as "intensity unavailable", not an error.
  */
 std::vector<float> point_cloud2_to_intensity(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg);
+
+/**
+ * Per-point values of the named field as float, same order as the point cloud (float32,
+ * float64, uint8/16/32 or int8/16/32 fields). Empty when the field is missing.
+ */
+std::vector<float> point_cloud2_field_as_float(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg,
+                                               const std::string& field_name);
 }; // namespace rko_lio::ros::utils
