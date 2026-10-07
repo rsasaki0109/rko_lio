@@ -141,4 +141,8 @@ std::vector<Eigen::Vector3d> sample_surface_normals(const PhotometricFrame& fram
 std::vector<Eigen::Vector3d> weak_translation_directions(const std::vector<Eigen::Vector3d>& translation_rows,
                                                          double min_contribution);
 
+/** The weak directions alone: empty when every direction is constrained. */
+std::vector<Eigen::Vector3d> find_weak_translation_directions(const std::vector<Eigen::Vector3d>& translation_rows,
+                                                              double min_contribution);
+
 } // namespace rko_lio::core
