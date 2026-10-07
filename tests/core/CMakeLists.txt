@@ -32,6 +32,7 @@ compat_target_sources(
           test_preprocess_scan.cpp
           test_imu_integration.cpp
           test_register_scan.cpp
+          test_photometric.cpp
   PUBLIC
   FILE_SET
   HEADERS

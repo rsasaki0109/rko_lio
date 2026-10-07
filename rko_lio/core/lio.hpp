@@ -31,6 +31,8 @@
 #include "intensity_profile.hpp"
 #include "gyro_deskew_history.hpp"
 #include "oriented_intensity_grid.hpp"
+#include "photometric_features.hpp"
+#include "photometric_image.hpp"
 #include "persistent_weak_direction.hpp"
 #include "selective_visual_fusion.hpp"
 #include "voxel_hash_map.hpp"
@@ -570,6 +572,28 @@ public:
 
     /** Maximum ICP iterations for each relocalization hypothesis. */
     int relocalization_max_iterations = 15;
+
+    /** Add photometric terms from LiDAR intensity images to the ICP solve (COIN-LIO style,
+     *  see photometric_features.hpp). Needs organized scans matching photometric_model and
+     *  per-point intensities; register through the extrinsic overload. Default off. */
+    bool photometric = false;
+
+    /** Weight of one photometric residual (per filtered intensity unit) relative to a
+     *  point-to-point ICP residual in metres. About three times COIN-LIO's point-to-plane
+     *  value: point-to-point correspondences also hold the pose along the weak axis. */
+    double photometric_scale = 0.003;
+
+    /** Patches are added along translation directions with fewer than this many aligned
+     *  surface normals (COIN-LIO's n_uninformative). */
+    double photometric_weak_direction_min_contribution = 25.0;
+
+    /** Grid step (rows, columns) of the surface normals used to find weak directions. */
+    int photometric_normal_row_step = 4;
+    int photometric_normal_col_step = 8;
+
+    LidarImageModel photometric_model;
+    IntensityImageConfig photometric_image;
+    PhotometricFeatureConfig photometric_features;
   };
 
   /** Configuration parameters. */
@@ -682,6 +706,15 @@ public:
   std::size_t visual_unobservable_direction_count = 0;
   std::vector<VisualObservabilityDiagnosticsSample>
       visual_observability_diagnostics;
+
+  /** Photometric registration diagnostics: scans with an intensity image, scans whose
+   *  ICP used photometric patches, and the summed patch count over those scans. */
+  std::size_t photometric_frame_count = 0;
+  std::size_t photometric_scan_count = 0;
+  std::size_t photometric_patch_sum = 0;
+
+  /** Tracked photometric patches. */
+  const PhotometricFeatureManager& photometric_features() const { return _photometric_features; }
 
   /** Aggregate radar-velocity-fusion diagnostics, mirroring the visual counters. */
   std::size_t radar_prior_attempt_count = 0;
@@ -849,6 +882,11 @@ private:
     Eigen::Vector3d axis = Eigen::Vector3d::UnitX();
   };
   std::optional<StoredIntensityProfile> _previous_intensity_profile;
+
+  /** Photometric registration state: patches, and the lidar extrinsic of the scan being
+   *  registered (set by the extrinsic overload of register_scan). */
+  PhotometricFeatureManager _photometric_features;
+  Sophus::SE3d _photometric_base_from_cloud;
 
   /** Same idea as _previous_intensity_profile but for the Hessian-gate-free intensity
    *  velocity-disagreement gate: anchored to the axis/origin chosen from the *previous*

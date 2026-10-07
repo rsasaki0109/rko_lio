@@ -24,6 +24,7 @@
 
 #include "point_cloud_read.hpp"
 // stl
+#include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <stdexcept>
@@ -135,5 +136,35 @@ std::vector<float> point_cloud2_to_intensity(const PointCloud2::ConstSharedPtr& 
   }
   // Neither a uint16 "reflectivity" nor a float32 "intensity" field: intensity unavailable.
   return {};
+}
+
+std::vector<float> point_cloud2_field_as_float(const PointCloud2::ConstSharedPtr& msg, const std::string& field_name) {
+  using sensor_msgs::PointCloud2ConstIterator;
+  const size_t point_count = static_cast<size_t>(msg->height) * msg->width;
+  const auto field = std::find_if(msg->fields.cbegin(), msg->fields.cend(),
+                                  [&](const PointField& f) { return f.name == field_name; });
+  if (field == msg->fields.cend()) {
+    return {};
+  }
+  std::vector<float> values;
+  values.reserve(point_count);
+  auto read = [&](auto tag) {
+    PointCloud2ConstIterator<decltype(tag)> it(*msg, field_name);
+    for (size_t i = 0; i < point_count; ++i, ++it) {
+      values.push_back(static_cast<float>(*it));
+    }
+  };
+  switch (field->datatype) {
+  case PointField::FLOAT32: read(float{}); break;
+  case PointField::FLOAT64: read(double{}); break;
+  case PointField::UINT8: read(uint8_t{}); break;
+  case PointField::UINT16: read(uint16_t{}); break;
+  case PointField::UINT32: read(uint32_t{}); break;
+  case PointField::INT8: read(int8_t{}); break;
+  case PointField::INT16: read(int16_t{}); break;
+  case PointField::INT32: read(int32_t{}); break;
+  default: return {};
+  }
+  return values;
 }
 } // namespace rko_lio::ros::utils

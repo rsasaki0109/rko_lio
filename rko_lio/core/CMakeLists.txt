@@ -28,6 +28,8 @@ compat_target_sources(
   rko_lio.core
   PRIVATE lio.cpp
           direct_visual_odometry.cpp
+          photometric_features.cpp
+          photometric_image.cpp
           voxel_hash_map.cpp
           voxel_down_sample.cpp
           process_timestamps.cpp
@@ -44,6 +46,8 @@ compat_target_sources(
         ../../rko_lio/core/intensity_profile.hpp
         ../../rko_lio/core/oriented_intensity_grid.hpp
         ../../rko_lio/core/persistent_weak_direction.hpp
+        ../../rko_lio/core/photometric_features.hpp
+        ../../rko_lio/core/photometric_image.hpp
         ../../rko_lio/core/preprocess_scan.hpp
         ../../rko_lio/core/process_timestamps.hpp
         ../../rko_lio/core/profiler.hpp
