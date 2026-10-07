@@ -385,10 +385,17 @@ std::vector<Eigen::Vector3d> sample_surface_normals(const PhotometricFrame& fram
 
 std::vector<Eigen::Vector3d> weak_translation_directions(const std::vector<Eigen::Vector3d>& translation_rows,
                                                          const double min_contribution) {
-  const std::vector<Eigen::Vector3d> axes{Eigen::Vector3d::UnitX(), Eigen::Vector3d::UnitY(),
-                                          Eigen::Vector3d::UnitZ()};
+  const std::vector<Eigen::Vector3d> weak = find_weak_translation_directions(translation_rows, min_contribution);
+  if (!weak.empty()) {
+    return weak;
+  }
+  return {Eigen::Vector3d::UnitX(), Eigen::Vector3d::UnitY(), Eigen::Vector3d::UnitZ()};
+}
+
+std::vector<Eigen::Vector3d> find_weak_translation_directions(const std::vector<Eigen::Vector3d>& translation_rows,
+                                                              const double min_contribution) {
   if (translation_rows.size() <= 3) {
-    return axes;
+    return {};
   }
   Eigen::Matrix3d information = Eigen::Matrix3d::Zero();
   for (const Eigen::Vector3d& row : translation_rows) {
@@ -409,7 +416,7 @@ std::vector<Eigen::Vector3d> weak_translation_directions(const std::vector<Eigen
       weak.push_back(directions.col(d));
     }
   }
-  return weak.empty() ? axes : weak;
+  return weak;
 }
 
 } // namespace rko_lio::core

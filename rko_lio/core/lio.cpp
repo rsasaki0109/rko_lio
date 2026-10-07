@@ -307,6 +307,8 @@ struct PhotometricTerms {
   const PhotometricFeatureConfig* config = nullptr;
   Sophus::SE3d base_from_cloud;
   double scale = 0.0;
+  /** World-frame translation directions the ICP information is removed along (may be empty). */
+  std::vector<Eigen::Vector3d> free_axes_world;
 };
 
 IcpResult icp(const Vector3dVector& frame,
@@ -353,6 +355,15 @@ IcpResult icp(const Vector3dVector& frame,
                                                                  *photometric->model, *photometric->config,
                                                                  current_pose, photometric->base_from_cloud);
         photometric_patches = photo.patches;
+        if (photo.patches > 0 && !photometric->free_axes_world.empty()) {
+          // ICP information along the weak axes is removed: P = diag(I - sum w w^T, I).
+          Eigen::Matrix6d P = Eigen::Matrix6d::Identity();
+          for (const Eigen::Vector3d& axis : photometric->free_axes_world) {
+            P.topLeftCorner<3, 3>() -= axis * axis.transpose();
+          }
+          H_icp = P.transpose() * H_icp * P;
+          b_icp = P.transpose() * b_icp;
+        }
         if (photo.patches > 0) {
           const double weight = square(photometric->scale) / weighting_stats.correspondences;
           H_icp += weight * photo.H;
@@ -1131,7 +1142,12 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       }
     }
     PhotometricTerms photometric_terms;
-    const bool use_photometric = photometric_frame.has_value() && !_photometric_features.features().empty();
+    const bool use_photometric =
+        photometric_frame.has_value() && !_photometric_features.features().empty() &&
+        to_seconds(current_lidar_time - lidar_state.time) <= config.photometric_max_scan_interval_sec;
+    if (photometric_frame.has_value() && !use_photometric && !_photometric_features.features().empty()) {
+      ++photometric_gap_skip_count;
+    }
     if (use_photometric) {
       photometric_terms.features = &_photometric_features.features();
       photometric_terms.frame = &*photometric_frame;
@@ -1139,6 +1155,16 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       photometric_terms.config = &config.photometric_features;
       photometric_terms.base_from_cloud = _photometric_base_from_cloud;
       photometric_terms.scale = config.photometric_scale;
+      if (config.photometric_free_weak_axis) {
+        const std::vector<Eigen::Vector3d> normals = sample_surface_normals(
+            *photometric_frame, config.photometric_normal_row_step, config.photometric_normal_col_step);
+        const Eigen::Matrix3d world_from_cloud_rotation =
+            initial_guess.so3().matrix() * _photometric_base_from_cloud.so3().matrix();
+        for (const Eigen::Vector3d& axis :
+             find_weak_translation_directions(normals, config.photometric_weak_direction_min_contribution)) {
+          photometric_terms.free_axes_world.push_back((world_from_cloud_rotation * axis).normalized());
+        }
+      }
     }
     int photometric_patches = 0;
     try {

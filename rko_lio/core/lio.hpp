@@ -591,6 +591,17 @@ public:
     int photometric_normal_row_step = 4;
     int photometric_normal_col_step = 8;
 
+    /** Leave translation along the weak directions to the photometric terms: the
+     *  point-to-point ICP information along them is projected out whenever patches
+     *  contribute (experimental). */
+    bool photometric_free_weak_axis = false;
+
+    /** Skip the photometric terms on a scan that follows a gap in the LiDAR stream longer
+     *  than this (s): the prediction across the gap is too coarse for 5x5 patches, and a
+     *  wrong patch association can pull the pose far off (ENWIDE TunnelD lost 13 deg of
+     *  yaw across a 0.28 s gap). Patches are still tracked and refreshed on that scan. */
+    double photometric_max_scan_interval_sec = 0.15;
+
     LidarImageModel photometric_model;
     IntensityImageConfig photometric_image;
     PhotometricFeatureConfig photometric_features;
@@ -712,6 +723,8 @@ public:
   std::size_t photometric_frame_count = 0;
   std::size_t photometric_scan_count = 0;
   std::size_t photometric_patch_sum = 0;
+  /** Scans whose photometric terms were skipped after a LiDAR gap. */
+  std::size_t photometric_gap_skip_count = 0;
 
   /** Tracked photometric patches. */
   const PhotometricFeatureManager& photometric_features() const { return _photometric_features; }

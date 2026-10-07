@@ -818,6 +818,10 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   // ---- photometric registration on LiDAR intensity images (fork addition, default off) ----
   lio_config.photometric = node->declare_parameter<bool>("photometric", lio_config.photometric);
   lio_config.photometric_scale = node->declare_parameter<double>("photometric_scale", lio_config.photometric_scale);
+  lio_config.photometric_free_weak_axis =
+      node->declare_parameter<bool>("photometric_free_weak_axis", lio_config.photometric_free_weak_axis);
+  lio_config.photometric_max_scan_interval_sec = node->declare_parameter<double>(
+      "photometric_max_scan_interval_sec", lio_config.photometric_max_scan_interval_sec);
   lio_config.photometric_weak_direction_min_contribution = node->declare_parameter<double>(
       "photometric_weak_direction_min_contribution", lio_config.photometric_weak_direction_min_contribution);
   lio_config.photometric_normal_row_step =
@@ -1705,6 +1709,7 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
            lio->photometric_scan_count > 0
                ? static_cast<double>(lio->photometric_patch_sum) / static_cast<double>(lio->photometric_scan_count)
                : 0.0},
+          {"gap_skip_count", lio->photometric_gap_skip_count},
           {"tracked_patches_at_end", lio->photometric_features().features().size()}};
       const std::filesystem::path photometric_file = output_dir / "photometric_summary.json";
       if (std::ofstream file(photometric_file); file.is_open()) {
