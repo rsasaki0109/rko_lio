@@ -27,6 +27,7 @@ add_library(rko_lio::core ALIAS rko_lio.core)
 compat_target_sources(
   rko_lio.core
   PRIVATE lio.cpp
+          bump_image_map.cpp
           direct_visual_odometry.cpp
           photometric_features.cpp
           photometric_image.cpp
@@ -38,6 +39,7 @@ compat_target_sources(
   FILE_SET
   HEADERS
   FILES ../../rko_lio/core/lio.hpp
+        ../../rko_lio/core/bump_image_map.hpp
         ../../rko_lio/core/gyro_deskew_history.hpp
         ../../rko_lio/core/correlation_peak_selector.hpp
         ../../rko_lio/core/correlation_score.hpp

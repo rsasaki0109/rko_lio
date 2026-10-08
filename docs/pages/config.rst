@@ -209,6 +209,35 @@ It is off by default and needs an organized cloud (Ouster layout) and its metada
 carry little texture along the tunnel (a continuous LED strip, bare concrete) the terms
 do not help.
 
+Bump image registration (fork addition)
+---------------------------------------
+
+On open, flat ground a point-to-point match sees a plane and cannot fix the in-plane
+translation. With ``bump_image_registration: true`` the ICP system is replaced by the
+residual of BIEVR-LIO (Pfreundschuh et al., arXiv 2604.14421): every voxel of a second
+map stores the height of its surface above a fitted plane on a fine pixel grid, and each
+scan point is registered against the height at its pixel. Relief of a few centimetres,
+such as grass, then constrains the pose. Photometric terms, when enabled, are added on
+top as before. It is off by default.
+
+- **bump_image_registration** (`bool`, default ``False``)
+- **bump_image_map.voxel_size** (`float`, default ``0.5``), **bump_image_map.pixel_size**
+  (`float`, default ``0.05``): voxel and pixel side length in metres.
+- **bump_image_map.weighted** (`bool`, default ``True``): weight pixel updates by inverse range.
+- **bump_image_map.smooth** (`bool`, default ``True``): Gaussian-smooth the height images.
+- **bump_image_map.normal_tolerance_deg** (`float`, default ``3.0``): reproject a voxel's
+  image when its plane normal turns further than this.
+- **bump_image_map.max_voxels** (`int`, default ``1500000``): least recently updated voxels
+  are dropped beyond this.
+- **bump_image_source_voxel_size** (`float`, default ``0.1``): downsampling of the scan
+  points used for registration.
+- **bump_image_informed_voxels** (`int`, default ``300``): number of map voxels with the
+  most relief whose points are all kept; the other voxels keep one point each.
+- **bump_image_huber_delta** (`float`, default ``0.1``): Huber threshold in metres.
+
+On ENWIDE FieldD (grass) with the photometric terms of
+``config/enwide_os0_photometric.yaml`` the ATE drops from 7.2 m to 0.18 m.
+
 Pipeline parameters (Python)
 ----------------------------
 
