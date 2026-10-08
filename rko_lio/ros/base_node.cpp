@@ -822,6 +822,26 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<bool>("photometric_free_weak_axis", lio_config.photometric_free_weak_axis);
   lio_config.photometric_max_scan_interval_sec = node->declare_parameter<double>(
       "photometric_max_scan_interval_sec", lio_config.photometric_max_scan_interval_sec);
+  lio_config.bump_image_registration =
+      node->declare_parameter<bool>("bump_image_registration", lio_config.bump_image_registration);
+  lio_config.bump_image_map.voxel_size =
+      node->declare_parameter<double>("bump_image_map.voxel_size", lio_config.bump_image_map.voxel_size);
+  lio_config.bump_image_map.pixel_size =
+      node->declare_parameter<double>("bump_image_map.pixel_size", lio_config.bump_image_map.pixel_size);
+  lio_config.bump_image_map.weighted =
+      node->declare_parameter<bool>("bump_image_map.weighted", lio_config.bump_image_map.weighted);
+  lio_config.bump_image_map.smooth =
+      node->declare_parameter<bool>("bump_image_map.smooth", lio_config.bump_image_map.smooth);
+  lio_config.bump_image_map.normal_tolerance_deg = node->declare_parameter<double>(
+      "bump_image_map.normal_tolerance_deg", lio_config.bump_image_map.normal_tolerance_deg);
+  lio_config.bump_image_map.max_voxels = static_cast<std::size_t>(node->declare_parameter<int>(
+      "bump_image_map.max_voxels", static_cast<int>(lio_config.bump_image_map.max_voxels)));
+  lio_config.bump_image_source_voxel_size = node->declare_parameter<double>(
+      "bump_image_source_voxel_size", lio_config.bump_image_source_voxel_size);
+  lio_config.bump_image_informed_voxels =
+      node->declare_parameter<int>("bump_image_informed_voxels", lio_config.bump_image_informed_voxels);
+  lio_config.bump_image_huber_delta =
+      node->declare_parameter<double>("bump_image_huber_delta", lio_config.bump_image_huber_delta);
   lio_config.photometric_weak_direction_min_contribution = node->declare_parameter<double>(
       "photometric_weak_direction_min_contribution", lio_config.photometric_weak_direction_min_contribution);
   lio_config.photometric_normal_row_step =

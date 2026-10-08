@@ -299,6 +299,13 @@ struct IcpResult {
   int photometric_patches = 0;
 };
 
+// Bump image registration replacing the point-to-point system (see bump_image_map.hpp).
+struct BumpTerms {
+  const BumpImageMap* map = nullptr;
+  const Vector3dVector* points = nullptr;
+  double huber_delta = 0.1;
+};
+
 // Photometric terms added to every ICP iteration (see photometric_features.hpp).
 struct PhotometricTerms {
   const std::vector<PhotometricFeature>* features = nullptr;
@@ -323,7 +330,8 @@ IcpResult icp(const Vector3dVector& frame,
              const std::optional<Sophus::SE3d>& degeneracy_prior_pose = std::nullopt,
              const std::optional<Eigen::Vector3d>& localizability_axis = std::nullopt,
              const double localizability_boost = 0.0,
-             const PhotometricTerms* photometric = nullptr) {
+             const PhotometricTerms* photometric = nullptr,
+             const BumpTerms* bump = nullptr) {
   // in case config disables it, or we don't have valid IMU information for this icp loop, beta is -1
   const double beta = (config.min_beta > 0 && optional_accel_info.has_value())
                           ? (config.min_beta * (1 + optional_accel_info->accel_mag_variance))
@@ -344,10 +352,26 @@ IcpResult icp(const Vector3dVector& frame,
   int photometric_patches = 0;
   for (size_t i = 0; i < iteration_budget; ++i) {
     const auto& [H, b, chi] = std::invoke([&]() -> LinearSystem {
-      auto [H_icp, b_icp, chi_icp] =
-          build_icp_linear_system(current_pose, frame, voxel_map, config.max_correspondence_distance,
-                                  voxel_search_radius, localizability_axis, localizability_boost,
-                                  &weighting_stats);
+      LinearSystem geometric;
+      bool bump_used = false;
+      if (bump != nullptr) {
+        // Averaged over residuals like the point-to-point system, so the photometric
+        // weighting below applies unchanged.
+        const BumpImageSystem system =
+            build_bump_image_system(*bump->map, *bump->points, current_pose, bump->huber_delta);
+        if (system.residuals > 0) {
+          const double n = static_cast<double>(system.residuals);
+          geometric = {system.H / n, system.b / n, system.chi / n};
+          weighting_stats = IcpWeightingStats{system.residuals, 0};
+          bump_used = true;
+        }
+      }
+      if (!bump_used) {
+        geometric = build_icp_linear_system(current_pose, frame, voxel_map, config.max_correspondence_distance,
+                                            voxel_search_radius, localizability_axis, localizability_boost,
+                                            &weighting_stats);
+      }
+      auto [H_icp, b_icp, chi_icp] = geometric;
       if (photometric != nullptr && weighting_stats.correspondences > 0) {
         // The ICP system is averaged over correspondences; weight the summed photometric
         // terms so one photometric residual counts photometric->scale times one ICP residual.
@@ -516,6 +540,7 @@ namespace rko_lio::core {
 LIO::LIO(const Config& config_)
     : config(config_),
       map(config_.voxel_size, config_.max_range, config_.max_points_per_voxel),
+      bump_map(config_.bump_image_map),
       relocalization_map(config_.voxel_size, config_.max_range, config_.max_points_per_voxel),
       _photometric_features(config_.photometric_features) {
   // Per-voxel normals are only maintained when the localizability weighting can
@@ -577,7 +602,8 @@ Vector3dVector LIO::bootstrap_first_scan(const Vector3dVector& scan, const Nsec 
     return {};
   }
   auto preproc = preprocess_scan(scan, config);
-  update_maps(config.double_downsample ? preproc.map_frame : preproc.keypoints, lidar_state.pose);
+  update_maps(config.double_downsample ? preproc.map_frame : preproc.keypoints, lidar_state.pose,
+              &preproc.filtered_frame);
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
   std::cout << "[INFO] Odometry map frame initialized with first lidar scan.\n";
   return std::move(preproc.filtered_frame);
@@ -602,8 +628,19 @@ std::pair<Eigen::Vector3d, Eigen::Vector3d> LIO::motion_priors_from_imu(const Ns
   return {avg_body_accel, avg_ang_vel};
 }
 
-void LIO::update_maps(const Vector3dVector& map_update_frame, const Sophus::SE3d& pose) {
+void LIO::update_maps(const Vector3dVector& map_update_frame,
+                      const Sophus::SE3d& pose,
+                      const Vector3dVector* full_frame) {
   map.update(map_update_frame, pose);
+  if (config.bump_image_registration && full_frame != nullptr) {
+    Vector3dVector world_points(full_frame->size());
+    std::vector<double> ranges(full_frame->size());
+    for (std::size_t i = 0; i < full_frame->size(); ++i) {
+      world_points[i] = pose * (*full_frame)[i];
+      ranges[i] = (*full_frame)[i].norm();
+    }
+    bump_map.integrate(world_points, ranges);
+  }
 
   // The unpruned global map exists only for the opt-in kidnap recovery path.
   // Avoid transforming, copying, and retaining every map point when recovery
@@ -631,6 +668,7 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
                                       const Sophus::SE3d& recovery_pose,
                                       const std::string& reason) {
   map.clear();
+  bump_map.clear();
   lidar_state.pose = recovery_pose;
   lidar_state.time = current_lidar_time;
   lidar_state.velocity.setZero();
@@ -651,7 +689,7 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
   imu_state = lidar_state;
   interval_stats.reset();
   gyro_deskew_history.clear();
-  update_maps(map_update_frame, lidar_state.pose);
+  update_maps(map_update_frame, lidar_state.pose, &filtered_frame);
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
   _consecutive_registration_failures = 0;
   std::cout << "[INFO] Kidnap recovery accepted scan at " << to_seconds(current_lidar_time) << "s via " << reason
@@ -1168,12 +1206,22 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     }
     int photometric_patches = 0;
     try {
+      Vector3dVector bump_points;
+      BumpTerms bump_terms;
+      const bool use_bump = config.bump_image_registration && !bump_map.empty();
+      if (use_bump) {
+        bump_points = sample_informed_points(
+            bump_map, voxel_down_sample(preproc_result.filtered_frame, config.bump_image_source_voxel_size),
+            initial_guess, static_cast<std::size_t>(std::max(0, config.bump_image_informed_voxels)));
+        bump_terms = BumpTerms{&bump_map, &bump_points, config.bump_image_huber_delta};
+      }
       const IcpResult icp_result = icp(preproc_result.keypoints, map, initial_guess, config, kf_step.info, 1,
                                        _persistent_weak_direction_tracker.state(),
                                        config.degeneracy_adaptive_iteration_budget &&
                                            _adaptive_iteration_hold_remaining > 0,
                                        visual_pose_prior, degeneracy_prior_pose, localizability_axis,
-                                       config.localizability_boost, use_photometric ? &photometric_terms : nullptr);
+                                       config.localizability_boost, use_photometric ? &photometric_terms : nullptr,
+                                       use_bump ? &bump_terms : nullptr);
       photometric_patches = icp_result.photometric_patches;
       if (icp_result.weighting_stats.boosted > 0) {
         ++localizability_weighted_scan_count;
@@ -2034,7 +2082,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   if (!(kinematic_gate_corrected_this_scan && config.kinematic_gate_skip_map_update) &&
       !kinematic_blend_suppress_map_update_this_scan) {
     if (kinematic_blend_map_update_fraction_this_scan >= 1.0) {
-      update_maps(map_input, lidar_state.pose);
+      update_maps(map_input, lidar_state.pose, &preproc_result.filtered_frame);
     } else {
       // Uniform deterministic thinning keeps some fresh geometry available without
       // letting a propagation-dominated pose fully rewrite the local map.
@@ -2050,7 +2098,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           thinned_map_input.push_back(map_input[i]);
         }
       }
-      update_maps(thinned_map_input, lidar_state.pose);
+      update_maps(thinned_map_input, lidar_state.pose, &preproc_result.filtered_frame);
     }
   }
 

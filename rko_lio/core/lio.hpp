@@ -31,6 +31,7 @@
 #include "intensity_profile.hpp"
 #include "gyro_deskew_history.hpp"
 #include "oriented_intensity_grid.hpp"
+#include "bump_image_map.hpp"
 #include "photometric_features.hpp"
 #include "photometric_image.hpp"
 #include "persistent_weak_direction.hpp"
@@ -605,6 +606,17 @@ public:
     LidarImageModel photometric_model;
     IntensityImageConfig photometric_image;
     PhotometricFeatureConfig photometric_features;
+
+    /** Register against voxel-wise height ("bump") images instead of point-to-point
+     *  (fork addition, default off; see bump_image_map.hpp). The bump map holds every
+     *  deskewed point; registration uses a `bump_image_source_voxel_size` downsample of
+     *  the scan, keeping all points in the `bump_image_informed_voxels` map voxels with
+     *  the most relief. */
+    bool bump_image_registration = false;
+    BumpImageMapConfig bump_image_map;
+    double bump_image_source_voxel_size = 0.1;
+    int bump_image_informed_voxels = 300;
+    double bump_image_huber_delta = 0.1;
   };
 
   /** Configuration parameters. */
@@ -612,6 +624,7 @@ public:
 
   /** Local map. */
   VoxelHashMap map;
+  BumpImageMap bump_map;
 
   /** Global sparse map used for kidnap relocalization. This map is never pruned. */
   VoxelHashMap relocalization_map;
@@ -855,7 +868,11 @@ private:
   std::optional<Sophus::SE3d> try_global_relocalization(const Vector3dVector& keypoints) const;
 
   /** Update the sliding local map and, when enabled, the unpruned recovery map. */
-  void update_maps(const Vector3dVector& map_update_frame, const Sophus::SE3d& pose);
+  /** `full_frame` is the deskewed scan for the bump map; it is ignored unless bump image
+   *  registration is enabled. */
+  void update_maps(const Vector3dVector& map_update_frame,
+                   const Sophus::SE3d& pose,
+                   const Vector3dVector* full_frame = nullptr);
   /** Rotate the local frame (previous pose, local map, gravity window) by `correction`
    *  about `pivot`; see Config::gravity_alignment_relevel_map. */
   void relevel_local_frame(const Sophus::SO3d& correction, const Eigen::Vector3d& pivot);
