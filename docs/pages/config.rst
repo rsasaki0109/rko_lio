@@ -144,6 +144,13 @@ These show up under the top level of a Python config and as ROS launch arguments
   This parameter influences how much importance this additional observation plays in the optimization, as we cannot have a perfect observation of the true body acceleration (the estimate is affected by gravity and the odometry itself).
   The default should be fine for most cases.
 
+- **velocity_window_sec** (`float`, default ``0.0``, fork addition)
+
+  Estimate the velocity from the pose at least this long ago instead of the previous scan's (``0`` keeps the previous scan).
+  Over one 0.1 s scan, a single wrong pose correction of a few decimetres becomes a velocity error of metres per second, and the next prediction carries it.
+  Where the registration constrains the translation weakly, as on open ground while turning fast, it cannot pull the prediction back and the velocity runs away.
+  ``0.3`` stops this on ENWIDE RunwayD, where a handheld sensor is spun at about 190 °/s.
+
   You can set it ``-1`` to disable this additional cost.
 
 Extrinsics

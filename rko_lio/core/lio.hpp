@@ -171,6 +171,13 @@ public:
     /** Minimum weight for orientation regularization. */
     double min_beta = 200;
 
+    /** Estimate the velocity from the pose at least this long ago (s) instead of the
+     *  previous scan's (0 keeps the previous scan). Over one 0.1 s scan a single wrong
+     *  correction of a few decimetres becomes a velocity error of metres per second, and
+     *  a registration that constrains the translation weakly (open ground while turning
+     *  fast) cannot pull the next prediction back. */
+    double velocity_window_sec = 0.0;
+
     /** Replace the legacy ICP solve with direction-aware prior blending. */
     bool degeneracy_aware_solve = false;
 

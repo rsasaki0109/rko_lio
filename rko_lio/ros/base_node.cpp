@@ -550,6 +550,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   lio_config.legacy_voxel_downsample =
       node->declare_parameter<bool>("legacy_voxel_downsample", lio_config.legacy_voxel_downsample);
   lio_config.min_beta = node->declare_parameter<double>("min_beta", lio_config.min_beta);
+  lio_config.velocity_window_sec =
+      node->declare_parameter<double>("velocity_window_sec", lio_config.velocity_window_sec);
   lio_config.icp_keypoint_voxel_multiplier =
       node->declare_parameter<double>("icp_keypoint_voxel_multiplier", lio_config.icp_keypoint_voxel_multiplier);
   lio_config.min_icp_keypoints = static_cast<size_t>(std::max<int64_t>(

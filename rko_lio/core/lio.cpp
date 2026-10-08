@@ -1975,6 +1975,19 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // update
     lidar_state.pose = optimized_pose;
     lidar_state.velocity = local_velocity.head<3>();
+    if (config.velocity_window_sec > 0.0 && !poses_with_timestamps.empty()) {
+      auto past = poses_with_timestamps.rbegin();
+      while (std::next(past) != poses_with_timestamps.rend() &&
+             to_seconds(current_lidar_time - past->first) < config.velocity_window_sec) {
+        ++past;
+      }
+      const double span = to_seconds(current_lidar_time - past->first);
+      if (span > 0.0) {
+        // Body-frame velocity, like the per-scan estimate above.
+        lidar_state.velocity =
+            optimized_pose.so3().inverse() * ((optimized_pose.translation() - past->second.translation()) / span);
+      }
+    }
     lidar_state.angular_velocity = local_velocity.tail<3>();
     lidar_state.linear_acceleration = local_linear_acceleration;
 
