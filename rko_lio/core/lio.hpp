@@ -178,6 +178,13 @@ public:
      *  fast) cannot pull the next prediction back. */
     double velocity_window_sec = 0.0;
 
+    /** Do not register a scan that follows a LiDAR gap longer than this (s); take the IMU
+     *  prediction as its pose and keep it out of the map (0 disables). The first scan
+     *  after a gap is often partial and its prediction coarse, and a tunnel constrains
+     *  it so weakly that the registration can turn it by degrees (ENWIDE TunnelD). Use
+     *  it with velocity_window_sec, so the skipped scan does not set the velocity. */
+    double skip_registration_after_gap_sec = 0.0;
+
     /** Replace the legacy ICP solve with direction-aware prior blending. */
     bool degeneracy_aware_solve = false;
 

@@ -151,6 +151,12 @@ These show up under the top level of a Python config and as ROS launch arguments
   Where the registration constrains the translation weakly, as on open ground while turning fast, it cannot pull the prediction back and the velocity runs away.
   ``0.3`` stops this on ENWIDE RunwayD, where a handheld sensor is spun at about 190 °/s.
 
+- **skip_registration_after_gap_sec** (`float`, default ``0.0``, fork addition)
+
+  Do not register a scan that follows a LiDAR gap longer than this; its pose is the IMU prediction and it stays out of the map (``0`` disables).
+  The first scan after a gap is often partial and its prediction coarse; in a tunnel the registration can then turn it by degrees.
+  Use it together with ``velocity_window_sec`` so the skipped scan does not set the velocity.
+
   You can set it ``-1`` to disable this additional cost.
 
 Extrinsics
