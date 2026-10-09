@@ -224,10 +224,13 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                           weight);
   };
 
-  // The only parallel part
+  // The only parallel part. The deterministic reduce sums the per-point systems in the
+  // same order on every run; tbb::parallel_reduce's order depends on thread timing, and a
+  // registration that is barely constrained turns those rounding differences into
+  // different trajectories.
   using points_iterator = std::vector<Eigen::Vector3d>::const_iterator;
   std::atomic<int> correspondences_counter = 0;
-  const auto& [H_icp, b_icp, chi_icp, weight_sum] = tbb::parallel_reduce(
+  const auto& [H_icp, b_icp, chi_icp, weight_sum] = tbb::parallel_deterministic_reduce(
       // Range
       tbb::blocked_range<points_iterator>{frame.cbegin(), frame.cend()},
       // Identity
