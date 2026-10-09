@@ -1222,7 +1222,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       registration_skipped_this_scan = config.skip_registration_after_gap_sec > 0.0 &&
                                        to_seconds(current_lidar_time - lidar_state.time) >
                                            config.skip_registration_after_gap_sec;
-      const IcpResult icp_result =
+      IcpResult icp_result =
           registration_skipped_this_scan
               ? IcpResult{initial_guess}
               : icp(preproc_result.keypoints, map, initial_guess, config, kf_step.info, 1,
@@ -1230,6 +1230,18 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                     config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,
                     visual_pose_prior, degeneracy_prior_pose, localizability_axis, config.localizability_boost,
                     use_photometric ? &photometric_terms : nullptr, use_bump ? &bump_terms : nullptr);
+      if (use_bump && !registration_skipped_this_scan && config.bump_image_max_rotation_correction_deg > 0.0) {
+        const double rotation_deg =
+            (icp_result.pose.so3() * initial_guess.so3().inverse()).log().norm() * 180.0 / M_PI;
+        if (rotation_deg > config.bump_image_max_rotation_correction_deg) {
+          icp_result = icp(preproc_result.keypoints, map, initial_guess, config, kf_step.info, 1,
+                           _persistent_weak_direction_tracker.state(),
+                           config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,
+                           visual_pose_prior, degeneracy_prior_pose, localizability_axis, config.localizability_boost,
+                           use_photometric ? &photometric_terms : nullptr, nullptr);
+          ++bump_rotation_fallback_count;
+        }
+      }
       photometric_patches = icp_result.photometric_patches;
       if (icp_result.weighting_stats.boosted > 0) {
         ++localizability_weighted_scan_count;

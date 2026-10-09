@@ -631,6 +631,11 @@ public:
     double bump_image_source_voxel_size = 0.1;
     int bump_image_informed_voxels = 300;
     double bump_image_huber_delta = 0.1;
+    /** Register a scan again without the bump terms when they turn the pose more than
+     *  this (deg) away from the IMU prediction (0 disables). In a circular tunnel the roll
+     *  about the axis is unobservable and the bump images slip around it by degrees per
+     *  scan, while a correctly registered scan stays within about 1.6 deg (GEODE, ENWIDE). */
+    double bump_image_max_rotation_correction_deg = 0.0;
   };
 
   /** Configuration parameters. */
@@ -752,6 +757,8 @@ public:
   std::size_t photometric_patch_sum = 0;
   /** Scans whose photometric terms were skipped after a LiDAR gap. */
   std::size_t photometric_gap_skip_count = 0;
+  /** Scans registered again without the bump terms (bump_image_max_rotation_correction_deg). */
+  std::size_t bump_rotation_fallback_count = 0;
 
   /** Tracked photometric patches. */
   const PhotometricFeatureManager& photometric_features() const { return _photometric_features; }

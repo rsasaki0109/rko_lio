@@ -247,6 +247,12 @@ top as before. It is off by default.
 - **bump_image_informed_voxels** (`int`, default ``300``): number of map voxels with the
   most relief whose points are all kept; the other voxels keep one point each.
 - **bump_image_huber_delta** (`float`, default ``0.1``): Huber threshold in metres.
+- **bump_image_max_rotation_correction_deg** (`float`, default ``0.0``): register a scan
+  again without the bump terms when they turn the pose more than this many degrees away
+  from the IMU prediction (``0`` disables). In a circular tunnel the roll about the axis
+  is unobservable, and the bump images slip around it by degrees per scan. A correctly
+  registered scan stays within about 1.6 degrees. ``2.0`` takes GEODE Shield_tunnel9
+  from 441 m to 67 m ATE and leaves a vehicle-mounted urban tunnel unchanged.
 
 On ENWIDE FieldD (grass) with the photometric terms of
 ``config/enwide_os0_photometric.yaml`` the ATE drops from 7.2 m to 0.18 m.

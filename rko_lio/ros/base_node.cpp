@@ -846,6 +846,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<int>("bump_image_informed_voxels", lio_config.bump_image_informed_voxels);
   lio_config.bump_image_huber_delta =
       node->declare_parameter<double>("bump_image_huber_delta", lio_config.bump_image_huber_delta);
+  lio_config.bump_image_max_rotation_correction_deg = node->declare_parameter<double>(
+      "bump_image_max_rotation_correction_deg", lio_config.bump_image_max_rotation_correction_deg);
   lio_config.photometric_weak_direction_min_contribution = node->declare_parameter<double>(
       "photometric_weak_direction_min_contribution", lio_config.photometric_weak_direction_min_contribution);
   lio_config.photometric_normal_row_step =
@@ -1739,6 +1741,15 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
       if (std::ofstream file(photometric_file); file.is_open()) {
         file << photometric_summary.dump(4) << "\n";
         std::cout << "Photometric summary written to " << photometric_file << "\n";
+      }
+    }
+    // Bump image registration summary.
+    if (lio->config.bump_image_registration) {
+      const nlohmann::json bump_summary = {{"rotation_fallback_count", lio->bump_rotation_fallback_count}};
+      const std::filesystem::path bump_file = output_dir / "bump_image_summary.json";
+      if (std::ofstream file(bump_file); file.is_open()) {
+        file << bump_summary.dump(4) << "\n";
+        std::cout << "Bump image summary written to " << bump_file << "\n";
       }
     }
     // Sliding-window gravity alignment summary.
