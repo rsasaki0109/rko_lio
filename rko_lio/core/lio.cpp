@@ -1233,7 +1233,14 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       if (use_bump && !registration_skipped_this_scan && config.bump_image_max_rotation_correction_deg > 0.0) {
         const double rotation_deg =
             (icp_result.pose.so3() * initial_guess.so3().inverse()).log().norm() * 180.0 / M_PI;
-        if (rotation_deg > config.bump_image_max_rotation_correction_deg) {
+        bump_rotation_corrections.emplace_back(to_seconds(current_lidar_time), rotation_deg);
+        if (!_bump_rotation_gate) {
+          _bump_rotation_gate.emplace(config.bump_image_max_rotation_correction_deg,
+                                      config.bump_image_rotation_fallback_window,
+                                      config.bump_image_rotation_fallback_min_count,
+                                      config.bump_image_rotation_hard_limit_deg);
+        }
+        if (_bump_rotation_gate->fall_back(rotation_deg)) {
           icp_result = icp(preproc_result.keypoints, map, initial_guess, config, kf_step.info, 1,
                            _persistent_weak_direction_tracker.state(),
                            config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,
