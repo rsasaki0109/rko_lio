@@ -32,6 +32,7 @@
 #include "gyro_deskew_history.hpp"
 #include "oriented_intensity_grid.hpp"
 #include "bump_image_map.hpp"
+#include "bump_rotation_gate.hpp"
 #include "photometric_features.hpp"
 #include "photometric_image.hpp"
 #include "persistent_weak_direction.hpp"
@@ -636,6 +637,15 @@ public:
      *  about the axis is unobservable and the bump images slip around it by degrees per
      *  scan, while a correctly registered scan stays within about 1.6 deg (GEODE, ENWIDE). */
     double bump_image_max_rotation_correction_deg = 0.0;
+    /** Fall back only when at least ``bump_image_rotation_fallback_min_count`` of the last
+     *  ``bump_image_rotation_fallback_window`` scans (this one included) exceeded the
+     *  correction limit, so an isolated large correction that was right keeps its bump
+     *  result. 1 / 1 falls back on every exceeding scan. */
+    int bump_image_rotation_fallback_window = 1;
+    int bump_image_rotation_fallback_min_count = 1;
+    /** Above this correction (deg) a scan falls back at once, whatever the window says
+     *  (0 disables). */
+    double bump_image_rotation_hard_limit_deg = 0.0;
   };
 
   /** Configuration parameters. */
@@ -759,6 +769,8 @@ public:
   std::size_t photometric_gap_skip_count = 0;
   /** Scans registered again without the bump terms (bump_image_max_rotation_correction_deg). */
   std::size_t bump_rotation_fallback_count = 0;
+  /** Per-scan (time [s], bump rotation correction [deg]) while the limit is active. */
+  std::vector<std::pair<double, double>> bump_rotation_corrections;
 
   /** Tracked photometric patches. */
   const PhotometricFeatureManager& photometric_features() const { return _photometric_features; }
@@ -913,6 +925,8 @@ private:
   /** Stateful weak-direction confirmation gate for the opt-in degeneracy solve. */
   PersistentWeakDirectionTracker _persistent_weak_direction_tracker;
   std::size_t _adaptive_iteration_hold_remaining = 0;
+  /** Persistence gate for bump_image_max_rotation_correction_deg (built on first use). */
+  std::optional<BumpRotationGate> _bump_rotation_gate;
 
   /** One-shot prior consumed by the next scan; never reused after rejection. */
   std::optional<VisualPosePrior> _visual_pose_prior;

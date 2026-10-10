@@ -34,6 +34,7 @@ compat_target_sources(
           test_register_scan.cpp
           test_photometric.cpp
           test_bump_image_map.cpp
+          test_bump_rotation_gate.cpp
   PUBLIC
   FILE_SET
   HEADERS

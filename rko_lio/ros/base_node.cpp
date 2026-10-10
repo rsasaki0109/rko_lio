@@ -28,6 +28,7 @@
 #include "rko_lio/ros/utils/utils.hpp"
 // other
 #include <algorithm>
+#include <iomanip>
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -848,6 +849,12 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("bump_image_huber_delta", lio_config.bump_image_huber_delta);
   lio_config.bump_image_max_rotation_correction_deg = node->declare_parameter<double>(
       "bump_image_max_rotation_correction_deg", lio_config.bump_image_max_rotation_correction_deg);
+  lio_config.bump_image_rotation_fallback_window = node->declare_parameter<int>(
+      "bump_image_rotation_fallback_window", lio_config.bump_image_rotation_fallback_window);
+  lio_config.bump_image_rotation_fallback_min_count = node->declare_parameter<int>(
+      "bump_image_rotation_fallback_min_count", lio_config.bump_image_rotation_fallback_min_count);
+  lio_config.bump_image_rotation_hard_limit_deg = node->declare_parameter<double>(
+      "bump_image_rotation_hard_limit_deg", lio_config.bump_image_rotation_hard_limit_deg);
   lio_config.photometric_weak_direction_min_contribution = node->declare_parameter<double>(
       "photometric_weak_direction_min_contribution", lio_config.photometric_weak_direction_min_contribution);
   lio_config.photometric_normal_row_step =
@@ -1750,6 +1757,15 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
       if (std::ofstream file(bump_file); file.is_open()) {
         file << bump_summary.dump(4) << "\n";
         std::cout << "Bump image summary written to " << bump_file << "\n";
+      }
+      if (!lio->bump_rotation_corrections.empty()) {
+        const std::filesystem::path corrections_file = output_dir / "bump_rotation_corrections.csv";
+        if (std::ofstream file(corrections_file); file.is_open()) {
+          file << "time_sec,rotation_correction_deg\n" << std::setprecision(17);
+          for (const auto& [time_sec, rotation_deg] : lio->bump_rotation_corrections) {
+            file << time_sec << "," << rotation_deg << "\n";
+          }
+        }
       }
     }
     // Sliding-window gravity alignment summary.
