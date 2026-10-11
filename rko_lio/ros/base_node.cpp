@@ -1784,7 +1784,12 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
     }
     // Inertial velocity filter summary.
     if (lio->config.inertial_velocity_filter) {
-      nlohmann::json inertial_summary = {{"update_count", lio->inertial_filter_update_count}};
+      nlohmann::json inertial_summary = {
+          {"update_count", lio->inertial_filter_update_count},
+          {"preintegration_shortfall_sec_mean",
+           lio->inertial_filter_update_count > 0
+               ? lio->inertial_preintegration_shortfall_sec_sum / lio->inertial_filter_update_count
+               : 0.0}};
       if (const auto bias = lio->inertial_filter_bias()) {
         inertial_summary["final_bias_mps2"] = {(*bias)(0), (*bias)(1), (*bias)(2)};
       }

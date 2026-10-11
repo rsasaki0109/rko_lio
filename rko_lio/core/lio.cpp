@@ -1207,8 +1207,17 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         _inertial_filter.emplace(filter_config);
         _inertial_filter->reset(lidar_state.pose.so3() * lidar_state.velocity);
       }
-      inertial_prior = _inertial_filter->predict(inertial_start_translation, _inertial_preintegration,
-                                                 to_seconds(current_lidar_time - lidar_state.time));
+      const double interval = to_seconds(current_lidar_time - lidar_state.time);
+      // The IMU samples received so far may stop short of the scan time; extend the
+      // preintegration over the rest with the interval's mean acceleration.
+      InertialPreintegration preintegration = _inertial_preintegration;
+      if (preintegration.dt < interval) {
+        inertial_preintegration_shortfall_sec_sum += interval - preintegration.dt;
+        preintegration.add(imu_state.pose.so3().matrix(),
+                           interval_stats.body_acceleration_sum / static_cast<double>(interval_stats.imu_count),
+                           interval - preintegration.dt);
+      }
+      inertial_prior = _inertial_filter->predict(inertial_start_translation, preintegration, interval);
     }
     const InertialTranslationPrior* inertial_prior_arg =
         config.inertial_translation_prior && inertial_prior ? &*inertial_prior : nullptr;

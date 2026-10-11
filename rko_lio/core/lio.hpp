@@ -793,6 +793,8 @@ public:
   std::size_t bump_rotation_fallback_count = 0;
   /** Scans whose velocity the inertial filter corrected (inertial_velocity_filter). */
   std::size_t inertial_filter_update_count = 0;
+  /** Total time (s) the IMU preintegration fell short of the scan interval. */
+  double inertial_preintegration_shortfall_sec_sum = 0.0;
   /** The inertial filter's accelerometer bias estimate, once it exists. */
   std::optional<Eigen::Vector3d> inertial_filter_bias() const {
     return _inertial_filter ? std::optional<Eigen::Vector3d>(_inertial_filter->bias()) : std::nullopt;
