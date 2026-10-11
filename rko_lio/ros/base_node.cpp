@@ -553,6 +553,25 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   lio_config.min_beta = node->declare_parameter<double>("min_beta", lio_config.min_beta);
   lio_config.velocity_window_sec =
       node->declare_parameter<double>("velocity_window_sec", lio_config.velocity_window_sec);
+  lio_config.inertial_window = node->declare_parameter<bool>("inertial_window", lio_config.inertial_window);
+  lio_config.inertial_window_sec =
+      node->declare_parameter<double>("inertial_window_sec", lio_config.inertial_window_sec);
+  lio_config.inertial_window_min_intervals =
+      node->declare_parameter<int>("inertial_window_min_intervals", lio_config.inertial_window_min_intervals);
+  lio_config.inertial_window_rotation_weight = node->declare_parameter<double>(
+      "inertial_window_rotation_weight", lio_config.inertial_window_rotation_weight);
+  lio_config.inertial_window_velocity_weight = node->declare_parameter<double>(
+      "inertial_window_velocity_weight", lio_config.inertial_window_velocity_weight);
+  lio_config.inertial_window_position_weight = node->declare_parameter<double>(
+      "inertial_window_position_weight", lio_config.inertial_window_position_weight);
+  lio_config.inertial_window_accelerometer_bias_prior_weight = node->declare_parameter<double>(
+      "inertial_window_accelerometer_bias_prior_weight", lio_config.inertial_window_accelerometer_bias_prior_weight);
+  lio_config.inertial_window_gyroscope_bias_prior_weight = node->declare_parameter<double>(
+      "inertial_window_gyroscope_bias_prior_weight", lio_config.inertial_window_gyroscope_bias_prior_weight);
+  lio_config.inertial_window_apply_velocity =
+      node->declare_parameter<bool>("inertial_window_apply_velocity", lio_config.inertial_window_apply_velocity);
+  lio_config.inertial_window_apply_bias =
+      node->declare_parameter<bool>("inertial_window_apply_bias", lio_config.inertial_window_apply_bias);
   lio_config.skip_registration_after_gap_sec = node->declare_parameter<double>(
       "skip_registration_after_gap_sec", lio_config.skip_registration_after_gap_sec);
   lio_config.icp_keypoint_voxel_multiplier =
@@ -1748,6 +1767,20 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
       if (std::ofstream file(photometric_file); file.is_open()) {
         file << photometric_summary.dump(4) << "\n";
         std::cout << "Photometric summary written to " << photometric_file << "\n";
+      }
+    }
+    // Inertial window summary.
+    if (lio->config.inertial_window) {
+      const auto& window = lio->inertial_window();
+      const nlohmann::json window_summary = {
+          {"solve_count", lio->inertial_window_solve_count},
+          {"final_accelerometer_bias_mps2",
+           {window.accelerometer_bias()(0), window.accelerometer_bias()(1), window.accelerometer_bias()(2)}},
+          {"final_gyroscope_bias_radps",
+           {window.gyroscope_bias()(0), window.gyroscope_bias()(1), window.gyroscope_bias()(2)}}};
+      const std::filesystem::path window_file = output_dir / "inertial_window_summary.json";
+      if (std::ofstream file(window_file); file.is_open()) {
+        file << window_summary.dump(4) << "\n";
       }
     }
     // Bump image registration summary.

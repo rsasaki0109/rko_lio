@@ -33,6 +33,7 @@
 #include "oriented_intensity_grid.hpp"
 #include "bump_image_map.hpp"
 #include "bump_rotation_gate.hpp"
+#include "inertial_window.hpp"
 #include "photometric_features.hpp"
 #include "photometric_image.hpp"
 #include "persistent_weak_direction.hpp"
@@ -178,6 +179,25 @@ public:
      *  a registration that constrains the translation weakly (open ground while turning
      *  fast) cannot pull the next prediction back. */
     double velocity_window_sec = 0.0;
+
+    /** BIEVR-LIO style inertial window (InertialWindow): hold the registered poses of the
+     *  last inertial_window_sec fixed and solve the velocity at every scan and the IMU
+     *  biases from the IMU between them. The newest velocity replaces the estimate above
+     *  for the next prediction and deskew, and the biases replace imu_bias. The
+     *  registration itself never sees the IMU. */
+    bool inertial_window = false;
+    double inertial_window_sec = 10.0;
+    int inertial_window_min_intervals = 10;
+    /** Residual weights (1 / sigma): rotation (rad), velocity (m/s), position (m). */
+    double inertial_window_rotation_weight = 1.0;
+    double inertial_window_velocity_weight = 1.0;
+    double inertial_window_position_weight = 1.0;
+    /** Weights (1 / sigma) of the priors keeping the biases near their last estimates. */
+    double inertial_window_accelerometer_bias_prior_weight = 1.0;
+    double inertial_window_gyroscope_bias_prior_weight = 10.0;
+    /** Use the window's velocity / biases (either can be off to isolate the other). */
+    bool inertial_window_apply_velocity = true;
+    bool inertial_window_apply_bias = true;
 
     /** Do not register a scan that follows a LiDAR gap longer than this (s); take the IMU
      *  prediction as its pose and keep it out of the map (0 disables). The first scan
@@ -673,6 +693,10 @@ public:
   /** IMU measurement statistics since last LiDAR frame. */
   IntervalStats interval_stats;
 
+  /** Inertial window solves (inertial_window). */
+  std::size_t inertial_window_solve_count = 0;
+  const InertialWindow& inertial_window() const { return _inertial_window; }
+
 
   explicit LIO(const Config& config_);
 
@@ -769,6 +793,11 @@ public:
   std::size_t photometric_gap_skip_count = 0;
   /** Scans registered again without the bump terms (bump_image_max_rotation_correction_deg). */
   std::size_t bump_rotation_fallback_count = 0;
+  InertialWindow _inertial_window;
+  ImuPreintegration _window_preintegration;
+  Eigen::Vector3d _window_last_angular_velocity = Eigen::Vector3d::Zero();
+  Eigen::Vector3d _window_last_specific_force = Eigen::Vector3d::Zero();
+  void reset_inertial_window_interval() { _window_preintegration = ImuPreintegration{}; }
   /** Per-scan (time [s], bump rotation correction [deg]) while the limit is active. */
   std::vector<std::pair<double, double>> bump_rotation_corrections;
 
