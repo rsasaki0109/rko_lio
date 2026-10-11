@@ -300,6 +300,8 @@ struct IcpResult {
   IcpWeightingStats weighting_stats;
   // Photometric patches used in the final iteration (0 when disabled).
   int photometric_patches = 0;
+  // Inertial translation prior's share of H in the final iteration (zero when disabled).
+  Eigen::Matrix6d inertial_prior_H = Eigen::Matrix6d::Zero();
 };
 
 // Bump image registration replacing the point-to-point system (see bump_image_map.hpp).
@@ -334,7 +336,9 @@ IcpResult icp(const Vector3dVector& frame,
              const std::optional<Eigen::Vector3d>& localizability_axis = std::nullopt,
              const double localizability_boost = 0.0,
              const PhotometricTerms* photometric = nullptr,
-             const BumpTerms* bump = nullptr) {
+             const BumpTerms* bump = nullptr,
+             const InertialTranslationPrior* inertial_prior = nullptr,
+             const double inertial_residual_sigma = 0.05) {
   // in case config disables it, or we don't have valid IMU information for this icp loop, beta is -1
   const double beta = (config.min_beta > 0 && optional_accel_info.has_value())
                           ? (config.min_beta * (1 + optional_accel_info->accel_mag_variance))
@@ -353,8 +357,10 @@ IcpResult icp(const Vector3dVector& frame,
           : config.max_iterations;
   IcpWeightingStats weighting_stats;
   int photometric_patches = 0;
+  Eigen::Matrix6d inertial_prior_H = Eigen::Matrix6d::Zero();
   for (size_t i = 0; i < iteration_budget; ++i) {
     const auto& [H, b, chi] = std::invoke([&]() -> LinearSystem {
+      LinearSystem full = std::invoke([&]() -> LinearSystem {
       LinearSystem geometric;
       bool bump_used = false;
       if (bump != nullptr) {
@@ -404,6 +410,22 @@ IcpResult icp(const Vector3dVector& frame,
         return {H_icp + H_ori / beta, b_icp + b_ori / beta, chi_icp + chi_ori / beta};
       }
       return {H_icp, b_icp, chi_icp};
+      });
+      if (inertial_prior != nullptr && weighting_stats.correspondences > 0) {
+        // The system above is averaged over its residuals; a prior with information
+        // Lambda enters it as sigma^2 / n * Lambda. Residual r = t - t_prior with
+        // dr/d[rho, phi] = [I, -[t]x] under exp(dx) T.
+        const double scale = square(inertial_residual_sigma) / static_cast<double>(weighting_stats.correspondences);
+        const Eigen::Vector3d t = current_pose.translation();
+        Eigen::Matrix<double, 3, 6> J;
+        J << Eigen::Matrix3d::Identity(), -Sophus::SO3d::hat(t);
+        const Eigen::Vector3d r = t - inertial_prior->translation;
+        inertial_prior_H = scale * J.transpose() * inertial_prior->information * J;
+        std::get<0>(full) += inertial_prior_H;
+        std::get<1>(full) += scale * J.transpose() * inertial_prior->information * r;
+        std::get<2>(full) += 0.5 * scale * r.dot(inertial_prior->information * r);
+      }
+      return full;
     });
     last_H = H;
     last_b = b;
@@ -471,7 +493,8 @@ IcpResult icp(const Vector3dVector& frame,
   return {current_pose, last_H, last_b, degeneracy_intervention_count,
           visual_fused_directions, visual_unobservable_directions,
           visual_directional_information_ratios,
-          visual_directional_information_ratio_count, weighting_stats, photometric_patches};
+          visual_directional_information_ratio_count, weighting_stats, photometric_patches,
+          inertial_prior_H};
 }
 
 struct AlignmentStats {
@@ -677,6 +700,7 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
   lidar_state.velocity.setZero();
   lidar_state.angular_velocity.setZero();
   lidar_state.linear_acceleration.setZero();
+  _inertial_filter.reset();
   // [v0.8 Phase 1, diagnostic-only] the local map was just cleared and
   // `recovery_pose` did not come from a normal incremental ICP solve against
   // it, so any previously-recorded H/b would describe a now-irrelevant map.
@@ -691,6 +715,7 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
   _kinematic_blend_speed_last_rejected_time_sec = -1.0;
   imu_state = lidar_state;
   interval_stats.reset();
+  _inertial_preintegration.reset();
   gyro_deskew_history.clear();
   update_maps(map_update_frame, lidar_state.pose, &filtered_frame);
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
@@ -714,6 +739,7 @@ Vector3dVector LIO::drop_failed_scan(const Nsec& current_lidar_time, const std::
   _kinematic_blend_speed_last_rejected_time_sec = -1.0;
   imu_state = lidar_state;
   interval_stats.reset();
+  _inertial_preintegration.reset();
   gyro_deskew_history.clear();
   std::cerr << "[WARNING] Dropping scan during kidnap recovery: " << reason << "\n";
   return {};
@@ -834,6 +860,11 @@ void LIO::add_imu_measurement(const ImuControl& base_imu) {
   imu_state.time = base_imu.time;
 
   interval_stats.update(unbiased_ang_vel, unbiased_accel, compensated_accel);
+  if (config.inertial_velocity_filter) {
+    // The attitude at the start of this IMU step (imu_state.pose was advanced above).
+    _inertial_preintegration.add((imu_state.pose.so3() * Sophus::SO3d::exp(-unbiased_ang_vel * dt)).matrix(),
+                                 compensated_accel, dt);
+  }
 
   _last_real_imu_time = base_imu.time;
   _last_real_base_imu_ang_vel = base_imu.angular_velocity;
@@ -1161,6 +1192,26 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // lidar_state.icp_diagnostics below on success.
     Eigen::Matrix6d icp_H = Eigen::Matrix6d::Zero();
     Eigen::Vector6d icp_b = Eigen::Vector6d::Zero();
+    // inertial_velocity_filter: this scan's prediction and the prior's share of icp_H.
+    std::optional<InertialTranslationPrior> inertial_prior;
+    Eigen::Matrix6d inertial_prior_H = Eigen::Matrix6d::Zero();
+    double inertial_residuals = 0.0;
+    const Eigen::Vector3d inertial_start_translation = lidar_state.pose.translation();
+    if (config.inertial_velocity_filter && interval_stats.imu_count > 0 &&
+        !(config.initialization_phase && !_initialized)) {
+      if (!_inertial_filter) {
+        InertialVelocityFilter::Config filter_config;
+        filter_config.acceleration_sigma = config.inertial_acceleration_sigma;
+        filter_config.bias_random_walk = config.inertial_bias_random_walk;
+        filter_config.min_position_sigma = config.inertial_min_position_sigma;
+        _inertial_filter.emplace(filter_config);
+        _inertial_filter->reset(lidar_state.pose.so3() * lidar_state.velocity);
+      }
+      inertial_prior = _inertial_filter->predict(inertial_start_translation, _inertial_preintegration,
+                                                 to_seconds(current_lidar_time - lidar_state.time));
+    }
+    const InertialTranslationPrior* inertial_prior_arg =
+        config.inertial_translation_prior && inertial_prior ? &*inertial_prior : nullptr;
     std::size_t degeneracy_intervention_count = 0;
     std::size_t visual_fused_directions = 0;
     std::size_t visual_unobservable_directions = 0;
@@ -1229,7 +1280,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                     _persistent_weak_direction_tracker.state(),
                     config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,
                     visual_pose_prior, degeneracy_prior_pose, localizability_axis, config.localizability_boost,
-                    use_photometric ? &photometric_terms : nullptr, use_bump ? &bump_terms : nullptr);
+                    use_photometric ? &photometric_terms : nullptr, use_bump ? &bump_terms : nullptr,
+                    inertial_prior_arg, config.inertial_registration_sigma);
       if (use_bump && !registration_skipped_this_scan && config.bump_image_max_rotation_correction_deg > 0.0) {
         const double rotation_deg =
             (icp_result.pose.so3() * initial_guess.so3().inverse()).log().norm() * 180.0 / M_PI;
@@ -1245,7 +1297,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                            _persistent_weak_direction_tracker.state(),
                            config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,
                            visual_pose_prior, degeneracy_prior_pose, localizability_axis, config.localizability_boost,
-                           use_photometric ? &photometric_terms : nullptr, nullptr);
+                           use_photometric ? &photometric_terms : nullptr, nullptr,
+                           inertial_prior_arg, config.inertial_registration_sigma);
           ++bump_rotation_fallback_count;
         }
       }
@@ -1258,6 +1311,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       optimized_pose = icp_result.pose;
       icp_H = icp_result.H;
       icp_b = icp_result.b;
+      inertial_prior_H = icp_result.inertial_prior_H;
+      inertial_residuals = static_cast<double>(icp_result.weighting_stats.correspondences);
       degeneracy_intervention_count = icp_result.degeneracy_intervention_count;
       visual_fused_directions = icp_result.visual_fused_directions;
       visual_unobservable_directions = icp_result.visual_unobservable_directions;
@@ -2017,6 +2072,18 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     }
     lidar_state.angular_velocity = local_velocity.tail<3>();
     lidar_state.linear_acceleration = local_linear_acceleration;
+    if (_inertial_filter && inertial_prior) {
+      if (!registration_skipped_this_scan && inertial_residuals > 0.0) {
+        // The registration's own covariance, without the prior it was given.
+        const Eigen::Matrix3d registration_covariance = registration_translation_covariance(
+            icp_H - inertial_prior_H, optimized_pose.translation(), inertial_residuals,
+            config.inertial_registration_sigma, config.inertial_max_position_variance);
+        _inertial_filter->update(inertial_start_translation, optimized_pose.translation(), registration_covariance);
+        ++inertial_filter_update_count;
+      }
+      // Body-frame velocity, like the estimate it replaces.
+      lidar_state.velocity = optimized_pose.so3().inverse() * _inertial_filter->velocity();
+    }
 
     // [v0.8 Phase 1, diagnostic-only] expose the final ICP linear system and
     // its eigen-summary. Purely additive: nothing above this line (the pose/
@@ -2116,6 +2183,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
 
   // reset imu averages
   interval_stats.reset();
+  _inertial_preintegration.reset();
 
   // Gate-corrected scans stay out of the map (see Config::kinematic_gate_skip_map_update):
   // inserting a glided scan would let the next ICP anchor to its own correction.

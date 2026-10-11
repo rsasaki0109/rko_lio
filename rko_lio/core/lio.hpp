@@ -33,6 +33,7 @@
 #include "oriented_intensity_grid.hpp"
 #include "bump_image_map.hpp"
 #include "bump_rotation_gate.hpp"
+#include "inertial_velocity_filter.hpp"
 #include "photometric_features.hpp"
 #include "photometric_image.hpp"
 #include "persistent_weak_direction.hpp"
@@ -646,6 +647,27 @@ public:
     /** Above this correction (deg) a scan falls back at once, whatever the window says
      *  (0 disables). */
     double bump_image_rotation_hard_limit_deg = 0.0;
+    /** Estimate the velocity with InertialVelocityFilter (IMU-propagated, corrected by the
+     *  registered displacement with the registration's covariance) instead of copying it
+     *  from the registered poses. Where a scan constrains the translation weakly, along a
+     *  tunnel axis or across a flat floor, the velocity then follows the IMU. */
+    bool inertial_velocity_filter = false;
+    /** Also add the filter's predicted position, with its covariance, to the registration,
+     *  so a weakly constrained scan cannot jump by more than the IMU allows (needs
+     *  inertial_velocity_filter). */
+    bool inertial_translation_prior = false;
+    /** Acceleration uncertainty per scan interval (m/s^2). */
+    double inertial_acceleration_sigma = 0.5;
+    /** Accelerometer bias random walk (m/s^2/sqrt(s)). */
+    double inertial_bias_random_walk = 0.01;
+    /** Standard deviation (m) of one registration residual, which converts the averaged
+     *  registration Hessian into a position covariance. */
+    double inertial_registration_sigma = 0.05;
+    /** Position variance (m^2) given to directions the registration does not constrain. */
+    double inertial_max_position_variance = 100.0;
+    /** Floor (m) on the position uncertainty of one registration and of the prior; it
+     *  keeps the filter from following every scan's displacement exactly. */
+    double inertial_min_position_sigma = 0.05;
   };
 
   /** Configuration parameters. */
@@ -769,6 +791,12 @@ public:
   std::size_t photometric_gap_skip_count = 0;
   /** Scans registered again without the bump terms (bump_image_max_rotation_correction_deg). */
   std::size_t bump_rotation_fallback_count = 0;
+  /** Scans whose velocity the inertial filter corrected (inertial_velocity_filter). */
+  std::size_t inertial_filter_update_count = 0;
+  /** The inertial filter's accelerometer bias estimate, once it exists. */
+  std::optional<Eigen::Vector3d> inertial_filter_bias() const {
+    return _inertial_filter ? std::optional<Eigen::Vector3d>(_inertial_filter->bias()) : std::nullopt;
+  }
   /** Per-scan (time [s], bump rotation correction [deg]) while the limit is active. */
   std::vector<std::pair<double, double>> bump_rotation_corrections;
 
@@ -927,6 +955,10 @@ private:
   std::size_t _adaptive_iteration_hold_remaining = 0;
   /** Persistence gate for bump_image_max_rotation_correction_deg (built on first use). */
   std::optional<BumpRotationGate> _bump_rotation_gate;
+  /** Velocity and accelerometer-bias filter (inertial_velocity_filter). */
+  std::optional<InertialVelocityFilter> _inertial_filter;
+  /** IMU preintegration since the last scan (inertial_velocity_filter). */
+  InertialPreintegration _inertial_preintegration;
 
   /** One-shot prior consumed by the next scan; never reused after rejection. */
   std::optional<VisualPosePrior> _visual_pose_prior;

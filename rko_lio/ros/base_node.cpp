@@ -855,6 +855,20 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "bump_image_rotation_fallback_min_count", lio_config.bump_image_rotation_fallback_min_count);
   lio_config.bump_image_rotation_hard_limit_deg = node->declare_parameter<double>(
       "bump_image_rotation_hard_limit_deg", lio_config.bump_image_rotation_hard_limit_deg);
+  lio_config.inertial_velocity_filter =
+      node->declare_parameter<bool>("inertial_velocity_filter", lio_config.inertial_velocity_filter);
+  lio_config.inertial_translation_prior =
+      node->declare_parameter<bool>("inertial_translation_prior", lio_config.inertial_translation_prior);
+  lio_config.inertial_acceleration_sigma =
+      node->declare_parameter<double>("inertial_acceleration_sigma", lio_config.inertial_acceleration_sigma);
+  lio_config.inertial_bias_random_walk =
+      node->declare_parameter<double>("inertial_bias_random_walk", lio_config.inertial_bias_random_walk);
+  lio_config.inertial_registration_sigma =
+      node->declare_parameter<double>("inertial_registration_sigma", lio_config.inertial_registration_sigma);
+  lio_config.inertial_max_position_variance = node->declare_parameter<double>(
+      "inertial_max_position_variance", lio_config.inertial_max_position_variance);
+  lio_config.inertial_min_position_sigma = node->declare_parameter<double>(
+      "inertial_min_position_sigma", lio_config.inertial_min_position_sigma);
   lio_config.photometric_weak_direction_min_contribution = node->declare_parameter<double>(
       "photometric_weak_direction_min_contribution", lio_config.photometric_weak_direction_min_contribution);
   lio_config.photometric_normal_row_step =
@@ -1766,6 +1780,17 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
             file << time_sec << "," << rotation_deg << "\n";
           }
         }
+      }
+    }
+    // Inertial velocity filter summary.
+    if (lio->config.inertial_velocity_filter) {
+      nlohmann::json inertial_summary = {{"update_count", lio->inertial_filter_update_count}};
+      if (const auto bias = lio->inertial_filter_bias()) {
+        inertial_summary["final_bias_mps2"] = {(*bias)(0), (*bias)(1), (*bias)(2)};
+      }
+      const std::filesystem::path inertial_file = output_dir / "inertial_filter_summary.json";
+      if (std::ofstream file(inertial_file); file.is_open()) {
+        file << inertial_summary.dump(4) << "\n";
       }
     }
     // Sliding-window gravity alignment summary.
