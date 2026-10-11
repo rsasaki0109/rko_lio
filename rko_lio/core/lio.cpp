@@ -549,6 +549,17 @@ LIO::LIO(const Config& config_)
   // Per-voxel normals are only maintained when the localizability weighting can
   // consume them; the default path pays nothing.
   map.set_maintain_normals(config.localizability_weighting);
+  if (config.inertial_window) {
+    InertialWindow::Config window_config;
+    window_config.length_sec = config.inertial_window_sec;
+    window_config.min_intervals = static_cast<std::size_t>(std::max(1, config.inertial_window_min_intervals));
+    window_config.rotation_weight = config.inertial_window_rotation_weight;
+    window_config.velocity_weight = config.inertial_window_velocity_weight;
+    window_config.position_weight = config.inertial_window_position_weight;
+    window_config.accelerometer_bias_prior_weight = config.inertial_window_accelerometer_bias_prior_weight;
+    window_config.gyroscope_bias_prior_weight = config.inertial_window_gyroscope_bias_prior_weight;
+    _inertial_window = InertialWindow(window_config);
+  }
   // Pin TBB's worker pool to config.max_num_threads (0 = leave at TBB default).
   [[maybe_unused]] static const auto tbb_thread_limit = [&] {
     const int threads = config.max_num_threads > 0 ? config.max_num_threads : tbb::this_task_arena::max_concurrency();
@@ -660,6 +671,7 @@ void LIO::relevel_local_frame(const Sophus::SO3d& correction, const Eigen::Vecto
   const Sophus::SE3d transform(correction, pivot - correction * pivot);
   lidar_state.pose = transform * lidar_state.pose;
   map.transform(transform);
+  _inertial_window.reset();
   for (auto& [_, world_accel] : _gravity_alignment_window) {
     world_accel = correction * world_accel;
   }
@@ -672,6 +684,7 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
                                       const std::string& reason) {
   map.clear();
   bump_map.clear();
+  _inertial_window.reset();
   lidar_state.pose = recovery_pose;
   lidar_state.time = current_lidar_time;
   lidar_state.velocity.setZero();
@@ -691,6 +704,7 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
   _kinematic_blend_speed_last_rejected_time_sec = -1.0;
   imu_state = lidar_state;
   interval_stats.reset();
+  reset_inertial_window_interval();
   gyro_deskew_history.clear();
   update_maps(map_update_frame, lidar_state.pose, &filtered_frame);
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
@@ -702,6 +716,7 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
 
 Vector3dVector LIO::drop_failed_scan(const Nsec& current_lidar_time, const std::string& reason) {
   lidar_state.time = current_lidar_time;
+  _inertial_window.reset();
   // [v0.8 Phase 1, diagnostic-only] no ICP solve happened for the dropped scan.
   lidar_state.icp_diagnostics = std::nullopt;
   _persistent_weak_direction_tracker.reset();
@@ -714,6 +729,7 @@ Vector3dVector LIO::drop_failed_scan(const Nsec& current_lidar_time, const std::
   _kinematic_blend_speed_last_rejected_time_sec = -1.0;
   imu_state = lidar_state;
   interval_stats.reset();
+  reset_inertial_window_interval();
   gyro_deskew_history.clear();
   std::cerr << "[WARNING] Dropping scan during kidnap recovery: " << reason << "\n";
   return {};
@@ -834,6 +850,15 @@ void LIO::add_imu_measurement(const ImuControl& base_imu) {
   imu_state.time = base_imu.time;
 
   interval_stats.update(unbiased_ang_vel, unbiased_accel, compensated_accel);
+  if (config.inertial_window && dt > 0.0) {
+    if (_window_preintegration.dt <= 0.0) {
+      _window_preintegration.accelerometer_bias = imu_bias.accelerometer;
+      _window_preintegration.gyroscope_bias = imu_bias.gyroscope;
+    }
+    _window_preintegration.add(unbiased_ang_vel, unbiased_accel, dt);
+    _window_last_angular_velocity = unbiased_ang_vel;
+    _window_last_specific_force = unbiased_accel;
+  }
 
   _last_real_imu_time = base_imu.time;
   _last_real_base_imu_ang_vel = base_imu.angular_velocity;
@@ -1152,6 +1177,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   bool kinematic_gate_corrected_this_scan = false;
   bool kinematic_blend_suppress_map_update_this_scan = false;
   bool registration_skipped_this_scan = false;
+  bool inertial_window_added = false;
   double kinematic_blend_map_update_fraction_this_scan = 1.0;
 
   if (!map.empty()) {
@@ -2106,7 +2132,31 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       degeneracy_persistence_diagnostics.push_back({current_lidar_time, persistent_direction, degeneracy_intervention_count});
     }
 
+    if (config.inertial_window) {
+      // Close the IMU interval at the scan time (the last sample may fall short of it).
+      const double shortfall = to_seconds(current_lidar_time - imu_state.time);
+      if (_window_preintegration.dt > 0.0 && shortfall > 0.0) {
+        _window_preintegration.add(_window_last_angular_velocity, _window_last_specific_force, shortfall);
+      }
+      if (_inertial_window.states().empty() || _window_preintegration.dt <= 0.0) {
+        _inertial_window.reset();
+        _inertial_window.set_biases(imu_bias.accelerometer, imu_bias.gyroscope);
+      }
+      _inertial_window.add(to_seconds(current_lidar_time), lidar_state.pose,
+                           lidar_state.pose.so3() * lidar_state.velocity, _window_preintegration);
+      inertial_window_added = true;
+      if (_inertial_window.solve(gravity())) {
+        ++inertial_window_solve_count;
+        lidar_state.velocity = lidar_state.pose.so3().inverse() * _inertial_window.latest_velocity();
+        imu_bias.accelerometer = _inertial_window.accelerometer_bias();
+        imu_bias.gyroscope = _inertial_window.gyroscope_bias();
+      }
+    }
     imu_state = lidar_state; // correct the drift in imu integration
+  }
+  if (config.inertial_window && !inertial_window_added) {
+    // No registered pose for this scan: the chain of fixed poses is broken.
+    _inertial_window.reset();
   }
   // even if map is empty, time should still update
   lidar_state.time = current_lidar_time;
@@ -2116,6 +2166,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
 
   // reset imu averages
   interval_stats.reset();
+  reset_inertial_window_interval();
 
   // Gate-corrected scans stay out of the map (see Config::kinematic_gate_skip_map_update):
   // inserting a glided scan would let the next ICP anchor to its own correction.
