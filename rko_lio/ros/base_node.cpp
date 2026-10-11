@@ -872,6 +872,14 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   lio_config.inertial_innovation_gate =
       node->declare_parameter<double>("inertial_innovation_gate", lio_config.inertial_innovation_gate);
   lio_config.inertial_max_bias = node->declare_parameter<double>("inertial_max_bias", lio_config.inertial_max_bias);
+  lio_config.inertial_pose_filter =
+      node->declare_parameter<bool>("inertial_pose_filter", lio_config.inertial_pose_filter);
+  lio_config.inertial_accelerometer_noise =
+      node->declare_parameter<double>("inertial_accelerometer_noise", lio_config.inertial_accelerometer_noise);
+  lio_config.inertial_gyroscope_noise =
+      node->declare_parameter<double>("inertial_gyroscope_noise", lio_config.inertial_gyroscope_noise);
+  lio_config.inertial_min_rotation_sigma_deg = node->declare_parameter<double>(
+      "inertial_min_rotation_sigma_deg", lio_config.inertial_min_rotation_sigma_deg);
   lio_config.photometric_weak_direction_min_contribution = node->declare_parameter<double>(
       "photometric_weak_direction_min_contribution", lio_config.photometric_weak_direction_min_contribution);
   lio_config.photometric_normal_row_step =
@@ -1783,6 +1791,18 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
             file << time_sec << "," << rotation_deg << "\n";
           }
         }
+      }
+    }
+    // Inertial pose filter summary.
+    if (lio->config.inertial_pose_filter) {
+      nlohmann::json pose_summary = {{"update_count", lio->inertial_pose_update_count},
+                                     {"rejected_count", lio->inertial_pose_rejected_count}};
+      if (const auto bias = lio->inertial_pose_filter_bias()) {
+        pose_summary["final_bias_mps2"] = {(*bias)(0), (*bias)(1), (*bias)(2)};
+      }
+      const std::filesystem::path pose_file = output_dir / "inertial_pose_filter_summary.json";
+      if (std::ofstream file(pose_file); file.is_open()) {
+        file << pose_summary.dump(4) << "\n";
       }
     }
     // Inertial velocity filter summary.

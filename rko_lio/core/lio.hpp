@@ -34,6 +34,7 @@
 #include "bump_image_map.hpp"
 #include "bump_rotation_gate.hpp"
 #include "inertial_velocity_filter.hpp"
+#include "inertial_pose_filter.hpp"
 #include "photometric_features.hpp"
 #include "photometric_image.hpp"
 #include "persistent_weak_direction.hpp"
@@ -672,6 +673,19 @@ public:
     double inertial_innovation_gate = 0.0;
     /** Largest accelerometer bias (m/s^2) the filter may estimate (0: unbounded). */
     double inertial_max_bias = 0.0;
+    /** Fuse every registered pose with the IMU in an error-state Kalman filter on
+     *  attitude, position, velocity and accelerometer bias (InertialPoseFilter), and use
+     *  the fused pose for the scan and its map update. The registration's 6x6 covariance
+     *  decides each direction: where the scan is weak (roll about a circular tunnel's
+     *  axis, translation along it) the IMU holds the pose. Uses the inertial_* options
+     *  above for the registration covariance, its floors, the gate and the bias limit. */
+    bool inertial_pose_filter = false;
+    /** Accelerometer white noise (m/s^2/sqrt(Hz)), including vibration. */
+    double inertial_accelerometer_noise = 0.2;
+    /** Gyroscope white noise (rad/s/sqrt(Hz)). */
+    double inertial_gyroscope_noise = 0.01;
+    /** Floor (deg) on the rotation uncertainty of one registration. */
+    double inertial_min_rotation_sigma_deg = 0.1;
   };
 
   /** Configuration parameters. */
@@ -797,6 +811,12 @@ public:
   std::size_t bump_rotation_fallback_count = 0;
   /** Scans whose velocity the inertial filter corrected (inertial_velocity_filter). */
   std::size_t inertial_filter_update_count = 0;
+  /** Scans fused by the inertial pose filter, and those its gate rejected. */
+  std::size_t inertial_pose_update_count = 0;
+  std::size_t inertial_pose_rejected_count = 0;
+  std::optional<Eigen::Vector3d> inertial_pose_filter_bias() const {
+    return _pose_filter ? std::optional<Eigen::Vector3d>(_pose_filter->bias()) : std::nullopt;
+  }
   /** Total time (s) the IMU preintegration fell short of the scan interval. */
   double inertial_preintegration_shortfall_sec_sum = 0.0;
   /** The inertial filter's accelerometer bias estimate, once it exists. */
@@ -968,6 +988,9 @@ private:
   std::optional<InertialVelocityFilter> _inertial_filter;
   /** IMU preintegration since the last scan (inertial_velocity_filter). */
   InertialPreintegration _inertial_preintegration;
+  /** Attitude, position, velocity and bias filter (inertial_pose_filter). */
+  std::optional<InertialPoseFilter> _pose_filter;
+  Eigen::Vector3d _pose_filter_last_force = Eigen::Vector3d::Zero();
 
   /** One-shot prior consumed by the next scan; never reused after rejection. */
   std::optional<VisualPosePrior> _visual_pose_prior;

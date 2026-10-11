@@ -42,6 +42,7 @@ compat_target_sources(
         ../../rko_lio/core/bump_image_map.hpp
         ../../rko_lio/core/bump_rotation_gate.hpp
         ../../rko_lio/core/inertial_velocity_filter.hpp
+        ../../rko_lio/core/inertial_pose_filter.hpp
         ../../rko_lio/core/gyro_deskew_history.hpp
         ../../rko_lio/core/correlation_peak_selector.hpp
         ../../rko_lio/core/correlation_score.hpp

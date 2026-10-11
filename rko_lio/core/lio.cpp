@@ -701,6 +701,7 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
   lidar_state.angular_velocity.setZero();
   lidar_state.linear_acceleration.setZero();
   _inertial_filter.reset();
+  _pose_filter.reset();
   // [v0.8 Phase 1, diagnostic-only] the local map was just cleared and
   // `recovery_pose` did not come from a normal incremental ICP solve against
   // it, so any previously-recorded H/b would describe a now-irrelevant map.
@@ -860,6 +861,10 @@ void LIO::add_imu_measurement(const ImuControl& base_imu) {
   imu_state.time = base_imu.time;
 
   interval_stats.update(unbiased_ang_vel, unbiased_accel, compensated_accel);
+  if (config.inertial_pose_filter && _pose_filter && dt > 0.0) {
+    _pose_filter->propagate(unbiased_ang_vel, unbiased_accel, dt);
+    _pose_filter_last_force = unbiased_accel;
+  }
   if (config.inertial_velocity_filter) {
     // The attitude at the start of this IMU step (imu_state.pose was advanced above).
     _inertial_preintegration.add((imu_state.pose.so3() * Sophus::SO3d::exp(-unbiased_ang_vel * dt)).matrix(),
@@ -986,7 +991,16 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     return pose;
   };
 
-  const Sophus::SE3d initial_guess = predict_pose_at(current_lidar_time);
+  Sophus::SE3d initial_guess = predict_pose_at(current_lidar_time);
+  const bool pose_filter_active = config.inertial_pose_filter && _pose_filter.has_value();
+  if (pose_filter_active) {
+    // The filter has the IMU up to the last sample; carry it to the scan time.
+    const double shortfall = to_seconds(current_lidar_time - imu_state.time);
+    if (shortfall > 0.0) {
+      _pose_filter->propagate(imu_state.angular_velocity, _pose_filter_last_force, shortfall);
+    }
+    initial_guess = _pose_filter->pose();
+  }
 
   // Photometric frame: the organized scan as a filtered intensity image, with the deskew
   // transform of every point so a deskewed point maps back to the pixel it was captured at.
@@ -2052,10 +2066,28 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           gravity_alignment_correction_rad_sum += alignment.correction.log().norm();
           if (relevel) {
             relevel_local_frame(alignment.correction, optimized_pose.translation());
+            // The filter's frame moved with the map; start it again from this scan.
+            _pose_filter.reset();
           }
           optimized_pose.so3() = alignment.correction * optimized_pose.so3();
         }
       }
+    }
+
+    if (pose_filter_active && _pose_filter) {
+      if (!registration_skipped_this_scan && inertial_residuals > 0.0) {
+        const double rotation_floor = config.inertial_min_rotation_sigma_deg * M_PI / 180.0;
+        const Eigen::Matrix6d registration_covariance = registration_pose_covariance(
+            icp_H - inertial_prior_H, inertial_residuals, config.inertial_registration_sigma,
+            config.inertial_max_position_variance, square(config.inertial_min_position_sigma),
+            square(rotation_floor));
+        if (_pose_filter->update(optimized_pose, registration_covariance, config.inertial_innovation_gate)) {
+          ++inertial_pose_update_count;
+        } else {
+          ++inertial_pose_rejected_count;
+        }
+      }
+      optimized_pose = _pose_filter->pose();
     }
 
     // estimate velocities and accelerations from the new pose
@@ -2094,6 +2126,18 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       }
       // Body-frame velocity, like the estimate it replaces.
       lidar_state.velocity = optimized_pose.so3().inverse() * _inertial_filter->velocity();
+    }
+    if (pose_filter_active && _pose_filter) {
+      lidar_state.velocity = optimized_pose.so3().inverse() * _pose_filter->velocity();
+    } else if (config.inertial_pose_filter && (!config.initialization_phase || _initialized)) {
+      // Start the filter from the first registered state; it fuses from the next scan on.
+      InertialPoseFilter::Config filter_config;
+      filter_config.accelerometer_noise = config.inertial_accelerometer_noise;
+      filter_config.gyroscope_noise = config.inertial_gyroscope_noise;
+      filter_config.accelerometer_bias_random_walk = config.inertial_bias_random_walk;
+      filter_config.max_bias = config.inertial_max_bias;
+      _pose_filter.emplace(filter_config);
+      _pose_filter->reset(optimized_pose, optimized_pose.so3() * lidar_state.velocity, gravity());
     }
 
     // [v0.8 Phase 1, diagnostic-only] expose the final ICP linear system and

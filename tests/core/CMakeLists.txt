@@ -36,6 +36,7 @@ compat_target_sources(
           test_bump_image_map.cpp
           test_bump_rotation_gate.cpp
           test_inertial_velocity_filter.cpp
+          test_inertial_pose_filter.cpp
   PUBLIC
   FILE_SET
   HEADERS
