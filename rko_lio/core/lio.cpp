@@ -558,6 +558,7 @@ LIO::LIO(const Config& config_)
     window_config.position_weight = config.inertial_window_position_weight;
     window_config.accelerometer_bias_prior_weight = config.inertial_window_accelerometer_bias_prior_weight;
     window_config.gyroscope_bias_prior_weight = config.inertial_window_gyroscope_bias_prior_weight;
+    window_config.anchor_bias_priors = config.inertial_window_anchor_bias_priors;
     _inertial_window = InertialWindow(window_config);
   }
   // Pin TBB's worker pool to config.max_num_threads (0 = leave at TBB default).

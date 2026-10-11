@@ -195,6 +195,8 @@ public:
     /** Weights (1 / sigma) of the priors keeping the biases near their last estimates. */
     double inertial_window_accelerometer_bias_prior_weight = 1.0;
     double inertial_window_gyroscope_bias_prior_weight = 10.0;
+    /** Anchor the bias priors at the static initialization (InertialWindow::Config). */
+    bool inertial_window_anchor_bias_priors = false;
     /** Use the window's velocity / biases (either can be off to isolate the other). */
     bool inertial_window_apply_velocity = true;
     bool inertial_window_apply_bias = true;

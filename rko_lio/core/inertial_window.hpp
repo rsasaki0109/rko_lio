@@ -106,6 +106,10 @@ public:
     /** Weights (1 / sigma) of priors pulling the biases to their previous estimates. */
     double accelerometer_bias_prior_weight = 1.0;
     double gyroscope_bias_prior_weight = 10.0;
+    /** Anchor the bias priors at the first biases given (the static initialization)
+     *  instead of the previous estimate. A window whose registered positions slip along a
+     *  tunnel otherwise fits the slip as an accelerometer bias, which then feeds the slip. */
+    bool anchor_bias_priors = false;
     /** Bias magnitude limits (0: none). */
     double max_accelerometer_bias = 1.0;
     double max_gyroscope_bias = 0.1;
@@ -130,6 +134,11 @@ public:
   void set_biases(const Eigen::Vector3d& accelerometer, const Eigen::Vector3d& gyroscope) {
     _accelerometer_bias = accelerometer;
     _gyroscope_bias = gyroscope;
+    if (!_anchored) {
+      _accelerometer_anchor = accelerometer;
+      _gyroscope_anchor = gyroscope;
+      _anchored = true;
+    }
   }
 
   /** Add a registered scan. ``preintegration`` covers the IMU since the previous scan and
@@ -156,8 +165,8 @@ public:
     const int n = static_cast<int>(3 * m + 6);
     const int ba = static_cast<int>(3 * m);
     const int bg = ba + 3;
-    const Eigen::Vector3d accelerometer_prior = _accelerometer_bias;
-    const Eigen::Vector3d gyroscope_prior = _gyroscope_bias;
+    const Eigen::Vector3d accelerometer_prior = _config.anchor_bias_priors ? _accelerometer_anchor : _accelerometer_bias;
+    const Eigen::Vector3d gyroscope_prior = _config.anchor_bias_priors ? _gyroscope_anchor : _gyroscope_bias;
     for (int iteration = 0; iteration < std::max(1, _config.iterations); ++iteration) {
       Eigen::MatrixXd H = Eigen::MatrixXd::Zero(n, n);
       Eigen::VectorXd b = Eigen::VectorXd::Zero(n);
@@ -252,6 +261,9 @@ private:
   std::deque<ImuPreintegration> _intervals;
   Eigen::Vector3d _accelerometer_bias = Eigen::Vector3d::Zero();
   Eigen::Vector3d _gyroscope_bias = Eigen::Vector3d::Zero();
+  bool _anchored = false;
+  Eigen::Vector3d _accelerometer_anchor = Eigen::Vector3d::Zero();
+  Eigen::Vector3d _gyroscope_anchor = Eigen::Vector3d::Zero();
   std::size_t _solves = 0;
 };
 

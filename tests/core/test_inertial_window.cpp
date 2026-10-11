@@ -140,3 +140,25 @@ TEST_CASE("One slipped registration barely moves the window velocity", "[inertia
   // Differencing the last two poses would be off by 3 m/s.
   REQUIRE((window.latest_velocity() - velocity(6.0)).norm() < 0.5);
 }
+
+TEST_CASE("Anchored bias priors keep a slip out of the accelerometer bias", "[inertial_window]") {
+  const Eigen::Vector3d zero = Eigen::Vector3d::Zero();
+  auto run = [&](const bool anchored) {
+    InertialWindow::Config config;
+    config.anchor_bias_priors = anchored;
+    config.accelerometer_bias_prior_weight = 30.0;
+    InertialWindow window(config);
+    window.set_biases(zero, zero);
+    window.add(0.0, pose(0.0), velocity(0.0), {});
+    for (int k = 1; k <= 300; ++k) {
+      const double t = k * kScan;
+      Sophus::SE3d registered = pose(t);
+      // The registration slips forward, accelerating: 0.02 m/s^2 along x.
+      registered.translation().x() += 0.01 * t * t;
+      window.add(t, registered, velocity(t), preintegrate(t - kScan, zero, zero, window.accelerometer_bias(), zero));
+      window.solve(kGravity);
+    }
+    return window.accelerometer_bias().norm();
+  };
+  REQUIRE(run(true) < 0.5 * run(false));
+}

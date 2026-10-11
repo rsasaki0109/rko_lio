@@ -568,6 +568,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "inertial_window_accelerometer_bias_prior_weight", lio_config.inertial_window_accelerometer_bias_prior_weight);
   lio_config.inertial_window_gyroscope_bias_prior_weight = node->declare_parameter<double>(
       "inertial_window_gyroscope_bias_prior_weight", lio_config.inertial_window_gyroscope_bias_prior_weight);
+  lio_config.inertial_window_anchor_bias_priors = node->declare_parameter<bool>(
+      "inertial_window_anchor_bias_priors", lio_config.inertial_window_anchor_bias_priors);
   lio_config.inertial_window_apply_velocity =
       node->declare_parameter<bool>("inertial_window_apply_velocity", lio_config.inertial_window_apply_velocity);
   lio_config.inertial_window_apply_bias =
