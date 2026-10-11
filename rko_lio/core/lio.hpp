@@ -686,6 +686,9 @@ public:
     double inertial_gyroscope_noise = 0.01;
     /** Floor (deg) on the rotation uncertainty of one registration. */
     double inertial_min_rotation_sigma_deg = 0.1;
+    /** Per-block gate (chi^2, 3 dof; 0: off): leave the position or attitude of a
+     *  registration out of the filter update when its innovation exceeds this. */
+    double inertial_block_gate = 0.0;
   };
 
   /** Configuration parameters. */
@@ -814,6 +817,9 @@ public:
   /** Scans fused by the inertial pose filter, and those its gate rejected. */
   std::size_t inertial_pose_update_count = 0;
   std::size_t inertial_pose_rejected_count = 0;
+  std::array<std::size_t, 2> inertial_pose_gated_blocks() const {
+    return _pose_filter ? _pose_filter->gated_blocks() : std::array<std::size_t, 2>{};
+  }
   std::optional<Eigen::Vector3d> inertial_pose_filter_bias() const {
     return _pose_filter ? std::optional<Eigen::Vector3d>(_pose_filter->bias()) : std::nullopt;
   }

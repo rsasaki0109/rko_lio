@@ -302,6 +302,8 @@ struct IcpResult {
   int photometric_patches = 0;
   // Inertial translation prior's share of H in the final iteration (zero when disabled).
   Eigen::Matrix6d inertial_prior_H = Eigen::Matrix6d::Zero();
+  // Gravity (beta) orientation prior's share of H in the final iteration (zero when disabled).
+  Eigen::Matrix6d orientation_prior_H = Eigen::Matrix6d::Zero();
 };
 
 // Bump image registration replacing the point-to-point system (see bump_image_map.hpp).
@@ -358,6 +360,7 @@ IcpResult icp(const Vector3dVector& frame,
   IcpWeightingStats weighting_stats;
   int photometric_patches = 0;
   Eigen::Matrix6d inertial_prior_H = Eigen::Matrix6d::Zero();
+  Eigen::Matrix6d orientation_prior_H = Eigen::Matrix6d::Zero();
   for (size_t i = 0; i < iteration_budget; ++i) {
     const auto& [H, b, chi] = std::invoke([&]() -> LinearSystem {
       LinearSystem full = std::invoke([&]() -> LinearSystem {
@@ -407,6 +410,7 @@ IcpResult icp(const Vector3dVector& frame,
       if (beta >= 0) {
         const auto& [H_ori, b_ori, chi_ori] =
             build_orientation_linear_system(current_pose, optional_accel_info->local_gravity_estimate);
+        orientation_prior_H = H_ori / beta;
         return {H_icp + H_ori / beta, b_icp + b_ori / beta, chi_icp + chi_ori / beta};
       }
       return {H_icp, b_icp, chi_icp};
@@ -494,7 +498,7 @@ IcpResult icp(const Vector3dVector& frame,
           visual_fused_directions, visual_unobservable_directions,
           visual_directional_information_ratios,
           visual_directional_information_ratio_count, weighting_stats, photometric_patches,
-          inertial_prior_H};
+          inertial_prior_H, orientation_prior_H};
 }
 
 struct AlignmentStats {
@@ -1209,6 +1213,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // inertial_velocity_filter: this scan's prediction and the prior's share of icp_H.
     std::optional<InertialTranslationPrior> inertial_prior;
     Eigen::Matrix6d inertial_prior_H = Eigen::Matrix6d::Zero();
+    Eigen::Matrix6d orientation_prior_H = Eigen::Matrix6d::Zero();
     double inertial_residuals = 0.0;
     const Eigen::Vector3d inertial_start_translation = lidar_state.pose.translation();
     if (config.inertial_velocity_filter && interval_stats.imu_count > 0 &&
@@ -1337,6 +1342,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       icp_H = icp_result.H;
       icp_b = icp_result.b;
       inertial_prior_H = icp_result.inertial_prior_H;
+      orientation_prior_H = icp_result.orientation_prior_H;
       inertial_residuals = static_cast<double>(icp_result.weighting_stats.correspondences);
       degeneracy_intervention_count = icp_result.degeneracy_intervention_count;
       visual_fused_directions = icp_result.visual_fused_directions;
@@ -2077,8 +2083,11 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     if (pose_filter_active && _pose_filter) {
       if (!registration_skipped_this_scan && inertial_residuals > 0.0) {
         const double rotation_floor = config.inertial_min_rotation_sigma_deg * M_PI / 180.0;
+        // Geometry only: the gravity prior's tilt comes from the accelerometer, which the
+        // filter already models, and under motion it is far noisier than its weight says.
         const Eigen::Matrix6d registration_covariance = registration_pose_covariance(
-            icp_H - inertial_prior_H, inertial_residuals, config.inertial_registration_sigma,
+            icp_H - inertial_prior_H - orientation_prior_H, optimized_pose.translation(), inertial_residuals,
+            config.inertial_registration_sigma,
             config.inertial_max_position_variance, square(config.inertial_min_position_sigma),
             square(rotation_floor));
         if (_pose_filter->update(optimized_pose, registration_covariance, config.inertial_innovation_gate)) {
@@ -2127,15 +2136,16 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       // Body-frame velocity, like the estimate it replaces.
       lidar_state.velocity = optimized_pose.so3().inverse() * _inertial_filter->velocity();
     }
-    if (pose_filter_active && _pose_filter) {
-      lidar_state.velocity = optimized_pose.so3().inverse() * _pose_filter->velocity();
-    } else if (config.inertial_pose_filter && (!config.initialization_phase || _initialized)) {
+    // The filter keeps its own velocity; deskew and the next prediction keep using the
+    // registration's (overriding them with the filter's made field_d 0.17 -> 2.5 m ATE).
+    if (config.inertial_pose_filter && !_pose_filter && (!config.initialization_phase || _initialized)) {
       // Start the filter from the first registered state; it fuses from the next scan on.
       InertialPoseFilter::Config filter_config;
       filter_config.accelerometer_noise = config.inertial_accelerometer_noise;
       filter_config.gyroscope_noise = config.inertial_gyroscope_noise;
       filter_config.accelerometer_bias_random_walk = config.inertial_bias_random_walk;
       filter_config.max_bias = config.inertial_max_bias;
+      filter_config.block_gate = config.inertial_block_gate;
       _pose_filter.emplace(filter_config);
       _pose_filter->reset(optimized_pose, optimized_pose.so3() * lidar_state.velocity, gravity());
     }

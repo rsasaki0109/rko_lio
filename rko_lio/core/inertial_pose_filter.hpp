@@ -30,6 +30,8 @@
 #include <sophus/se3.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstddef>
 
 namespace rko_lio::core {
@@ -63,6 +65,14 @@ public:
     double initial_bias_sigma = 0.1;
     /** Bias magnitude limit (m/s^2, 0: none). */
     double max_bias = 0.5;
+    /** Per-block gate (0: off). When the squared normalized innovation of the position or
+     *  of the attitude exceeds this (chi^2 with 3 dof), that block of the registration is
+     *  left out of the update. A registration can be confidently wrong in one block only:
+     *  in a circular tunnel the photometric terms set a roll that jumps by degrees per scan
+     *  while the translation stays sound. Inflating the block instead lets the filter creep
+     *  toward whichever wrong value lands closer. The prediction's uncertainty grows while
+     *  a block is gated, so a lasting change is accepted later. */
+    double block_gate = 0.0;
   };
 
   explicit InertialPoseFilter(const Config& config) : _config(config) {}
@@ -106,20 +116,30 @@ public:
     _covariance = F * _covariance * F.transpose() + Q;
   }
 
-  /** Correct with a registered pose and its covariance in the left-perturbation
-   *  convention of the registration, T' = exp([rho, phi]) T. Returns false (and leaves
-   *  the state unchanged) when the squared Mahalanobis distance exceeds ``gate`` > 0. */
+  /** Correct with a registered pose and its covariance in this filter's error
+   *  coordinates [dp, dtheta] (see registration_pose_covariance). Returns false (and
+   *  leaves the state unchanged) when the squared Mahalanobis distance exceeds ``gate`` > 0. */
   bool update(const Sophus::SE3d& measured, const Matrix6d& registration_covariance, const double gate = 0.0) {
     if (!_initialized) {
       return false;
     }
-    // [rho, phi] -> [dp, dtheta]: dp = rho - [t]x phi, dtheta = phi.
-    Matrix6d J = Matrix6d::Identity();
-    J.block<3, 3>(0, 3) = -Sophus::SO3d::hat(measured.translation());
-    const Matrix6d R_meas = J * registration_covariance * J.transpose();
     Eigen::Matrix<double, 6, 1> residual;
     residual.head<3>() = measured.translation() - _pose.translation();
     residual.tail<3>() = (measured.so3() * _pose.so3().inverse()).log();
+    Matrix6d R_meas = registration_covariance;
+    if (_config.block_gate > 0.0) {
+      for (const int block : {0, 3}) {
+        const Eigen::Matrix3d S_block =
+            _covariance.block<3, 3>(block, block) + registration_covariance.block<3, 3>(block, block);
+        const Eigen::Vector3d r = residual.segment<3>(block);
+        if (r.dot(S_block.ldlt().solve(r)) > _config.block_gate) {
+          R_meas.middleRows<3>(block).setZero();
+          R_meas.middleCols<3>(block).setZero();
+          R_meas.block<3, 3>(block, block) = kGatedVariance * Eigen::Matrix3d::Identity();
+          ++_gated_blocks[block / 3];
+        }
+      }
+    }
     const Matrix6d S = _covariance.topLeftCorner<6, 6>() + R_meas;
     const Matrix6d S_inverse = S.ldlt().solve(Matrix6d::Identity());
     if (gate > 0.0 && residual.dot(S_inverse * residual) > gate) {
@@ -146,8 +166,11 @@ public:
   const Eigen::Vector3d& bias() const { return _bias; }
   const Matrix12d& covariance() const { return _covariance; }
   std::size_t rejected_updates() const { return _rejected; }
+  /** Updates whose position (0) or attitude (1) the block gate left out. */
+  const std::array<std::size_t, 2>& gated_blocks() const { return _gated_blocks; }
 
 private:
+  static constexpr double kGatedVariance = 1e8;
   static double square(const double x) { return x * x; }
 
   Config _config;
@@ -158,21 +181,30 @@ private:
   Eigen::Vector3d _gravity = Eigen::Vector3d(0.0, 0.0, -9.81);
   Matrix12d _covariance = Matrix12d::Zero();
   std::size_t _rejected = 0;
+  std::array<std::size_t, 2> _gated_blocks{};
 };
 
-/** 6x6 covariance of a registered pose ([rho, phi], left perturbation) from the Hessian of
- *  a system averaged over ``residuals`` residuals of standard deviation ``sigma``.
- *  Eigen-directions with too little information get ``max_variance``; every direction
- *  gets at least the floors (position m^2 on the first three, rotation rad^2 on the
- *  last three, added in the eigenbasis-free sense of a diagonal). */
-inline Eigen::Matrix<double, 6, 6> registration_pose_covariance(const Eigen::Matrix<double, 6, 6>& averaged_hessian,
+/** 6x6 covariance, in the filter's [dp, dtheta] coordinates, of a pose registered at
+ *  ``translation`` from the Hessian of a system in the left-perturbation convention
+ *  T' = exp([rho, phi]) T, averaged over ``residuals`` residuals of standard deviation
+ *  ``sigma``. The Hessian is first moved to [dp, dtheta] = [rho - [t]x phi, phi]: phi
+ *  rotates about the world origin, so far from it a floor or cap on phi would become a
+ *  position uncertainty of |t| times the angle. Eigen-directions with too little
+ *  information get ``max_variance``; the floors (position m^2, rotation rad^2) are added
+ *  to the diagonal. */
+inline Eigen::Matrix<double, 6, 6> registration_pose_covariance(const Eigen::Matrix<double, 6, 6>& left_hessian,
+                                                                const Eigen::Vector3d& translation,
                                                                 const double residuals,
                                                                 const double sigma,
                                                                 const double max_variance,
                                                                 const double position_floor_variance,
                                                                 const double rotation_floor_variance) {
   const double scale = sigma * sigma / std::max(1.0, residuals);
-  Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> eig(averaged_hessian);
+  // [rho, phi] = A [dp, dtheta] with A = [I, [t]x; 0, I].
+  Eigen::Matrix<double, 6, 6> A = Eigen::Matrix<double, 6, 6>::Identity();
+  A.block<3, 3>(0, 3) = Sophus::SO3d::hat(translation);
+  const Eigen::Matrix<double, 6, 6> hessian = A.transpose() * left_hessian * A;
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> eig(hessian);
   Eigen::Matrix<double, 6, 1> inverse_eigenvalues;
   for (int i = 0; i < 6; ++i) {
     const double lambda = eig.eigenvalues()(i);

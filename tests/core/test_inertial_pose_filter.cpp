@@ -24,6 +24,8 @@
 
 #include <rko_lio/core/inertial_pose_filter.hpp>
 
+#include <cmath>
+
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -61,6 +63,8 @@ Matrix6d diagonal(const double position_variance, const double rotation_variance
       rotation_variance, rotation_variance;
   return covariance;
 }
+
+double square_deg(const double degrees) { return std::pow(degrees * M_PI / 180.0, 2); }
 
 InertialPoseFilter make_filter(const Truth& truth) {
   InertialPoseFilter::Config config;
@@ -152,11 +156,48 @@ TEST_CASE("The gate rejects a registration jump", "[inertial_pose_filter]") {
 TEST_CASE("Registration covariance caps unconstrained directions", "[inertial_pose_filter]") {
   Matrix6d hessian = Matrix6d::Identity();
   hessian(0, 0) = 1e-12;
-  const Matrix6d covariance = registration_pose_covariance(hessian, 1000.0, 0.1, 100.0, 0.0, 0.0);
+  const Matrix6d covariance =
+      registration_pose_covariance(hessian, Eigen::Vector3d::Zero(), 1000.0, 0.1, 100.0, 0.0, 0.0);
   REQUIRE(covariance(0, 0) == Catch::Approx(100.0));
   REQUIRE(covariance(1, 1) == Catch::Approx(1e-5));
   REQUIRE(covariance(4, 4) == Catch::Approx(1e-5));
-  const Matrix6d floored = registration_pose_covariance(hessian, 1000.0, 0.1, 100.0, 0.01, 0.001);
+  const Matrix6d floored =
+      registration_pose_covariance(hessian, Eigen::Vector3d::Zero(), 1000.0, 0.1, 100.0, 0.01, 0.001);
   REQUIRE(floored(1, 1) == Catch::Approx(1e-5 + 0.01));
   REQUIRE(floored(4, 4) == Catch::Approx(1e-5 + 0.001));
+}
+
+TEST_CASE("Registration covariance is about the sensor, not the world origin", "[inertial_pose_filter]") {
+  // A scan 100 m from the origin, with a sensor-centred Hessian H_local moved to the left
+  // convention: H_left = A^-T H_local A^-1.
+  const Eigen::Vector3d t(100.0, 0.0, 0.0);
+  Matrix6d A_inverse = Matrix6d::Identity();
+  A_inverse.block<3, 3>(0, 3) = -Sophus::SO3d::hat(t);
+  const Matrix6d left = A_inverse.transpose() * Matrix6d::Identity() * A_inverse;
+  const Matrix6d covariance = registration_pose_covariance(left, t, 1000.0, 0.1, 100.0, 0.0, square_deg(1.0));
+  // The 1 degree rotation floor stays a rotation; position keeps its 1e-5 m^2.
+  REQUIRE(covariance(1, 1) == Catch::Approx(1e-5).margin(1e-9));
+  REQUIRE(covariance(2, 2) == Catch::Approx(1e-5).margin(1e-9));
+  REQUIRE(covariance(5, 5) == Catch::Approx(1e-5 + square_deg(1.0)));
+}
+
+TEST_CASE("The block gate ignores a confidently wrong roll", "[inertial_pose_filter]") {
+  Truth truth;
+  truth.velocity = Eigen::Vector3d(2.0, 0.0, 0.0);
+  InertialPoseFilter::Config config;
+  config.max_bias = 0.0;
+  config.block_gate = 11.34;
+  InertialPoseFilter filter(config);
+  filter.reset(truth.pose, truth.velocity, kGravity);
+  for (int scan = 0; scan < 100; ++scan) {
+    imu_scan(filter, truth, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+    // Roll jumps by +-5 degrees, reported to 0.05 degrees; the translation is right.
+    Sophus::SE3d measured = truth.pose;
+    measured.so3() = Sophus::SO3d::rotX((scan % 2 == 0 ? 5.0 : -5.0) * M_PI / 180.0) * measured.so3();
+    REQUIRE(filter.update(measured, diagonal(1e-4, square_deg(0.05))));
+  }
+  REQUIRE(std::abs(filter.pose().so3().log().x()) < 0.5 * M_PI / 180.0);
+  REQUIRE((filter.pose().translation() - truth.pose.translation()).norm() < 0.05);
+  REQUIRE(filter.gated_blocks()[1] > 90);
+  REQUIRE(filter.gated_blocks()[0] == 0);
 }
