@@ -869,6 +869,9 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "inertial_max_position_variance", lio_config.inertial_max_position_variance);
   lio_config.inertial_min_position_sigma = node->declare_parameter<double>(
       "inertial_min_position_sigma", lio_config.inertial_min_position_sigma);
+  lio_config.inertial_innovation_gate =
+      node->declare_parameter<double>("inertial_innovation_gate", lio_config.inertial_innovation_gate);
+  lio_config.inertial_max_bias = node->declare_parameter<double>("inertial_max_bias", lio_config.inertial_max_bias);
   lio_config.photometric_weak_direction_min_contribution = node->declare_parameter<double>(
       "photometric_weak_direction_min_contribution", lio_config.photometric_weak_direction_min_contribution);
   lio_config.photometric_normal_row_step =
@@ -1786,6 +1789,7 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
     if (lio->config.inertial_velocity_filter) {
       nlohmann::json inertial_summary = {
           {"update_count", lio->inertial_filter_update_count},
+          {"rejected_update_count", lio->inertial_filter_rejected_updates()},
           {"preintegration_shortfall_sec_mean",
            lio->inertial_filter_update_count > 0
                ? lio->inertial_preintegration_shortfall_sec_sum / lio->inertial_filter_update_count

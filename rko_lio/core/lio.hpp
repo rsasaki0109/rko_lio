@@ -668,6 +668,10 @@ public:
     /** Floor (m) on the position uncertainty of one registration and of the prior; it
      *  keeps the filter from following every scan's displacement exactly. */
     double inertial_min_position_sigma = 0.05;
+    /** Skip filter updates beyond this squared Mahalanobis distance (0 keeps all). */
+    double inertial_innovation_gate = 0.0;
+    /** Largest accelerometer bias (m/s^2) the filter may estimate (0: unbounded). */
+    double inertial_max_bias = 0.0;
   };
 
   /** Configuration parameters. */
@@ -796,6 +800,9 @@ public:
   /** Total time (s) the IMU preintegration fell short of the scan interval. */
   double inertial_preintegration_shortfall_sec_sum = 0.0;
   /** The inertial filter's accelerometer bias estimate, once it exists. */
+  std::size_t inertial_filter_rejected_updates() const {
+    return _inertial_filter ? _inertial_filter->rejected_updates() : 0;
+  }
   std::optional<Eigen::Vector3d> inertial_filter_bias() const {
     return _inertial_filter ? std::optional<Eigen::Vector3d>(_inertial_filter->bias()) : std::nullopt;
   }

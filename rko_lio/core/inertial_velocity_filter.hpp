@@ -30,6 +30,7 @@
 #include <sophus/so3.hpp>
 
 #include <algorithm>
+#include <cstddef>
 
 namespace rko_lio::core {
 
@@ -95,6 +96,14 @@ public:
      *  well-constrained direction; trusted that much, each scan's displacement sets the
      *  velocity, and a wrong prediction pins the next scan. */
     double min_position_sigma = 0.0;
+    /** Skip an update whose innovation exceeds this squared Mahalanobis distance (0 keeps
+     *  every update). A registration that disagrees with the IMU by that much has slipped,
+     *  or the attitude is wrong and the gravity compensation with it. */
+    double innovation_gate = 0.0;
+    /** Largest accelerometer bias (m/s^2) the filter may estimate (0: unbounded). A
+     *  wrong attitude leaks gravity into the horizontal acceleration, and the filter would
+     *  otherwise take metres per second squared of it for bias. */
+    double max_bias = 0.0;
   };
 
   using Matrix6d = Eigen::Matrix<double, 6, 6>;
@@ -157,10 +166,19 @@ public:
     Eigen::Matrix<double, 3, 6> H;
     H << Eigen::Matrix3d::Identity(), bias_jacobian;
     const Eigen::Matrix3d S = H * _covariance * H.transpose() + measurement_covariance;
-    const Eigen::Matrix<double, 6, 3> K = _covariance * H.transpose() * S.ldlt().solve(Eigen::Matrix3d::Identity());
-    const Eigen::Matrix<double, 6, 1> dx = K * (measured - predicted);
+    const Eigen::Matrix3d S_inverse = S.ldlt().solve(Eigen::Matrix3d::Identity());
+    const Eigen::Vector3d innovation = measured - predicted;
+    if (_config.innovation_gate > 0.0 && innovation.dot(S_inverse * innovation) > _config.innovation_gate) {
+      ++_rejected_updates;
+      return;
+    }
+    const Eigen::Matrix<double, 6, 3> K = _covariance * H.transpose() * S_inverse;
+    const Eigen::Matrix<double, 6, 1> dx = K * innovation;
     _velocity += dx.head<3>();
     _bias += dx.tail<3>();
+    if (_config.max_bias > 0.0 && _bias.norm() > _config.max_bias) {
+      _bias *= _config.max_bias / _bias.norm();
+    }
     const Matrix6d I_KH = Matrix6d::Identity() - K * H;
     _covariance = I_KH * _covariance * I_KH.transpose() + K * measurement_covariance * K.transpose();
   }
@@ -168,6 +186,7 @@ public:
   const Eigen::Vector3d& velocity() const { return _velocity; }
   const Eigen::Vector3d& bias() const { return _bias; }
   const Matrix6d& covariance() const { return _covariance; }
+  std::size_t rejected_updates() const { return _rejected_updates; }
 
 private:
   static double square(const double x) { return x * x; }
@@ -178,6 +197,7 @@ private:
   Matrix6d _covariance = Matrix6d::Identity();
   InertialPreintegration _preintegration;
   double _interval = 0.0;
+  std::size_t _rejected_updates = 0;
 };
 
 /** Covariance (m^2) of the registered translation from the 6x6 registration Hessian of a

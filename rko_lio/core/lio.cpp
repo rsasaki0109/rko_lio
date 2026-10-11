@@ -1204,6 +1204,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         filter_config.acceleration_sigma = config.inertial_acceleration_sigma;
         filter_config.bias_random_walk = config.inertial_bias_random_walk;
         filter_config.min_position_sigma = config.inertial_min_position_sigma;
+        filter_config.innovation_gate = config.inertial_innovation_gate;
+        filter_config.max_bias = config.inertial_max_bias;
         _inertial_filter.emplace(filter_config);
         _inertial_filter->reset(lidar_state.pose.so3() * lidar_state.velocity);
       }
