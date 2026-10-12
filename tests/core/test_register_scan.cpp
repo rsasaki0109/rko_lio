@@ -322,6 +322,27 @@ TEST_CASE("Noisy: full SE(3) translation + rotation", "[register_scan][!mayfail]
   CHECK(approx_equal(lio.lidar_state.pose, T_expected, 1e-2));
 }
 
+TEST_CASE("Levenberg-Marquardt matches Gauss-Newton on a well-constrained scan", "[register_scan]") {
+  auto run = [](const bool lm) {
+    LIO::Config config;
+    config.icp_levenberg_marquardt = lm;
+    LIO lio(config);
+    const auto cloud = make_hollow_cube();
+    lio.register_scan(cloud, linspace_timestamps(cloud.size(), 0.0, FIRST_SCAN_END));
+    const Eigen::Vector3d t(0.5, 0.3, 0.0);
+    const Eigen::Vector3d imu_accel = 2.0 * t / (DT * DT) + Eigen::Vector3d{0.0, 0.0, GRAVITY_MAG};
+    feed_imu(lio, FIRST_SCAN_END + 0.05, SECOND_SCAN_END - 0.05, 10, imu_accel, Eigen::Vector3d::Zero());
+    Vector3dVector cloud2;
+    cloud2.reserve(cloud.size());
+    for (const auto& p : cloud) {
+      cloud2.emplace_back(p - t);
+    }
+    lio.register_scan(cloud2, instant_timestamps(cloud2.size(), SECOND_SCAN_END));
+    return lio.lidar_state.pose;
+  };
+  REQUIRE(approx_equal(run(true), run(false), 1e-4));
+}
+
 TEST_CASE("register_scan: empty timestamps throws instead of UB", "[register_scan]") {
   LIO lio((LIO::Config{}));
   const auto cloud = make_hollow_cube();
