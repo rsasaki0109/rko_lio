@@ -34,6 +34,7 @@
 #include "bump_image_map.hpp"
 #include "bump_rotation_gate.hpp"
 #include "inertial_window.hpp"
+#include "gait_speed.hpp"
 #include "photometric_features.hpp"
 #include "photometric_image.hpp"
 #include "persistent_weak_direction.hpp"
@@ -42,6 +43,7 @@
 #include "util.hpp"
 #include <array>
 #include <deque>
+#include <tuple>
 #include <limits>
 #include <optional>
 #include <string>
@@ -150,6 +152,31 @@ public:
      *  tunnel, Gauss-Newton turns residual noise into large moves; in the GEODE shield
      *  tunnels those moves add up to the registration sliding along the lining. */
     bool icp_levenberg_marquardt = false;
+
+    /** Handheld walking only: keep the speed of the prediction at cadence times a learned
+     *  step length (GaitSpeedEstimator) along the direction of travel. Where the scan says
+     *  nothing along that direction the registration otherwise lets the speed decay to zero
+     *  or run away. */
+    bool gait_speed_prior = false;
+    double gait_window_sec = 4.0;
+    double gait_min_peak_fraction = 0.25;
+    double gait_min_magnitude_std = 0.5;
+    double gait_min_step_length = 0.5;
+    double gait_max_step_length = 1.0;
+    /** Step length (m) used until enough has been learned (0: wait). Walkers in the GEODE
+     *  shield tunnels take 0.58-0.79 m steps. */
+    double gait_default_step_length = 0.7;
+    /** Registered speed (m/s) needed to update the direction of travel. */
+    double gait_min_direction_speed = 0.5;
+    /** While the prediction runs at the gait speed, limit the registration's correction
+     *  along the direction of travel to this much per scan (m, 0: no limit). A stalled
+     *  scan otherwise enters the map at the stalled pose, and the map then holds the next
+     *  scans back; the gait is the independent speed that tells the two apart. */
+    double gait_max_correction_m = 0.0;
+    /** Flip the direction of travel when the IMU, integrated from the velocity this long
+     *  ago (s), says the walker now moves the other way faster than gait_min_direction_speed
+     *  (walking back without turning the sensor). 0 disables. */
+    double gait_reversal_lookback_sec = 4.0;
     /** Initial damping as a fraction of the largest diagonal entry of the system. */
     double icp_lm_initial_lambda_factor = 1e-9;
     /** Damping increases tried per iteration before giving up on a step. */
@@ -704,6 +731,10 @@ public:
   /** IMU measurement statistics since last LiDAR frame. */
   IntervalStats interval_stats;
 
+  /** Scans whose predicted speed came from the gait (gait_speed_prior). */
+  std::size_t gait_speed_applied_count = 0;
+  std::optional<double> gait_step_length() const { return _gait.step_length(); }
+
   /** Inertial window solves (inertial_window). */
   std::size_t inertial_window_solve_count = 0;
   const InertialWindow& inertial_window() const { return _inertial_window; }
@@ -805,6 +836,18 @@ public:
   /** Scans registered again without the bump terms (bump_image_max_rotation_correction_deg). */
   std::size_t bump_rotation_fallback_count = 0;
   InertialWindow _inertial_window;
+  GaitSpeedEstimator _gait;
+  std::optional<Eigen::Vector3d> _gait_direction_body;
+  bool _gait_prediction_active = false;
+  /** World velocity change from the IMU since the last scan, and per scan: time, world
+   *  velocity after the scan, velocity change during the scan, sensor attitude. */
+  Eigen::Vector3d _gait_velocity_change = Eigen::Vector3d::Zero();
+  std::deque<std::tuple<double, Eigen::Vector3d, Eigen::Vector3d, Sophus::SO3d>> _gait_velocity_history;
+  double _gait_last_reversal_time = -1e9;
+  /** Scans where the IMU reversed the direction of travel. */
+  std::size_t gait_reversal_count = 0;
+  /** Scans whose along-travel correction the gait limited. */
+  std::size_t gait_correction_limited_count = 0;
   ImuPreintegration _window_preintegration;
   Eigen::Vector3d _window_last_angular_velocity = Eigen::Vector3d::Zero();
   Eigen::Vector3d _window_last_specific_force = Eigen::Vector3d::Zero();

@@ -584,6 +584,15 @@ LIO::LIO(const Config& config_)
   // Per-voxel normals are only maintained when the localizability weighting can
   // consume them; the default path pays nothing.
   map.set_maintain_normals(config.localizability_weighting);
+  if (config.gait_speed_prior) {
+    GaitSpeedEstimator::Config gait_config;
+    gait_config.window_sec = config.gait_window_sec;
+    gait_config.min_peak_fraction = config.gait_min_peak_fraction;
+    gait_config.min_magnitude_std = config.gait_min_magnitude_std;
+    gait_config.min_step_length = config.gait_min_step_length;
+    gait_config.max_step_length = config.gait_max_step_length;
+    _gait = GaitSpeedEstimator(gait_config);
+  }
   if (config.inertial_window) {
     InertialWindow::Config window_config;
     window_config.length_sec = config.inertial_window_sec;
@@ -885,6 +894,12 @@ void LIO::add_imu_measurement(const ImuControl& base_imu) {
   imu_state.time = base_imu.time;
 
   interval_stats.update(unbiased_ang_vel, unbiased_accel, compensated_accel);
+  if (config.gait_speed_prior) {
+    _gait.add_imu(to_seconds(base_imu.time), base_imu.acceleration);
+    if (dt > 0.0) {
+      _gait_velocity_change += (imu_state.pose.so3() * compensated_accel) * dt;
+    }
+  }
   if (config.inertial_window && dt > 0.0) {
     if (_window_preintegration.dt <= 0.0) {
       _window_preintegration.accelerometer_bias = imu_bias.accelerometer;
@@ -2053,6 +2068,16 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       }
     }
 
+    if (config.gait_speed_prior && config.gait_max_correction_m > 0.0 && _gait_prediction_active &&
+        _gait_direction_body) {
+      const Eigen::Vector3d u = optimized_pose.so3() * *_gait_direction_body;
+      const double correction = (optimized_pose.translation() - initial_guess.translation()).dot(u);
+      if (std::abs(correction) > config.gait_max_correction_m) {
+        optimized_pose.translation() -=
+            (correction - std::copysign(config.gait_max_correction_m, correction)) * u;
+        ++gait_correction_limited_count;
+      }
+    }
     // estimate velocities and accelerations from the new pose
     const double dt = to_seconds(current_lidar_time - lidar_state.time);
     const Sophus::SE3d motion = lidar_state.pose.inverse() * optimized_pose;
@@ -2074,6 +2099,92 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         // Body-frame velocity, like the per-scan estimate above.
         lidar_state.velocity =
             optimized_pose.so3().inverse() * ((optimized_pose.translation() - past->second.translation()) / span);
+      }
+    }
+    if (config.gait_speed_prior) {
+      bool applied = false;
+      const double now = to_seconds(current_lidar_time);
+      const Eigen::Vector3d scan_velocity_change = _gait_velocity_change;
+      _gait_velocity_change.setZero();
+      if (const auto cadence = _gait.cadence()) {
+        if (config.gait_reversal_lookback_sec > 0.0 && _gait_direction_body && _gait_prediction_active &&
+            !_gait_velocity_history.empty()) {
+          // Velocity now from the IMU alone, starting from the velocity a lookback ago.
+          auto it = _gait_velocity_history.begin();
+          while (std::next(it) != _gait_velocity_history.end() &&
+                 now - std::get<0>(*std::next(it)) >= config.gait_reversal_lookback_sec) {
+            ++it;
+          }
+          if (now - std::get<0>(*it) >= 0.5 * config.gait_reversal_lookback_sec &&
+              now - _gait_last_reversal_time > 3.0 * config.gait_reversal_lookback_sec) {
+            // Remove the mean acceleration of the whole history first: with the gravity term
+            // off the attitude tilts slowly, and the leaked gravity integrates into a false
+            // reversal within seconds. A real reversal changes the velocity within a few.
+            const double history_span = now - std::get<0>(_gait_velocity_history.front());
+            Eigen::Vector3d mean_acceleration = Eigen::Vector3d::Zero();
+            if (history_span > 0.0) {
+              for (const auto& entry : _gait_velocity_history) mean_acceleration += std::get<2>(entry);
+              mean_acceleration = (mean_acceleration + scan_velocity_change) / history_span;
+            }
+            Eigen::Vector3d velocity = std::get<1>(*it);
+            for (auto jt = std::next(it); jt != _gait_velocity_history.end(); ++jt) velocity += std::get<2>(*jt);
+            velocity += scan_velocity_change - mean_acceleration * (now - std::get<0>(*it));
+            const Eigen::Vector3d u_world = lidar_state.pose.so3() * *_gait_direction_body;
+            // A walker turning with the sensor keeps the body direction; only a reversal the
+            // sensor did not turn with needs the flip. Skip while the sensor turned recently.
+            bool sensor_turned = false;
+            for (const auto& entry : _gait_velocity_history) {
+              if (now - std::get<0>(entry) <= 3.0 * config.gait_reversal_lookback_sec &&
+                  (std::get<3>(entry).inverse() * lidar_state.pose.so3()).log().norm() > M_PI / 6.0) {
+                sensor_turned = true;
+                break;
+              }
+            }
+            if (!sensor_turned && velocity.dot(u_world) < -config.gait_min_direction_speed) {
+              _gait_direction_body = -*_gait_direction_body;
+              ++gait_reversal_count;
+              _gait_last_reversal_time = now;
+            }
+          }
+        }
+        const double registered_speed = lidar_state.velocity.norm();
+        _gait.observe(registered_speed, *cadence);
+        if (registered_speed > config.gait_min_direction_speed) {
+          const Eigen::Vector3d registered_direction = lidar_state.velocity / registered_speed;
+          if (!_gait_direction_body || !_gait.step_length()) {
+            // Free until the step is learned; afterwards only the blend below and the IMU
+            // reversal check may turn it (a registration released from the gait for one scan
+            // snaps back and would point the walk backwards).
+            _gait_direction_body = registered_direction;
+          } else if (registered_direction.dot(*_gait_direction_body) > std::cos(M_PI / 4.0)) {
+            // While the gait drives the prediction, follow the registration only slowly and
+            // only near the current direction: a turn of the sensor mid-stride or a slipping
+            // registration would otherwise point the walk backwards. Reversals without a
+            // turn of the sensor are the IMU's to detect (above).
+            _gait_direction_body = (0.9 * *_gait_direction_body + 0.1 * registered_direction).normalized();
+          }
+        }
+        // Until the step is learned, step in only where the registration is implausible
+        // (stalled or running away), with the default step.
+        std::optional<double> step_length = _gait.step_length();
+        if (!step_length && config.gait_default_step_length > 0.0 &&
+            !_gait.plausible_step(registered_speed / *cadence)) {
+          step_length = config.gait_default_step_length;
+        }
+        if (step_length && _gait_direction_body) {
+          // Replace the speed along the direction of travel; keep the rest.
+          const Eigen::Vector3d& u = *_gait_direction_body;
+          lidar_state.velocity += (*cadence * *step_length - lidar_state.velocity.dot(u)) * u;
+          ++gait_speed_applied_count;
+          applied = true;
+        }
+      }
+      _gait_prediction_active = applied;
+      _gait_velocity_history.emplace_back(now, lidar_state.pose.so3() * lidar_state.velocity, scan_velocity_change,
+                                          lidar_state.pose.so3());
+      while (!_gait_velocity_history.empty() &&
+             now - std::get<0>(_gait_velocity_history.front()) > std::max(30.0, 2.0 * config.gait_reversal_lookback_sec)) {
+        _gait_velocity_history.pop_front();
       }
     }
     lidar_state.angular_velocity = local_velocity.tail<3>();

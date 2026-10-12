@@ -551,6 +551,24 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   lio_config.legacy_voxel_downsample =
       node->declare_parameter<bool>("legacy_voxel_downsample", lio_config.legacy_voxel_downsample);
   lio_config.min_beta = node->declare_parameter<double>("min_beta", lio_config.min_beta);
+  lio_config.gait_speed_prior = node->declare_parameter<bool>("gait_speed_prior", lio_config.gait_speed_prior);
+  lio_config.gait_window_sec = node->declare_parameter<double>("gait_window_sec", lio_config.gait_window_sec);
+  lio_config.gait_min_peak_fraction =
+      node->declare_parameter<double>("gait_min_peak_fraction", lio_config.gait_min_peak_fraction);
+  lio_config.gait_min_magnitude_std =
+      node->declare_parameter<double>("gait_min_magnitude_std", lio_config.gait_min_magnitude_std);
+  lio_config.gait_min_step_length =
+      node->declare_parameter<double>("gait_min_step_length", lio_config.gait_min_step_length);
+  lio_config.gait_default_step_length =
+      node->declare_parameter<double>("gait_default_step_length", lio_config.gait_default_step_length);
+  lio_config.gait_max_step_length =
+      node->declare_parameter<double>("gait_max_step_length", lio_config.gait_max_step_length);
+  lio_config.gait_min_direction_speed =
+      node->declare_parameter<double>("gait_min_direction_speed", lio_config.gait_min_direction_speed);
+  lio_config.gait_reversal_lookback_sec =
+      node->declare_parameter<double>("gait_reversal_lookback_sec", lio_config.gait_reversal_lookback_sec);
+  lio_config.gait_max_correction_m =
+      node->declare_parameter<double>("gait_max_correction_m", lio_config.gait_max_correction_m);
   lio_config.icp_levenberg_marquardt =
       node->declare_parameter<bool>("icp_levenberg_marquardt", lio_config.icp_levenberg_marquardt);
   lio_config.icp_lm_initial_lambda_factor =
@@ -1769,6 +1787,19 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
       if (std::ofstream file(photometric_file); file.is_open()) {
         file << photometric_summary.dump(4) << "\n";
         std::cout << "Photometric summary written to " << photometric_file << "\n";
+      }
+    }
+    // Gait speed summary.
+    if (lio->config.gait_speed_prior) {
+      nlohmann::json gait_summary = {{"applied_count", lio->gait_speed_applied_count},
+                                     {"correction_limited_count", lio->gait_correction_limited_count},
+                                     {"reversal_count", lio->gait_reversal_count}};
+      if (const auto step = lio->gait_step_length()) {
+        gait_summary["step_length_m"] = *step;
+      }
+      const std::filesystem::path gait_file = output_dir / "gait_speed_summary.json";
+      if (std::ofstream file(gait_file); file.is_open()) {
+        file << gait_summary.dump(4) << "\n";
       }
     }
     // Inertial window summary.
