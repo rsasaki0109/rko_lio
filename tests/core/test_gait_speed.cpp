@@ -30,6 +30,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+using rko_lio::core::apply_gait_speed;
 using rko_lio::core::GaitSpeedEstimator;
 
 namespace {
@@ -80,4 +81,24 @@ TEST_CASE("The step length is frozen once learned", "[gait_speed]") {
   // Later the registered speed follows the gait; it must not move the step.
   for (int i = 0; i < 100; ++i) gait.observe(0.9 * 2.0, 2.0);
   REQUIRE(*gait.step_length() == Catch::Approx(0.7).margin(1e-9));
+}
+
+TEST_CASE("Setting the gait speed stops a turning sensor from pumping it", "[gait_speed]") {
+  // A walker stops and turns the sensor by 180 degrees in 20 scans; the registration has no
+  // hold along the tunnel and returns the predicted velocity unchanged.
+  Eigen::Vector3d kept = Eigen::Vector3d::UnitX();
+  Eigen::Vector3d set = Eigen::Vector3d::UnitX();
+  for (int i = 1; i <= 20; ++i) {
+    const double angle = M_PI * i / 20.0;
+    const Eigen::Vector3d u(std::cos(angle), std::sin(angle), 0.0);
+    kept = apply_gait_speed(kept, u, 1.0, false);
+    set = apply_gait_speed(set, u, 1.0, true);
+  }
+  REQUIRE(kept.norm() > 2.0);
+  REQUIRE(set.norm() == Catch::Approx(1.0).margin(1e-9));
+  // Straight walking: both give the gait speed along the direction of travel.
+  const Eigen::Vector3d u = Eigen::Vector3d::UnitX();
+  const Eigen::Vector3d slow(0.4, 0.05, 0.0);
+  REQUIRE(apply_gait_speed(slow, u, 1.2, false).dot(u) == Catch::Approx(1.2).margin(1e-12));
+  REQUIRE(apply_gait_speed(slow, u, 1.2, true).norm() == Catch::Approx(1.2).margin(1e-12));
 }
