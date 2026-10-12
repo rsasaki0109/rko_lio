@@ -2172,9 +2172,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           step_length = config.gait_default_step_length;
         }
         if (step_length && _gait_direction_body) {
-          // Replace the speed along the direction of travel; keep the rest.
-          const Eigen::Vector3d& u = *_gait_direction_body;
-          lidar_state.velocity += (*cadence * *step_length - lidar_state.velocity.dot(u)) * u;
+          lidar_state.velocity = apply_gait_speed(lidar_state.velocity, *_gait_direction_body,
+                                                  *cadence * *step_length, config.gait_sets_speed);
           ++gait_speed_applied_count;
           applied = true;
         }

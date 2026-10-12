@@ -569,6 +569,7 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("gait_reversal_lookback_sec", lio_config.gait_reversal_lookback_sec);
   lio_config.gait_max_correction_m =
       node->declare_parameter<double>("gait_max_correction_m", lio_config.gait_max_correction_m);
+  lio_config.gait_sets_speed = node->declare_parameter<bool>("gait_sets_speed", lio_config.gait_sets_speed);
   lio_config.icp_levenberg_marquardt =
       node->declare_parameter<bool>("icp_levenberg_marquardt", lio_config.icp_levenberg_marquardt);
   lio_config.icp_lm_initial_lambda_factor =

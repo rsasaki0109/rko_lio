@@ -151,4 +151,16 @@ private:
   std::optional<double> _frozen;
 };
 
+/** The velocity at the gait speed along the unit direction of travel u. By default only the
+ *  component along u is replaced and the rest kept from the registration; with set_speed the
+ *  result is also scaled to the gait speed, so the registration gives the direction and the
+ *  gait the speed. Keeping the rest lets a turn of the sensor pump the speed: the old forward
+ *  speed stays as a sideways component while the new direction gets the gait speed again. */
+inline Eigen::Vector3d apply_gait_speed(const Eigen::Vector3d& velocity, const Eigen::Vector3d& u,
+                                        const double speed, const bool set_speed) {
+  Eigen::Vector3d result = velocity + (speed - velocity.dot(u)) * u;
+  if (set_speed && speed > 0.0) result *= speed / result.norm();
+  return result;
+}
+
 } // namespace rko_lio::core

@@ -177,6 +177,9 @@ public:
      *  ago (s), says the walker now moves the other way faster than gait_min_direction_speed
      *  (walking back without turning the sensor). 0 disables. */
     double gait_reversal_lookback_sec = 4.0;
+    /** Scale the whole velocity to the gait speed, keeping its direction, instead of only
+     *  replacing its component along the direction of travel (see apply_gait_speed). */
+    bool gait_sets_speed = false;
     /** Initial damping as a fraction of the largest diagonal entry of the system. */
     double icp_lm_initial_lambda_factor = 1e-9;
     /** Damping increases tried per iteration before giving up on a step. */
