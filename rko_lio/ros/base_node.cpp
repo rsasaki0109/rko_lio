@@ -705,6 +705,10 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "radar_fusion_icp_information_scale", lio_config.radar_fusion_icp_information_scale);
 
   // ---- sliding-window absolute gravity alignment (fork addition; default-off) ----
+  lio_config.max_tilt_correction_deg =
+      node->declare_parameter<double>("max_tilt_correction_deg", lio_config.max_tilt_correction_deg);
+  lio_config.initialization_max_gyro_rad_s =
+      node->declare_parameter<double>("initialization_max_gyro_rad_s", lio_config.initialization_max_gyro_rad_s);
   lio_config.gravity_window_alignment =
       node->declare_parameter<bool>("gravity_window_alignment", lio_config.gravity_window_alignment);
   lio_config.gravity_window_sec = node->declare_parameter<double>("gravity_window_sec", lio_config.gravity_window_sec);
@@ -1852,6 +1856,9 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
         file << gravity_summary.dump(4) << "\n";
         std::cout << "Gravity alignment summary written to " << gravity_file << "\n";
       }
+    }
+    if (lio->config.max_tilt_correction_deg > 0.0) {
+      std::cout << "Tilt correction limited on " << lio->tilt_correction_limited_count << " scans\n";
     }
     // Kinematic velocity gate summary.
     if (lio->config.kinematic_velocity_gate) {

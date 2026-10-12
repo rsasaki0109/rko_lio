@@ -359,6 +359,14 @@ public:
      *  regularization, whose Kalman-filter reference is built with the current rotation
      *  estimate and therefore tracks -- instead of observing -- slow pitch/roll drift. */
     bool gravity_window_alignment = false;
+    /** Largest correction (deg) per scan the registration may make to the gyro-predicted
+     *  roll and pitch (0: no limit). Yaw stays with the registration. A 16-beam LiDAR on a
+     *  vehicle pulls the pitch by about 1 deg/s in tunnels and on bridges; the gyro holds
+     *  it, and gravity_window_alignment corrects the absolute tilt. */
+    double max_tilt_correction_deg = 0.0;
+    /** Treat the start as moving, and leave the IMU biases at zero, when the mean gyro rate
+     *  of the initialization interval exceeds this (rad/s; 0: always static). */
+    double initialization_max_gyro_rad_s = 0.0;
 
     /** Sliding window length (s) for the world-frame accelerometer mean. Long enough that
      *  quasi-steady body acceleration averages out; short enough that the drift being
@@ -892,6 +900,8 @@ public:
    *  magnitude gate passed and a (possibly identity) correction was applied.
    *  last_tilt_rad: most recent measured window tilt. correction_rad_sum /
    *  applied_count gives the mean correction angle per applied scan. */
+  /** Scans whose roll/pitch correction hit max_tilt_correction_deg. */
+  std::size_t tilt_correction_limited_count = 0;
   std::size_t gravity_alignment_attempt_count = 0;
   std::size_t gravity_alignment_applied_count = 0;
   double gravity_alignment_last_tilt_rad = 0.0;

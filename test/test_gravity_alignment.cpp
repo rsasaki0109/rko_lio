@@ -10,6 +10,7 @@
 namespace {
 
 using rko_lio::core::compute_gravity_alignment_correction;
+using rko_lio::core::limit_tilt_correction;
 
 constexpr double kGravity = 9.8107;
 
@@ -76,6 +77,30 @@ TEST(GravityAlignment, YawIsNeverTouched) {
   ASSERT_TRUE(result.valid);
   // The correction axis lies in the horizontal plane: no z (yaw) component.
   EXPECT_NEAR(result.correction.log().z(), 0.0, 1e-12);
+}
+
+TEST(TiltCorrectionLimit, SmallCorrectionPassesThrough) {
+  const Sophus::SO3d predicted = Sophus::SO3d::exp(Eigen::Vector3d(0.1, -0.2, 0.3));
+  const Sophus::SO3d registered = Sophus::SO3d::exp(Eigen::Vector3d(1e-4, 0.0, 0.01)) * predicted;
+  bool limited = true;
+  const Sophus::SO3d result = limit_tilt_correction(predicted, registered, 1e-3, &limited);
+  EXPECT_FALSE(limited);
+  EXPECT_NEAR((result.inverse() * registered).log().norm(), 0.0, 1e-12);
+}
+
+TEST(TiltCorrectionLimit, TiltIsCappedAndYawKept) {
+  const Sophus::SO3d predicted = Sophus::SO3d::exp(Eigen::Vector3d(0.05, 0.02, -1.0));
+  const Eigen::Vector3d correction(0.01, -0.02, 0.05);  // world frame: pitch/roll pull and a turn
+  const Sophus::SO3d registered = Sophus::SO3d::exp(correction) * predicted;
+  bool limited = false;
+  const double cap = 3e-4;
+  const Sophus::SO3d result = limit_tilt_correction(predicted, registered, cap, &limited);
+  EXPECT_TRUE(limited);
+  const Eigen::Vector3d applied = (result * predicted.inverse()).log();
+  EXPECT_NEAR(applied.head<2>().norm(), cap, 1e-9);
+  EXPECT_NEAR(applied.z(), correction.z(), 1e-9);
+  // The capped tilt keeps the direction of the registration's pull.
+  EXPECT_NEAR(applied.head<2>().normalized().dot(correction.head<2>().normalized()), 1.0, 1e-9);
 }
 
 } // namespace

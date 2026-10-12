@@ -642,6 +642,12 @@ void LIO::initialize(const Nsec lidar_time) {
   const Eigen::Vector3d local_gravity = imu_state.pose.so3().inverse() * gravity();
   imu_bias.accelerometer = avg_accel + local_gravity;
   imu_bias.gyroscope = avg_gyro;
+  if (config.initialization_max_gyro_rad_s > 0.0 && avg_gyro.norm() > config.initialization_max_gyro_rad_s) {
+    // Not a static start (a vehicle already driving): the averages are motion, not biases.
+    imu_bias.accelerometer.setZero();
+    imu_bias.gyroscope.setZero();
+    std::cout << "[INFO] Moving start (gyro " << avg_gyro.norm() << " rad/s): IMU biases left at zero.\n";
+  }
 
   _initialized = true;
   std::cout << "[INFO] Odometry map frame initialized using " << interval_stats.imu_count
@@ -2024,6 +2030,15 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // residual tilt is fed back as a small, capped, roll/pitch-only left-multiplicative
     // correction. Applied before the velocity/acceleration estimation below so the state
     // update sees the corrected orientation.
+    if (config.max_tilt_correction_deg > 0.0) {
+      // Keep roll and pitch from the gyro: limit the registration's correction of the
+      // predicted attitude about horizontal axes. Yaw stays free, and the absolute tilt is
+      // left to the gravity window alignment.
+      bool limited = false;
+      optimized_pose.so3() = limit_tilt_correction(initial_guess.so3(), optimized_pose.so3(),
+                                                   config.max_tilt_correction_deg * M_PI / 180.0, &limited);
+      if (limited) ++tilt_correction_limited_count;
+    }
     if (config.gravity_window_alignment && interval_stats.imu_count > 0) {
       const Eigen::Vector3d interval_mean_accel = interval_stats.imu_acceleration_sum / interval_stats.imu_count;
       const Eigen::Vector3d interval_mean_ang_vel_world =
