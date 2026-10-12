@@ -144,6 +144,17 @@ public:
     /** ICP convergence threshold. */
     double convergence_criterion = 1e-5;
 
+    /** Take Levenberg-Marquardt steps in the registration instead of plain Gauss-Newton:
+     *  damp the step in body coordinates and accept it only when the cost drops (as
+     *  BIEVR-LIO does). Along a direction the scan barely constrains, such as the axis of a
+     *  tunnel, Gauss-Newton turns residual noise into large moves; in the GEODE shield
+     *  tunnels those moves add up to the registration sliding along the lining. */
+    bool icp_levenberg_marquardt = false;
+    /** Initial damping as a fraction of the largest diagonal entry of the system. */
+    double icp_lm_initial_lambda_factor = 1e-9;
+    /** Damping increases tried per iteration before giving up on a step. */
+    int icp_lm_max_attempts = 20;
+
     /** Max distance for correspondences (m). */
     double max_correspondence_distance = 0.5;
 

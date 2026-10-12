@@ -353,8 +353,11 @@ IcpResult icp(const Vector3dVector& frame,
           : config.max_iterations;
   IcpWeightingStats weighting_stats;
   int photometric_patches = 0;
+  double lm_lambda = -1.0;
   for (size_t i = 0; i < iteration_budget; ++i) {
-    const auto& [H, b, chi] = std::invoke([&]() -> LinearSystem {
+    // The system at a pose; Levenberg-Marquardt also evaluates candidate steps with it.
+    auto build_system = [&](const Sophus::SE3d& evaluation_pose) -> LinearSystem {
+      const Sophus::SE3d& current_pose = evaluation_pose;
       LinearSystem geometric;
       bool bump_used = false;
       if (bump != nullptr) {
@@ -404,7 +407,8 @@ IcpResult icp(const Vector3dVector& frame,
         return {H_icp + H_ori / beta, b_icp + b_ori / beta, chi_icp + chi_ori / beta};
       }
       return {H_icp, b_icp, chi_icp};
-    });
+    };
+    const auto [H, b, chi] = build_system(current_pose);
     last_H = H;
     last_b = b;
     if (config.degeneracy_adaptive_iteration_budget &&
@@ -434,6 +438,37 @@ IcpResult icp(const Vector3dVector& frame,
       }
       dx = solve_result.update;
       degeneracy_intervention_count += solve_result.intervention_applied ? 1U : 0U;
+    } else if (config.icp_levenberg_marquardt) {
+      // The system is in the left perturbation exp(x) T, whose rotation turns about the
+      // world origin; damp in body coordinates T exp(y) instead, with x = Ad(T) y.
+      const Eigen::Matrix6d Ad = current_pose.Adj();
+      const Eigen::Matrix6d H_body = Ad.transpose() * H * Ad;
+      const Eigen::Vector6d b_body = Ad.transpose() * b;
+      if (lm_lambda < 0.0) {
+        lm_lambda = config.icp_lm_initial_lambda_factor * H_body.diagonal().cwiseAbs().maxCoeff();
+      }
+      double nu = 2.0;
+      dx.setZero();
+      for (int attempt = 0; attempt < config.icp_lm_max_attempts; ++attempt) {
+        const Eigen::Vector6d step_body =
+            (H_body + lm_lambda * Eigen::Matrix6d::Identity()).ldlt().solve(-b_body);
+        const Eigen::Vector6d step = Ad * step_body;
+        const double candidate_chi = std::get<2>(build_system(Sophus::SE3d::exp(step) * current_pose));
+        // Decrease predicted by the damped quadratic model (chi is half the squared residuals).
+        const double predicted = 0.5 * step_body.dot(lm_lambda * step_body - b_body);
+        const double rho = predicted > 0.0 ? (chi - candidate_chi) / predicted : -1.0;
+        if (rho < 0.0) {
+          if (step.norm() < config.convergence_criterion) {
+            break;
+          }
+          lm_lambda *= nu;
+          nu *= 2.0;
+          continue;
+        }
+        dx = step;
+        lm_lambda *= std::max(1.0 / 3.0, 1.0 - std::pow(2.0 * rho - 1.0, 3));
+        break;
+      }
     } else {
       dx = H.ldlt().solve(-b);
     }

@@ -551,6 +551,12 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   lio_config.legacy_voxel_downsample =
       node->declare_parameter<bool>("legacy_voxel_downsample", lio_config.legacy_voxel_downsample);
   lio_config.min_beta = node->declare_parameter<double>("min_beta", lio_config.min_beta);
+  lio_config.icp_levenberg_marquardt =
+      node->declare_parameter<bool>("icp_levenberg_marquardt", lio_config.icp_levenberg_marquardt);
+  lio_config.icp_lm_initial_lambda_factor =
+      node->declare_parameter<double>("icp_lm_initial_lambda_factor", lio_config.icp_lm_initial_lambda_factor);
+  lio_config.icp_lm_max_attempts =
+      node->declare_parameter<int>("icp_lm_max_attempts", lio_config.icp_lm_max_attempts);
   lio_config.velocity_window_sec =
       node->declare_parameter<double>("velocity_window_sec", lio_config.velocity_window_sec);
   lio_config.inertial_window = node->declare_parameter<bool>("inertial_window", lio_config.inertial_window);
