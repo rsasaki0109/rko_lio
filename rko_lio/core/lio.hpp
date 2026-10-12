@@ -39,6 +39,7 @@
 #include "photometric_image.hpp"
 #include "persistent_weak_direction.hpp"
 #include "selective_visual_fusion.hpp"
+#include "stall_guard.hpp"
 #include "voxel_hash_map.hpp"
 #include "util.hpp"
 #include <array>
@@ -367,6 +368,10 @@ public:
     /** Treat the start as moving, and leave the IMU biases at zero, when the mean gyro rate
      *  of the initialization interval exceeds this (rad/s; 0: always static). */
     double initialization_max_gyro_rad_s = 0.0;
+
+    /** Hold a vehicle's speed while its registration stalls (see stall_guard.hpp). */
+    bool vehicle_stall_guard = false;
+    StallGuardConfig stall_guard;
 
     /** Sliding window length (s) for the world-frame accelerometer mean. Long enough that
      *  quasi-steady body acceleration averages out; short enough that the drift being
@@ -900,6 +905,8 @@ public:
    *  magnitude gate passed and a (possibly identity) correction was applied.
    *  last_tilt_rad: most recent measured window tilt. correction_rad_sum /
    *  applied_count gives the mean correction angle per applied scan. */
+  /** Speed hold for a stalled vehicle registration (vehicle_stall_guard). */
+  StallGuard stall_guard;
   /** Scans whose roll/pitch correction hit max_tilt_correction_deg. */
   std::size_t tilt_correction_limited_count = 0;
   std::size_t gravity_alignment_attempt_count = 0;
