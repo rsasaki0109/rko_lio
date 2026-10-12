@@ -105,4 +105,18 @@ inline GravityAlignmentCorrection compute_gravity_alignment_correction(const Eig
   return result;
 }
 
+/** Registered attitude with its roll/pitch correction of the predicted attitude limited to
+ *  cap_rad. The correction is taken in the world frame; its vertical (yaw) part is kept.
+ *  Sets *limited when the cap applied. */
+inline Sophus::SO3d limit_tilt_correction(const Sophus::SO3d& predicted, const Sophus::SO3d& registered,
+                                          const double cap_rad, bool* limited = nullptr) {
+  const Eigen::Vector3d correction = (registered * predicted.inverse()).log();
+  Eigen::Vector3d tilt(correction.x(), correction.y(), 0.0);
+  if (limited) *limited = false;
+  if (cap_rad <= 0.0 || tilt.norm() <= cap_rad) return registered;
+  tilt *= cap_rad / tilt.norm();
+  if (limited) *limited = true;
+  return Sophus::SO3d::exp(Eigen::Vector3d(tilt.x(), tilt.y(), correction.z())) * predicted;
+}
+
 } // namespace rko_lio::core
