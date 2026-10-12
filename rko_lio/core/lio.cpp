@@ -2023,6 +2023,22 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       }
     }
 
+    if (config.vehicle_stall_guard && interval_stats.imu_count > 0) {
+      const double guard_dt = to_seconds(current_lidar_time - lidar_state.time);
+      const Eigen::Vector3d previous_velocity_world = lidar_state.pose.so3() * lidar_state.velocity;
+      const double previous_speed = previous_velocity_world.norm();
+      if (guard_dt > 0.0 && previous_speed > 0.0) {
+        const Eigen::Vector3d axis = previous_velocity_world / previous_speed;
+        const double registered_speed =
+            axis.dot(optimized_pose.translation() - lidar_state.pose.translation()) / guard_dt;
+        const double accel_along =
+            axis.dot(lidar_state.pose.so3() * interval_stats.body_acceleration_sum) / interval_stats.imu_count;
+        const double speed = stall_guard.update(to_seconds(current_lidar_time), guard_dt, registered_speed,
+                                                accel_along, previous_speed, config.stall_guard);
+        optimized_pose.translation() += (speed - registered_speed) * guard_dt * axis;
+      }
+    }
+
     // Sliding-window absolute gravity alignment (see gravity_alignment.hpp for why the
     // min_beta regularization above cannot correct slow pitch/roll drift on its own). The
     // window collects each scan interval's raw (gravity-inclusive) accelerometer mean rotated

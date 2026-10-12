@@ -707,6 +707,22 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   // ---- sliding-window absolute gravity alignment (fork addition; default-off) ----
   lio_config.max_tilt_correction_deg =
       node->declare_parameter<double>("max_tilt_correction_deg", lio_config.max_tilt_correction_deg);
+  lio_config.vehicle_stall_guard =
+      node->declare_parameter<bool>("vehicle_stall_guard", lio_config.vehicle_stall_guard);
+  lio_config.stall_guard.window_sec =
+      node->declare_parameter<double>("stall_guard.window_sec", lio_config.stall_guard.window_sec);
+  lio_config.stall_guard.min_drop_mps =
+      node->declare_parameter<double>("stall_guard.min_drop_mps", lio_config.stall_guard.min_drop_mps);
+  lio_config.stall_guard.max_speed_ratio =
+      node->declare_parameter<double>("stall_guard.max_speed_ratio", lio_config.stall_guard.max_speed_ratio);
+  lio_config.stall_guard.min_speed_mps =
+      node->declare_parameter<double>("stall_guard.min_speed_mps", lio_config.stall_guard.min_speed_mps);
+  lio_config.stall_guard.exit_agreement_mps = node->declare_parameter<double>(
+      "stall_guard.exit_agreement_mps", lio_config.stall_guard.exit_agreement_mps);
+  lio_config.stall_guard.exit_scans = static_cast<int>(
+      node->declare_parameter<int>("stall_guard.exit_scans", lio_config.stall_guard.exit_scans));
+  lio_config.stall_guard.max_hold_sec =
+      node->declare_parameter<double>("stall_guard.max_hold_sec", lio_config.stall_guard.max_hold_sec);
   lio_config.initialization_max_gyro_rad_s =
       node->declare_parameter<double>("initialization_max_gyro_rad_s", lio_config.initialization_max_gyro_rad_s);
   lio_config.gravity_window_alignment =
@@ -1856,6 +1872,10 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
         file << gravity_summary.dump(4) << "\n";
         std::cout << "Gravity alignment summary written to " << gravity_file << "\n";
       }
+    }
+    if (lio->config.vehicle_stall_guard) {
+      std::cout << "Stall guard held the speed on " << lio->stall_guard.held_scan_count << " scans ("
+                << lio->stall_guard.hold_count << " stalls)\n";
     }
     if (lio->config.max_tilt_correction_deg > 0.0) {
       std::cout << "Tilt correction limited on " << lio->tilt_correction_limited_count << " scans\n";

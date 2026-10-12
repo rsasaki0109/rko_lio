@@ -133,6 +133,12 @@ else()
       target_link_libraries(test_kinematic_velocity_blend rko_lio::core)
     endif()
     ament_add_gtest(
+      test_stall_guard
+      test/test_stall_guard.cpp)
+    if(TARGET test_stall_guard)
+      target_link_libraries(test_stall_guard rko_lio::core)
+    endif()
+    ament_add_gtest(
       test_kinematic_scene_range_gate
       test/test_kinematic_scene_range_gate.cpp)
     if(TARGET test_kinematic_scene_range_gate)
