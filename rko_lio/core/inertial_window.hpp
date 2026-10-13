@@ -117,6 +117,10 @@ public:
     /** Weight (1 / sigma) of the prior pulling the gravity direction (unit vector) to its
      *  previous estimate. */
     double gravity_prior_weight = 5.0;
+    /** Largest angle (deg) the gravity estimate may take from the first, seeded gravity;
+     *  0 leaves it free. Keeps a window fitted to bad registrations from tilting the
+     *  propagation away. */
+    double gravity_max_tilt_deg = 0.0;
   };
 
   struct State {
@@ -164,6 +168,7 @@ public:
     if (!_config.estimate_gravity || !_gravity_seeded) {
       _gravity = gravity;
       _gravity_seeded = true;
+      _gravity_reference = gravity.normalized();
     }
     // Unknowns: velocities of states 1..m (state 0 is held), accelerometer bias, gyro bias
     // and, with estimate_gravity, two tangent coordinates of the gravity direction.
@@ -271,7 +276,7 @@ public:
       _accelerometer_bias += dx.segment<3>(ba);
       _gyroscope_bias += dx.segment<3>(bg);
       if (estimate_gravity) {
-        _gravity = gravity_magnitude * (direction + tangent * dx.segment<2>(gi)).normalized();
+        _gravity = gravity_magnitude * limit_tilt((direction + tangent * dx.segment<2>(gi)).normalized());
       }
       clamp(_accelerometer_bias, _config.max_accelerometer_bias);
       clamp(_gyroscope_bias, _config.max_gyroscope_bias);
@@ -289,6 +294,17 @@ public:
   std::size_t solves() const { return _solves; }
 
 private:
+  // Rotate ``direction`` back onto the cone of gravity_max_tilt_deg around the reference.
+  Eigen::Vector3d limit_tilt(const Eigen::Vector3d& direction) const {
+    const double limit = _config.gravity_max_tilt_deg * M_PI / 180.0;
+    const double angle = std::acos(std::clamp(direction.dot(_gravity_reference), -1.0, 1.0));
+    if (limit <= 0.0 || angle <= limit) {
+      return direction;
+    }
+    const Eigen::Vector3d axis = _gravity_reference.cross(direction).normalized();
+    return Eigen::AngleAxisd(limit, axis) * _gravity_reference;
+  }
+
   static void clamp(Eigen::Vector3d& bias, const double limit) {
     if (limit > 0.0 && bias.norm() > limit) {
       bias *= limit / bias.norm();
@@ -303,6 +319,7 @@ private:
   std::size_t _solves = 0;
   Eigen::Vector3d _gravity = Eigen::Vector3d(0.0, 0.0, -9.81);
   bool _gravity_seeded = false;
+  Eigen::Vector3d _gravity_reference = Eigen::Vector3d(0.0, 0.0, -1.0);
 };
 
 } // namespace rko_lio::core
