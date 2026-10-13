@@ -49,6 +49,8 @@
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <cstdlib>
+#include <fstream>
 #include <optional>
 #include <stdexcept>
 #include <tuple>
@@ -605,6 +607,9 @@ LIO::LIO(const Config& config_)
     window_config.estimate_gravity = config.inertial_window_estimate_gravity;
     window_config.gravity_prior_weight = config.inertial_window_gravity_prior_weight;
     window_config.gravity_max_tilt_deg = config.inertial_window_gravity_max_tilt_deg;
+    window_config.robust_cost_scale = config.inertial_window_robust_cost_scale;
+    window_config.attitude_prior_sigma = config.inertial_window_attitude_prior_sigma;
+    window_config.attitude_gyro_sigma = config.inertial_window_attitude_gyro_sigma;
     _inertial_window = InertialWindow(window_config);
   }
   // Pin TBB's worker pool to config.max_num_threads (0 = leave at TBB default).
@@ -2352,10 +2357,63 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       inertial_window_added = true;
       if (_inertial_window.solve(_gravity_world)) {
         ++inertial_window_solve_count;
+        // Translation information of this scan's registration (world frame), normalised
+        // eigenvalues ascending.
+        const Eigen::Matrix3d icp_translation_information =
+            0.5 * (icp_H.block<3, 3>(0, 0) + icp_H.block<3, 3>(0, 0).transpose());
+        const Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> icp_translation_eigen(icp_translation_information);
+        const double icp_translation_trace = icp_translation_eigen.eigenvalues().sum();
+        const bool icp_translation_valid =
+            icp_translation_eigen.info() == Eigen::Success && icp_translation_trace > 1.0e-12;
+        if (const char* log_path = std::getenv("RKO_WINDOW_LOG")) {
+          // EXPERIMENT: per-solve window diagnostics.
+          static std::ofstream window_log(log_path);
+          const Eigen::Vector3d g = _inertial_window.gravity().normalized();
+          window_log << std::fixed << to_seconds(current_lidar_time) << " " << _inertial_window.last_newest_cost() << " "
+                     << _inertial_window.last_mean_cost() << " " << _inertial_window.accelerometer_bias().norm() << " "
+                     << _inertial_window.gyroscope_bias().norm() << " "
+                     << std::acos(std::clamp(-g.z(), -1.0, 1.0)) * 180.0 / M_PI << " "
+                     << _inertial_window.latest_velocity().norm() << " "
+                     << _inertial_window.last_mean_robust_weight() << " "
+                     << (icp_translation_valid ? icp_translation_eigen.eigenvalues()(0) / icp_translation_trace : -1.0) << " "
+                     << (icp_translation_valid ? icp_translation_eigen.eigenvalues()(1) / icp_translation_trace : -1.0) << " "
+                     << std::abs(icp_translation_eigen.eigenvectors().col(0).dot(
+                            _inertial_window.latest_velocity().normalized()))
+                     << "\n";
+        }
+        // EXPERIMENT: a window whose fit disagrees with the IMU (mean residual cost above the
+        // gate) is fitting bad registrations; drop it and keep the last healthy gravity.
+        const bool window_healthy = config.inertial_window_max_mean_cost <= 0.0 ||
+                                    _inertial_window.last_mean_cost() <= config.inertial_window_max_mean_cost;
+        if (!window_healthy) {
+          ++inertial_window_gate_count;
+          _inertial_window.reset();
+          if (_window_last_good_gravity) _gravity_world = *_window_last_good_gravity;
+        } else {
         if (config.inertial_window_estimate_gravity) {
           _gravity_world = _inertial_window.gravity();
+          _window_last_good_gravity = _gravity_world;
         }
+        if (config.inertial_window_weak_direction_ratio > 0.0) {
+          // EXPERIMENT: the window's velocity only along the registration's weak translation
+          // directions; the registration keeps its own velocity where it constrains the pose.
+          Eigen::Matrix3d weak = Eigen::Matrix3d::Identity();
+          if (icp_translation_valid) {
+            weak.setZero();
+            for (int i = 0; i < 3; ++i) {
+              if (icp_translation_eigen.eigenvalues()(i) / icp_translation_trace < config.inertial_window_weak_direction_ratio) {
+                weak += icp_translation_eigen.eigenvectors().col(i) * icp_translation_eigen.eigenvectors().col(i).transpose();
+              }
+            }
+          }
+          const Eigen::Vector3d registration_velocity = lidar_state.pose.so3() * lidar_state.velocity;
+          const Eigen::Vector3d fused = weak * _inertial_window.latest_velocity() +
+                                        (Eigen::Matrix3d::Identity() - weak) * registration_velocity;
+          lidar_state.velocity = lidar_state.pose.so3().inverse() * fused;
+          if (!weak.isZero()) ++inertial_window_weak_direction_count;
+        } else {
         lidar_state.velocity = lidar_state.pose.so3().inverse() * _inertial_window.latest_velocity();
+        }
         if (config.inertial_window_keep_gait_speed && applied_gait) {
           // The window takes the direction, the gait keeps the speed: a stalled registration
           // would otherwise drive the window, and with it the prediction, to standstill.
@@ -2364,6 +2422,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         }
         imu_bias.accelerometer = _inertial_window.accelerometer_bias();
         imu_bias.gyroscope = _inertial_window.gyroscope_bias();
+        }
       }
     }
     imu_state = lidar_state; // correct the drift in imu integration

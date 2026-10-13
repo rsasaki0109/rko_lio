@@ -264,6 +264,11 @@ public:
     double inertial_window_gravity_prior_weight = 5.0;
     double inertial_window_gravity_max_tilt_deg = 0.0;
     bool inertial_window_keep_gait_speed = false;
+    double inertial_window_max_mean_cost = 0.0;
+    double inertial_window_robust_cost_scale = 0.0;
+    double inertial_window_attitude_prior_sigma = 0.0;
+    double inertial_window_attitude_gyro_sigma = 0.001;
+    double inertial_window_weak_direction_ratio = 0.0;
 
     /** Do not register a scan that follows a LiDAR gap longer than this (s); take the IMU
      *  prediction as its pose and keep it out of the map (0 disables). The first scan
@@ -777,6 +782,8 @@ public:
 
   /** Inertial window solves (inertial_window). */
   std::size_t inertial_window_solve_count = 0;
+  std::size_t inertial_window_gate_count = 0;
+  std::size_t inertial_window_weak_direction_count = 0;
   const InertialWindow& inertial_window() const { return _inertial_window; }
 
 
@@ -876,6 +883,7 @@ public:
   /** Scans registered again without the bump terms (bump_image_max_rotation_correction_deg). */
   std::size_t bump_rotation_fallback_count = 0;
   InertialWindow _inertial_window;
+  std::optional<Eigen::Vector3d> _window_last_good_gravity;
   /** World gravity for the IMU propagation (the window's estimate with inertial_window_estimate_gravity). */
   Eigen::Vector3d _gravity_world = gravity();
   GaitSpeedEstimator _gait;
