@@ -607,6 +607,10 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "inertial_window_estimate_gravity", lio_config.inertial_window_estimate_gravity);
   lio_config.inertial_window_gravity_prior_weight = node->declare_parameter<double>(
       "inertial_window_gravity_prior_weight", lio_config.inertial_window_gravity_prior_weight);
+  lio_config.inertial_window_gravity_max_tilt_deg = node->declare_parameter<double>(
+      "inertial_window_gravity_max_tilt_deg", lio_config.inertial_window_gravity_max_tilt_deg);
+  lio_config.inertial_window_keep_gait_speed = node->declare_parameter<bool>(
+      "inertial_window_keep_gait_speed", lio_config.inertial_window_keep_gait_speed);
   lio_config.skip_registration_after_gap_sec = node->declare_parameter<double>(
       "skip_registration_after_gap_sec", lio_config.skip_registration_after_gap_sec);
   lio_config.icp_keypoint_voxel_multiplier =

@@ -604,6 +604,7 @@ LIO::LIO(const Config& config_)
     window_config.gyroscope_bias_prior_weight = config.inertial_window_gyroscope_bias_prior_weight;
     window_config.estimate_gravity = config.inertial_window_estimate_gravity;
     window_config.gravity_prior_weight = config.inertial_window_gravity_prior_weight;
+    window_config.gravity_max_tilt_deg = config.inertial_window_gravity_max_tilt_deg;
     _inertial_window = InertialWindow(window_config);
   }
   // Pin TBB's worker pool to config.max_num_threads (0 = leave at TBB default).
@@ -2144,6 +2145,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
             optimized_pose.so3().inverse() * ((optimized_pose.translation() - past->second.translation()) / span);
       }
     }
+    // The gait speed applied to this scan, kept so the inertial window cannot override it.
+    std::optional<std::pair<Eigen::Vector3d, double>> applied_gait;
     if (config.gait_speed_prior) {
       bool applied = false;
       const double now = to_seconds(current_lidar_time);
@@ -2218,6 +2221,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           lidar_state.velocity = apply_gait_speed(lidar_state.velocity, *_gait_direction_body,
                                                   *cadence * *step_length, config.gait_sets_speed);
           if (_gait.step_length()) _gait_last_speed = *cadence * *step_length;
+          applied_gait = std::make_pair(*_gait_direction_body, *cadence * *step_length);
           ++gait_speed_applied_count;
           applied = true;
         }
@@ -2352,6 +2356,12 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           _gravity_world = _inertial_window.gravity();
         }
         lidar_state.velocity = lidar_state.pose.so3().inverse() * _inertial_window.latest_velocity();
+        if (config.inertial_window_keep_gait_speed && applied_gait) {
+          // The window takes the direction, the gait keeps the speed: a stalled registration
+          // would otherwise drive the window, and with it the prediction, to standstill.
+          lidar_state.velocity = apply_gait_speed(lidar_state.velocity, applied_gait->first, applied_gait->second,
+                                                  config.gait_sets_speed);
+        }
         imu_bias.accelerometer = _inertial_window.accelerometer_bias();
         imu_bias.gyroscope = _inertial_window.gyroscope_bias();
       }
