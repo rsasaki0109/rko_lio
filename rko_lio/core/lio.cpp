@@ -2204,9 +2204,30 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           step_length = config.gait_default_step_length;
         }
         if (step_length && _gait_direction_body) {
-          lidar_state.velocity = apply_gait_speed(lidar_state.velocity, *_gait_direction_body,
-                                                  *cadence * *step_length, config.gait_sets_speed);
-          if (_gait.step_length()) _gait_last_speed = *cadence * *step_length;
+          double gait_speed = *cadence * *step_length;
+          if (config.gait_imu_lag_compensation && _gait.step_length() && !_gait_velocity_history.empty()) {
+            const double lag = 0.5 * config.gait_window_sec;
+            auto it = _gait_velocity_history.begin();
+            while (std::next(it) != _gait_velocity_history.end() && now - std::get<0>(*std::next(it)) >= lag) {
+              ++it;
+            }
+            const double history_span = now - std::get<0>(_gait_velocity_history.front());
+            if (now - std::get<0>(*it) >= 0.5 * lag && history_span > 2.0 * lag) {
+              Eigen::Vector3d mean_acceleration = scan_velocity_change;
+              for (const auto& entry : _gait_velocity_history) mean_acceleration += std::get<2>(entry);
+              mean_acceleration /= history_span;
+              const double since = now - std::get<0>(*it);
+              Eigen::Vector3d velocity = gait_speed * (std::get<3>(*it) * *_gait_direction_body);
+              for (auto jt = std::next(it); jt != _gait_velocity_history.end(); ++jt) velocity += std::get<2>(*jt);
+              velocity += scan_velocity_change - mean_acceleration * since;
+              const Eigen::Vector3d u_world = lidar_state.pose.so3() * *_gait_direction_body;
+              gait_speed = std::clamp(velocity.dot(u_world), 0.0, 2.0 * gait_speed);
+              ++gait_lag_compensated_count;
+            }
+          }
+          lidar_state.velocity = apply_gait_speed(lidar_state.velocity, *_gait_direction_body, gait_speed,
+                                                  config.gait_sets_speed);
+          if (_gait.step_length()) _gait_last_speed = gait_speed;
           ++gait_speed_applied_count;
           applied = true;
         }

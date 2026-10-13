@@ -188,6 +188,11 @@ public:
     /** Standard deviation (m/s^2) of the specific force magnitude over the last second below
      *  which a walker without a cadence is standing. */
     double gait_standing_accel_std = 0.3;
+    /** EXPERIMENT: the cadence comes from a window of gait_window_sec, so cadence times step
+     *  is the speed half a window ago. Carry it to now with the IMU's velocity change since
+     *  then (the history's mean acceleration removed), in the world frame, and take the part
+     *  along the travel, within [0, 2 x the gait speed]. */
+    bool gait_imu_lag_compensation = false;
     /** Initial damping as a fraction of the largest diagonal entry of the system. */
     double icp_lm_initial_lambda_factor = 1e-9;
     /** Damping increases tried per iteration before giving up on a step. */
@@ -881,6 +886,7 @@ public:
    *  them stood. */
   std::size_t gait_hold_count = 0;
   std::size_t gait_standing_count = 0;
+  std::size_t gait_lag_compensated_count = 0;
   ImuPreintegration _window_preintegration;
   Eigen::Vector3d _window_last_angular_velocity = Eigen::Vector3d::Zero();
   Eigen::Vector3d _window_last_specific_force = Eigen::Vector3d::Zero();
