@@ -256,6 +256,12 @@ public:
     /** Weights (1 / sigma) of the priors keeping the biases near their last estimates. */
     double inertial_window_accelerometer_bias_prior_weight = 1.0;
     double inertial_window_gyroscope_bias_prior_weight = 10.0;
+    /** Also solve the direction of gravity in the window (BIEVR-LIO style) and propagate
+     *  the IMU with it. A tilt of the registered attitude then no longer leaks into the
+     *  accelerometer bias. */
+    bool inertial_window_estimate_gravity = false;
+    /** Weight (1 / sigma) of the prior keeping the gravity direction near its last estimate. */
+    double inertial_window_gravity_prior_weight = 5.0;
 
     /** Do not register a scan that follows a LiDAR gap longer than this (s); take the IMU
      *  prediction as its pose and keep it out of the map (0 disables). The first scan
@@ -868,6 +874,8 @@ public:
   /** Scans registered again without the bump terms (bump_image_max_rotation_correction_deg). */
   std::size_t bump_rotation_fallback_count = 0;
   InertialWindow _inertial_window;
+  /** World gravity for the IMU propagation (the window's estimate with inertial_window_estimate_gravity). */
+  Eigen::Vector3d _gravity_world = gravity();
   GaitSpeedEstimator _gait;
   std::optional<Eigen::Vector3d> _gait_direction_body;
   bool _gait_prediction_active = false;

@@ -110,6 +110,13 @@ public:
     double max_accelerometer_bias = 1.0;
     double max_gyroscope_bias = 0.1;
     int iterations = 2;
+    /** Also solve the direction of gravity in the world frame (two unknowns), as BIEVR-LIO
+     *  does. A tilt of the registered attitude then moves the gravity estimate instead of
+     *  leaking into the accelerometer bias: 2 deg of tilt is 0.34 m/s^2 of false bias. */
+    bool estimate_gravity = false;
+    /** Weight (1 / sigma) of the prior pulling the gravity direction (unit vector) to its
+     *  previous estimate. */
+    double gravity_prior_weight = 5.0;
   };
 
   struct State {
@@ -146,19 +153,35 @@ public:
     }
   }
 
-  /** Solve; false when there are too few intervals (the estimates are unchanged). */
+  /** Solve; false when there are too few intervals (the estimates are unchanged).
+   *  ``gravity`` is the world gravity; with ``estimate_gravity`` it only seeds the first
+   *  solve, and the window keeps its own estimate (see gravity()). */
   bool solve(const Eigen::Vector3d& gravity) {
     const std::size_t m = _intervals.size();
     if (m < std::max<std::size_t>(1, _config.min_intervals)) {
       return false;
     }
-    // Unknowns: velocities of states 1..m (state 0 is held), accelerometer bias, gyro bias.
-    const int n = static_cast<int>(3 * m + 6);
+    if (!_config.estimate_gravity || !_gravity_seeded) {
+      _gravity = gravity;
+      _gravity_seeded = true;
+    }
+    // Unknowns: velocities of states 1..m (state 0 is held), accelerometer bias, gyro bias
+    // and, with estimate_gravity, two tangent coordinates of the gravity direction.
+    const bool estimate_gravity = _config.estimate_gravity;
+    const int n = static_cast<int>(3 * m + 6) + (estimate_gravity ? 2 : 0);
     const int ba = static_cast<int>(3 * m);
     const int bg = ba + 3;
+    const int gi = bg + 3;
     const Eigen::Vector3d accelerometer_prior = _accelerometer_bias;
     const Eigen::Vector3d gyroscope_prior = _gyroscope_bias;
+    const double gravity_magnitude = _gravity.norm();
+    const Eigen::Vector3d gravity_prior = _gravity / gravity_magnitude;
     for (int iteration = 0; iteration < std::max(1, _config.iterations); ++iteration) {
+      // Tangent basis of the gravity direction at the current estimate.
+      const Eigen::Vector3d direction = _gravity / gravity_magnitude;
+      const Eigen::Vector3d e1 = direction.unitOrthogonal();
+      Eigen::Matrix<double, 3, 2> tangent;
+      tangent << e1, direction.cross(e1);
       Eigen::MatrixXd H = Eigen::MatrixXd::Zero(n, n);
       Eigen::VectorXd b = Eigen::VectorXd::Zero(n);
       for (std::size_t k = 0; k < m; ++k) {
@@ -179,16 +202,19 @@ public:
         const Sophus::SO3d corrected = pre.dR * Sophus::SO3d::exp(pre.dR_dbg * dbg);
         r.segment<3>(0) = (corrected.inverse() * si.pose.so3().inverse() * sj.pose.so3()).log();
         J_bg.block<3, 3>(0, 0) = -pre.dR_dbg;
-        r.segment<3>(3) = Ri_T * (sj.velocity - si.velocity - gravity * dt) - (pre.dv + pre.dv_dba * dba + pre.dv_dbg * dbg);
+        r.segment<3>(3) = Ri_T * (sj.velocity - si.velocity - _gravity * dt) - (pre.dv + pre.dv_dba * dba + pre.dv_dbg * dbg);
         J_vi.block<3, 3>(3, 0) = -Ri_T;
         J_vj.block<3, 3>(3, 0) = Ri_T;
         J_ba.block<3, 3>(3, 0) = -pre.dv_dba;
         J_bg.block<3, 3>(3, 0) = -pre.dv_dbg;
-        r.segment<3>(6) = Ri_T * (sj.pose.translation() - si.pose.translation() - si.velocity * dt - 0.5 * gravity * dt * dt) -
+        r.segment<3>(6) = Ri_T * (sj.pose.translation() - si.pose.translation() - si.velocity * dt - 0.5 * _gravity * dt * dt) -
                           (pre.dp + pre.dp_dba * dba + pre.dp_dbg * dbg);
         J_vi.block<3, 3>(6, 0) = -Ri_T * dt;
         J_ba.block<3, 3>(6, 0) = -pre.dp_dba;
         J_bg.block<3, 3>(6, 0) = -pre.dp_dbg;
+        Eigen::Matrix<double, 9, 2> J_g = Eigen::Matrix<double, 9, 2>::Zero();
+        J_g.block<3, 2>(3, 0) = -Ri_T * dt * gravity_magnitude * tangent;
+        J_g.block<3, 2>(6, 0) = -0.5 * Ri_T * dt * dt * gravity_magnitude * tangent;
         Eigen::Matrix<double, 9, 1> w;
         w << Eigen::Vector3d::Constant(_config.rotation_weight), Eigen::Vector3d::Constant(_config.velocity_weight),
             Eigen::Vector3d::Constant(_config.position_weight);
@@ -197,6 +223,7 @@ public:
         J_vj = w.asDiagonal() * J_vj;
         J_ba = w.asDiagonal() * J_ba;
         J_bg = w.asDiagonal() * J_bg;
+        J_g = w.asDiagonal() * J_g;
         // Scatter into the normal equations. Column offsets; -1 for the held state 0.
         const int ci = k == 0 ? -1 : static_cast<int>(3 * (k - 1));
         const int cj = static_cast<int>(3 * k);
@@ -209,6 +236,15 @@ public:
             if (col_b < 0) continue;
             H.block<3, 3>(col_a, col_b) += J_a->transpose() * *J_b;
           }
+          if (estimate_gravity) {
+            const Eigen::Matrix<double, 3, 2> cross = J_a->transpose() * J_g;
+            H.block<3, 2>(col_a, gi) += cross;
+            H.block<2, 3>(gi, col_a) += cross.transpose();
+          }
+        }
+        if (estimate_gravity) {
+          b.segment<2>(gi) += J_g.transpose() * r;
+          H.block<2, 2>(gi, gi) += J_g.transpose() * J_g;
         }
       }
       // Bias priors.
@@ -218,6 +254,13 @@ public:
       b.segment<3>(ba) += wa * wa * (_accelerometer_bias - accelerometer_prior);
       H.block<3, 3>(bg, bg) += wg * wg * Eigen::Matrix3d::Identity();
       b.segment<3>(bg) += wg * wg * (_gyroscope_bias - gyroscope_prior);
+      if (estimate_gravity) {
+        // Prior on the unit direction, as BIEVR-LIO's: w * (direction - prior).
+        const double wd = _config.gravity_prior_weight;
+        const Eigen::Matrix<double, 3, 2> J_prior = wd * tangent;
+        H.block<2, 2>(gi, gi) += J_prior.transpose() * J_prior;
+        b.segment<2>(gi) += J_prior.transpose() * (wd * (direction - gravity_prior));
+      }
       const Eigen::VectorXd dx = H.ldlt().solve(-b);
       if (!dx.allFinite()) {
         return false;
@@ -227,6 +270,9 @@ public:
       }
       _accelerometer_bias += dx.segment<3>(ba);
       _gyroscope_bias += dx.segment<3>(bg);
+      if (estimate_gravity) {
+        _gravity = gravity_magnitude * (direction + tangent * dx.segment<2>(gi)).normalized();
+      }
       clamp(_accelerometer_bias, _config.max_accelerometer_bias);
       clamp(_gyroscope_bias, _config.max_gyroscope_bias);
     }
@@ -238,6 +284,8 @@ public:
   Eigen::Vector3d latest_velocity() const { return _states.empty() ? Eigen::Vector3d::Zero() : _states.back().velocity; }
   const Eigen::Vector3d& accelerometer_bias() const { return _accelerometer_bias; }
   const Eigen::Vector3d& gyroscope_bias() const { return _gyroscope_bias; }
+  /** The world gravity the last solve used (estimated with ``estimate_gravity``). */
+  const Eigen::Vector3d& gravity() const { return _gravity; }
   std::size_t solves() const { return _solves; }
 
 private:
@@ -253,6 +301,8 @@ private:
   Eigen::Vector3d _accelerometer_bias = Eigen::Vector3d::Zero();
   Eigen::Vector3d _gyroscope_bias = Eigen::Vector3d::Zero();
   std::size_t _solves = 0;
+  Eigen::Vector3d _gravity = Eigen::Vector3d(0.0, 0.0, -9.81);
+  bool _gravity_seeded = false;
 };
 
 } // namespace rko_lio::core

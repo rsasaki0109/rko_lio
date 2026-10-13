@@ -602,6 +602,8 @@ LIO::LIO(const Config& config_)
     window_config.position_weight = config.inertial_window_position_weight;
     window_config.accelerometer_bias_prior_weight = config.inertial_window_accelerometer_bias_prior_weight;
     window_config.gyroscope_bias_prior_weight = config.inertial_window_gyroscope_bias_prior_weight;
+    window_config.estimate_gravity = config.inertial_window_estimate_gravity;
+    window_config.gravity_prior_weight = config.inertial_window_gravity_prior_weight;
     _inertial_window = InertialWindow(window_config);
   }
   // Pin TBB's worker pool to config.max_num_threads (0 = leave at TBB default).
@@ -885,7 +887,7 @@ void LIO::add_imu_measurement(const ImuControl& base_imu) {
   const Eigen::Vector3d unbiased_ang_vel = base_imu.angular_velocity - imu_bias.gyroscope;
   const Eigen::Vector3d unbiased_accel = base_imu.acceleration - imu_bias.accelerometer;
 
-  const Eigen::Vector3d local_gravity = imu_state.pose.so3().inverse() * gravity();
+  const Eigen::Vector3d local_gravity = imu_state.pose.so3().inverse() * _gravity_world;
   const Eigen::Vector3d compensated_accel = unbiased_accel + local_gravity;
 
   gyro_deskew_history.add(imu_state.time, base_imu.time, unbiased_ang_vel);
@@ -2344,8 +2346,11 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       _inertial_window.add(to_seconds(current_lidar_time), lidar_state.pose,
                            lidar_state.pose.so3() * lidar_state.velocity, _window_preintegration);
       inertial_window_added = true;
-      if (_inertial_window.solve(gravity())) {
+      if (_inertial_window.solve(_gravity_world)) {
         ++inertial_window_solve_count;
+        if (config.inertial_window_estimate_gravity) {
+          _gravity_world = _inertial_window.gravity();
+        }
         lidar_state.velocity = lidar_state.pose.so3().inverse() * _inertial_window.latest_velocity();
         imu_bias.accelerometer = _inertial_window.accelerometer_bias();
         imu_bias.gyroscope = _inertial_window.gyroscope_bias();

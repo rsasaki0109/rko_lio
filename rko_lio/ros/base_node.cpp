@@ -603,6 +603,10 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "inertial_window_accelerometer_bias_prior_weight", lio_config.inertial_window_accelerometer_bias_prior_weight);
   lio_config.inertial_window_gyroscope_bias_prior_weight = node->declare_parameter<double>(
       "inertial_window_gyroscope_bias_prior_weight", lio_config.inertial_window_gyroscope_bias_prior_weight);
+  lio_config.inertial_window_estimate_gravity = node->declare_parameter<bool>(
+      "inertial_window_estimate_gravity", lio_config.inertial_window_estimate_gravity);
+  lio_config.inertial_window_gravity_prior_weight = node->declare_parameter<double>(
+      "inertial_window_gravity_prior_weight", lio_config.inertial_window_gravity_prior_weight);
   lio_config.skip_registration_after_gap_sec = node->declare_parameter<double>(
       "skip_registration_after_gap_sec", lio_config.skip_registration_after_gap_sec);
   lio_config.icp_keypoint_voxel_multiplier =
@@ -1849,7 +1853,9 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
           {"final_accelerometer_bias_mps2",
            {window.accelerometer_bias()(0), window.accelerometer_bias()(1), window.accelerometer_bias()(2)}},
           {"final_gyroscope_bias_radps",
-           {window.gyroscope_bias()(0), window.gyroscope_bias()(1), window.gyroscope_bias()(2)}}};
+           {window.gyroscope_bias()(0), window.gyroscope_bias()(1), window.gyroscope_bias()(2)}},
+          {"final_gravity_tilt_deg",
+           std::acos(std::clamp(-window.gravity().normalized().z(), -1.0, 1.0)) * 180.0 / M_PI}};
       const std::filesystem::path window_file = output_dir / "inertial_window_summary.json";
       if (std::ofstream file(window_file); file.is_open()) {
         file << window_summary.dump(4) << "\n";
