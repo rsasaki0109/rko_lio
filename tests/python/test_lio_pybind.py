@@ -37,6 +37,14 @@ def test_lioconfig_voxel_compatibility_round_trips_to_pybind():
     assert config.to_dict()["icp_keypoint_voxel_multiplier"] == pytest.approx(1.25)
 
 
+def test_lioconfig_samplewise_gyro_deskew_round_trips_to_pybind():
+    assert LIOConfig().samplewise_gyro_deskew is True
+
+    native = LIOConfig(samplewise_gyro_deskew=False).to_pybind()
+
+    assert native.samplewise_gyro_deskew is False
+
+
 def test_lio_init_with_config():
     config = LIOConfig()
     lio_obj = LIO(config)

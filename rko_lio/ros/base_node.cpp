@@ -289,6 +289,7 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["relocalization_min_pose_separation"] = nlohmann_json_t.relocalization_min_pose_separation;
   nlohmann_json_j["relocalization_max_iterations"] = nlohmann_json_t.relocalization_max_iterations;
   nlohmann_json_j["legacy_voxel_downsample"] = nlohmann_json_t.legacy_voxel_downsample;
+  nlohmann_json_j["samplewise_gyro_deskew"] = nlohmann_json_t.samplewise_gyro_deskew;
 }
 template <typename BasicJsonType,
          nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0>
@@ -454,6 +455,8 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
   nlohmann_json_j.at("relocalization_max_iterations").get_to(nlohmann_json_t.relocalization_max_iterations);
   nlohmann_json_t.legacy_voxel_downsample =
       nlohmann_json_j.value("legacy_voxel_downsample", nlohmann_json_t.legacy_voxel_downsample);
+  nlohmann_json_t.samplewise_gyro_deskew =
+      nlohmann_json_j.value("samplewise_gyro_deskew", nlohmann_json_t.samplewise_gyro_deskew);
 }
 } // namespace rko_lio::core
 
@@ -549,6 +552,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   lio_config.double_downsample = node->declare_parameter<bool>("double_downsample", lio_config.double_downsample);
   lio_config.legacy_voxel_downsample =
       node->declare_parameter<bool>("legacy_voxel_downsample", lio_config.legacy_voxel_downsample);
+  lio_config.samplewise_gyro_deskew =
+      node->declare_parameter<bool>("samplewise_gyro_deskew", lio_config.samplewise_gyro_deskew);
   lio_config.min_beta = node->declare_parameter<double>("min_beta", lio_config.min_beta);
   lio_config.gait_speed_prior = node->declare_parameter<bool>("gait_speed_prior", lio_config.gait_speed_prior);
   lio_config.gait_window_sec = node->declare_parameter<double>("gait_window_sec", lio_config.gait_window_sec);

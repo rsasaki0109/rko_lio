@@ -204,6 +204,10 @@ public:
     /** Preserve the complete pre-v0.3 voxel sampling pipeline. */
     bool legacy_voxel_downsample = false;
 
+    /** Deskew rotation from the integrated gyro samples. When false, the rotation uses the
+     * interval's mean angular velocity, as before rko_lio #14. */
+    bool samplewise_gyro_deskew = true;
+
     /** Voxel-size multiplier used only for ICP keypoints in double-downsample mode. */
     double icp_keypoint_voxel_multiplier = 1.5;
 

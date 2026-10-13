@@ -25,6 +25,7 @@
 #include "synthetic_clouds.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <random>
@@ -400,5 +401,43 @@ TEST_CASE("Scan gap re-anchor keeps the motion the IMU propagated", "[register_s
     REQUIRE(lio.register_scan(cloud, instant_timestamps(cloud.size(), gap_end)).empty());
     REQUIRE_THAT(lio.lidar_state.pose.translation().x(), WithinAbs(0.5 * accel * imu_span * imu_span, 1e-6));
     REQUIRE(lio.lidar_state.pose.so3().log().norm() < 1e-9);
+  }
+}
+
+TEST_CASE("samplewise_gyro_deskew only matters when the rate changes within an interval", "[register_scan]") {
+  const auto cloud = make_hollow_cube();
+  // 200 Hz IMU between the scans; the yaw rate is early_rate, then late_rate.
+  auto deskewed_second_scan = [&](bool samplewise, double early_rate, double late_rate) {
+    LIO::Config config;
+    config.samplewise_gyro_deskew = samplewise;
+    LIO lio(config);
+    lio.register_scan(cloud, linspace_timestamps(cloud.size(), 0.0, FIRST_SCAN_END));
+    feed_imu(lio, FIRST_SCAN_END + 0.005, FIRST_SCAN_END + 0.5, 100, {0.0, 0.0, GRAVITY_MAG}, {0.0, 0.0, early_rate});
+    feed_imu(lio, FIRST_SCAN_END + 0.505, SECOND_SCAN_END, 100, {0.0, 0.0, GRAVITY_MAG}, {0.0, 0.0, late_rate});
+    return lio.register_scan(cloud, linspace_timestamps(cloud.size(), SECOND_SCAN_END - 0.1, SECOND_SCAN_END));
+  };
+  auto max_point_difference = [](const Vector3dVector& a, const Vector3dVector& b) {
+    REQUIRE(a.size() == b.size());
+    double max_difference = 0.0;
+    for (size_t i = 0; i < a.size(); ++i) {
+      max_difference = std::max(max_difference, (a[i] - b[i]).norm());
+    }
+    return max_difference;
+  };
+
+  REQUIRE(LIO::Config{}.samplewise_gyro_deskew);
+
+  SECTION("constant rate: the integrated samples equal the mean rate") {
+    const auto samplewise = deskewed_second_scan(true, 0.5, 0.5);
+    const auto mean_rate = deskewed_second_scan(false, 0.5, 0.5);
+    REQUIRE_FALSE(samplewise.empty());
+    REQUIRE(max_point_difference(samplewise, mean_rate) < 1e-6);
+  }
+
+  SECTION("a rate step: only the samplewise model follows it") {
+    const auto samplewise = deskewed_second_scan(true, 0.0, 1.0);
+    const auto mean_rate = deskewed_second_scan(false, 0.0, 1.0);
+    REQUIRE_FALSE(samplewise.empty());
+    REQUIRE(max_point_difference(samplewise, mean_rate) > 1e-3);
   }
 }
