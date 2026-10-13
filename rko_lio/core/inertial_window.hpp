@@ -34,6 +34,7 @@
 #include <cmath>
 #include <cstddef>
 #include <deque>
+#include <vector>
 #include <utility>
 
 namespace rko_lio::core {
@@ -121,6 +122,16 @@ public:
      *  0 leaves it free. Keeps a window fitted to bad registrations from tilting the
      *  propagation away. */
     double gravity_max_tilt_deg = 0.0;
+    /** Cauchy scale (in weighted squared-residual units) of a robust kernel on each
+     *  interval; 0 is plain least squares. An interval whose registered poses disagree
+     *  with the IMU is down-weighted instead of fitted. */
+    double robust_cost_scale = 0.0;
+    /** Attitude smoothing: sigma (rad) of each registered attitude about the gyro chain; 0
+     *  holds the registered attitudes. A registration whose rotation jitters from scan to
+     *  scan otherwise projects gravity into the velocity residuals (1 deg is 0.17 m/s^2). */
+    double attitude_prior_sigma = 0.0;
+    /** Sigma (rad) of the gyro rotation over one interval in the attitude smoothing. */
+    double attitude_gyro_sigma = 0.001;
   };
 
   struct State {
@@ -187,13 +198,22 @@ public:
       const Eigen::Vector3d e1 = direction.unitOrthogonal();
       Eigen::Matrix<double, 3, 2> tangent;
       tangent << e1, direction.cross(e1);
+      std::vector<Sophus::SO3d> attitudes(m + 1);
+      for (std::size_t k = 0; k <= m; ++k) {
+        attitudes[k] = _states[k].pose.so3();
+      }
+      if (_config.attitude_prior_sigma > 0.0) {
+        smooth_attitudes(attitudes);
+      }
       Eigen::MatrixXd H = Eigen::MatrixXd::Zero(n, n);
       Eigen::VectorXd b = Eigen::VectorXd::Zero(n);
+      double cost_sum = 0.0;
+      double robust_weight_sum = 0.0;
       for (std::size_t k = 0; k < m; ++k) {
         const ImuPreintegration& pre = _intervals[k];
         const State& si = _states[k];
         const State& sj = _states[k + 1];
-        const Eigen::Matrix3d Ri_T = si.pose.so3().inverse().matrix();
+        const Eigen::Matrix3d Ri_T = attitudes[k].inverse().matrix();
         const Eigen::Vector3d dba = _accelerometer_bias - pre.accelerometer_bias;
         const Eigen::Vector3d dbg = _gyroscope_bias - pre.gyroscope_bias;
         const double dt = pre.dt;
@@ -205,7 +225,7 @@ public:
         Eigen::Matrix<double, 9, 3> J_ba = Eigen::Matrix<double, 9, 3>::Zero();
         Eigen::Matrix<double, 9, 3> J_bg = Eigen::Matrix<double, 9, 3>::Zero();
         const Sophus::SO3d corrected = pre.dR * Sophus::SO3d::exp(pre.dR_dbg * dbg);
-        r.segment<3>(0) = (corrected.inverse() * si.pose.so3().inverse() * sj.pose.so3()).log();
+        r.segment<3>(0) = (corrected.inverse() * attitudes[k].inverse() * attitudes[k + 1]).log();
         J_bg.block<3, 3>(0, 0) = -pre.dR_dbg;
         r.segment<3>(3) = Ri_T * (sj.velocity - si.velocity - _gravity * dt) - (pre.dv + pre.dv_dba * dba + pre.dv_dbg * dbg);
         J_vi.block<3, 3>(3, 0) = -Ri_T;
@@ -224,11 +244,20 @@ public:
         w << Eigen::Vector3d::Constant(_config.rotation_weight), Eigen::Vector3d::Constant(_config.velocity_weight),
             Eigen::Vector3d::Constant(_config.position_weight);
         r = w.asDiagonal() * r;
-        J_vi = w.asDiagonal() * J_vi;
-        J_vj = w.asDiagonal() * J_vj;
-        J_ba = w.asDiagonal() * J_ba;
-        J_bg = w.asDiagonal() * J_bg;
-        J_g = w.asDiagonal() * J_g;
+        const double interval_cost = r.squaredNorm();
+        cost_sum += interval_cost;
+        if (k + 1 == m) _last_newest_cost = interval_cost;
+        // Cauchy weight (iteratively reweighted least squares).
+        const double robust_weight =
+            _config.robust_cost_scale > 0.0 ? 1.0 / (1.0 + interval_cost / _config.robust_cost_scale) : 1.0;
+        robust_weight_sum += robust_weight;
+        const Eigen::Matrix<double, 9, 1> sw = std::sqrt(robust_weight) * w;
+        r *= std::sqrt(robust_weight);
+        J_vi = sw.asDiagonal() * J_vi;
+        J_vj = sw.asDiagonal() * J_vj;
+        J_ba = sw.asDiagonal() * J_ba;
+        J_bg = sw.asDiagonal() * J_bg;
+        J_g = sw.asDiagonal() * J_g;
         // Scatter into the normal equations. Column offsets; -1 for the held state 0.
         const int ci = k == 0 ? -1 : static_cast<int>(3 * (k - 1));
         const int cj = static_cast<int>(3 * k);
@@ -252,6 +281,8 @@ public:
           H.block<2, 2>(gi, gi) += J_g.transpose() * J_g;
         }
       }
+      _last_mean_cost = cost_sum / static_cast<double>(m);
+      _last_mean_robust_weight = robust_weight_sum / static_cast<double>(m);
       // Bias priors.
       const double wa = _config.accelerometer_bias_prior_weight;
       const double wg = _config.gyroscope_bias_prior_weight;
@@ -292,6 +323,12 @@ public:
   /** The world gravity the last solve used (estimated with ``estimate_gravity``). */
   const Eigen::Vector3d& gravity() const { return _gravity; }
   std::size_t solves() const { return _solves; }
+  /** Weighted residual cost of the newest interval and the window's mean, at the start of the
+   *  last iteration of the last solve. */
+  double last_newest_cost() const { return _last_newest_cost; }
+  double last_mean_cost() const { return _last_mean_cost; }
+  /** Mean robust weight of the intervals in the last solve (1 without the kernel). */
+  double last_mean_robust_weight() const { return _last_mean_robust_weight; }
 
 private:
   // Rotate ``direction`` back onto the cone of gravity_max_tilt_deg around the reference.
@@ -303,6 +340,48 @@ private:
     }
     const Eigen::Vector3d axis = _gravity_reference.cross(direction).normalized();
     return Eigen::AngleAxisd(limit, axis) * _gravity_reference;
+  }
+
+  /** Pull the registered attitudes onto the gyro chain (current gyro bias): minimise
+   *  sum |Log(R_reg^T R)|^2 / sp^2 + sum |Log(dR^T R_i^T R_j)|^2 / sg^2 (Gauss-Newton). */
+  void smooth_attitudes(std::vector<Sophus::SO3d>& attitudes) const {
+    const std::size_t m = _intervals.size();
+    const int n = static_cast<int>(3 * (m + 1));
+    const double wp2 = 1.0 / (_config.attitude_prior_sigma * _config.attitude_prior_sigma);
+    const double wg2 = 1.0 / (_config.attitude_gyro_sigma * _config.attitude_gyro_sigma);
+    const Eigen::Matrix3d I = Eigen::Matrix3d::Identity();
+    for (int iteration = 0; iteration < 2; ++iteration) {
+      Eigen::MatrixXd H = Eigen::MatrixXd::Zero(n, n);
+      Eigen::VectorXd b = Eigen::VectorXd::Zero(n);
+      for (std::size_t k = 0; k <= m; ++k) {
+        const int i = static_cast<int>(3 * k);
+        H.block<3, 3>(i, i) += wp2 * I;
+        b.segment<3>(i) += wp2 * (_states[k].pose.so3().inverse() * attitudes[k]).log();
+      }
+      for (std::size_t k = 0; k < m; ++k) {
+        const ImuPreintegration& pre = _intervals[k];
+        const Sophus::SO3d corrected = pre.dR * Sophus::SO3d::exp(pre.dR_dbg * (_gyroscope_bias - pre.gyroscope_bias));
+        const Sophus::SO3d Q = attitudes[k].inverse() * attitudes[k + 1];
+        // r(d_i, d_j) ~ r + d_j - Q^T d_i for R_i <- R_i Exp(d_i), R_j <- R_j Exp(d_j).
+        const Eigen::Vector3d r = (corrected.inverse() * Q).log();
+        const Eigen::Matrix3d Qm = Q.matrix();
+        const int i = static_cast<int>(3 * k);
+        const int j = i + 3;
+        H.block<3, 3>(i, i) += wg2 * I;
+        H.block<3, 3>(j, j) += wg2 * I;
+        H.block<3, 3>(i, j) -= wg2 * Qm;
+        H.block<3, 3>(j, i) -= wg2 * Qm.transpose();
+        b.segment<3>(i) -= wg2 * Qm * r;
+        b.segment<3>(j) += wg2 * r;
+      }
+      const Eigen::VectorXd dx = H.ldlt().solve(-b);
+      if (!dx.allFinite()) {
+        return;
+      }
+      for (std::size_t k = 0; k <= m; ++k) {
+        attitudes[k] = attitudes[k] * Sophus::SO3d::exp(dx.segment<3>(static_cast<int>(3 * k)));
+      }
+    }
   }
 
   static void clamp(Eigen::Vector3d& bias, const double limit) {
@@ -320,6 +399,9 @@ private:
   Eigen::Vector3d _gravity = Eigen::Vector3d(0.0, 0.0, -9.81);
   bool _gravity_seeded = false;
   Eigen::Vector3d _gravity_reference = Eigen::Vector3d(0.0, 0.0, -1.0);
+  double _last_newest_cost = 0.0;
+  double _last_mean_cost = 0.0;
+  double _last_mean_robust_weight = 1.0;
 };
 
 } // namespace rko_lio::core
