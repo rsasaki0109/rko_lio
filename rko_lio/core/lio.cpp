@@ -1020,7 +1020,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   const auto [avg_body_accel, avg_ang_vel] = motion_priors_from_imu(current_lidar_time);
 
   const Nsec earliest = std::min(lidar_state.time, *std::min_element(timestamps.begin(), timestamps.end()));
-  const bool samplewise_rotation = gyro_deskew_history.finish_scan(current_lidar_time) &&
+  const bool samplewise_rotation = config.samplewise_gyro_deskew &&
+                                   gyro_deskew_history.finish_scan(current_lidar_time) &&
                                    gyro_deskew_history.covers(earliest, current_lidar_time);
   const Sophus::SO3d rotation_origin = samplewise_rotation
       ? gyro_deskew_history.at(lidar_state.time).value() : Sophus::SO3d();

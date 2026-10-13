@@ -130,6 +130,8 @@ class LIOConfig:
         Double downsamples the incoming scan before registering. Disabling for sparse LiDARs may improve results.
     legacy_voxel_downsample : bool, default False
         Restore the complete pre-v0.3 voxel sampling pipeline for compatibility.
+    samplewise_gyro_deskew : bool, default True
+        Deskew rotation from the integrated gyro samples. When False, use the interval's mean angular velocity.
     icp_keypoint_voxel_multiplier : float, default 1.5
         ICP keypoint voxel-size multiplier used in double-downsample mode.
     min_beta : float, default 200.0
@@ -149,6 +151,7 @@ class LIOConfig:
     max_expected_jerk: float = 3.0
     double_downsample: bool = True
     legacy_voxel_downsample: bool = False
+    samplewise_gyro_deskew: bool = True
     icp_keypoint_voxel_multiplier: float = 1.5
     min_beta: float = 200.0
 
