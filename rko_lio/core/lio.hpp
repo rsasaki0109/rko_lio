@@ -208,6 +208,11 @@ public:
      * interval's mean angular velocity, as before rko_lio #14. */
     bool samplewise_gyro_deskew = true;
 
+    /** Normalize the measured specific force to g in the orientation regularization's gravity
+     * residual, so only its direction counts. When false, the raw vectors are compared and a
+     * magnitude transient also down-weights the residual, as before rko_lio #14. */
+    bool normalize_gravity_residual = true;
+
     /** Voxel-size multiplier used only for ICP keypoints in double-downsample mode. */
     double icp_keypoint_voxel_multiplier = 1.5;
 

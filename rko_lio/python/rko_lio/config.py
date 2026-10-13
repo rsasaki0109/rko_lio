@@ -132,6 +132,8 @@ class LIOConfig:
         Restore the complete pre-v0.3 voxel sampling pipeline for compatibility.
     samplewise_gyro_deskew : bool, default True
         Deskew rotation from the integrated gyro samples. When False, use the interval's mean angular velocity.
+    normalize_gravity_residual : bool, default True
+        Compare only the direction of the measured specific force in the gravity residual. When False, compare the raw vectors.
     icp_keypoint_voxel_multiplier : float, default 1.5
         ICP keypoint voxel-size multiplier used in double-downsample mode.
     min_beta : float, default 200.0
@@ -152,6 +154,7 @@ class LIOConfig:
     double_downsample: bool = True
     legacy_voxel_downsample: bool = False
     samplewise_gyro_deskew: bool = True
+    normalize_gravity_residual: bool = True
     icp_keypoint_voxel_multiplier: float = 1.5
     min_beta: float = 200.0
 

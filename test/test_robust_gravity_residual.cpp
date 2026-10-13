@@ -71,3 +71,20 @@ TEST(RobustGravityDirection, LeftRotationCostGradientMatchesLinearSystem) {
     EXPECT_NEAR((plus.loss.cost - minus.loss.cost) / 2e-6, gradient[axis], 1e-7);
   }
 }
+
+TEST(RobustGravityVector, ComparesTheRawVectors) {
+  const Eigen::Vector3d up(0, 0, GRAVITY_MAG);
+  const Eigen::Vector3d measured(0.3, -0.2, 1.2 * GRAVITY_MAG);
+  const auto term = robust_gravity_vector(up, measured);
+  EXPECT_TRUE(term.residual.isApprox(up - measured, 1e-12));
+  EXPECT_DOUBLE_EQ(term.loss.weight, robust_gravity_residual((up - measured).squaredNorm()).weight);
+  EXPECT_DOUBLE_EQ(term.loss.cost, robust_gravity_residual((up - measured).squaredNorm()).cost);
+}
+TEST(RobustGravityVector, MagnitudeTransientDownWeightsADirectionConsistentReference) {
+  const Eigen::Vector3d up(0, 0, GRAVITY_MAG);
+  const Eigen::Vector3d tilted(0.3, 0, GRAVITY_MAG);
+  const double direction_weight = robust_gravity_direction(up, 1.5 * tilted).loss.weight;
+  const double vector_weight = robust_gravity_vector(up, 1.5 * tilted).loss.weight;
+  EXPECT_GT(direction_weight, 0.99);
+  EXPECT_LT(vector_weight, 0.6);
+}

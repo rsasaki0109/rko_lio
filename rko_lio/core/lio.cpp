@@ -265,11 +265,14 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
 }
 
 LinearSystem build_orientation_linear_system(const Sophus::SE3d& current_pose,
-                                             const Eigen::Vector3d& local_gravity_estimate) {
+                                             const Eigen::Vector3d& local_gravity_estimate,
+                                             const bool normalize_gravity_residual) {
   const Sophus::SO3d& current_rotation = current_pose.so3();
   const Eigen::Vector3d predicted_gravity =
       current_rotation.inverse() * (-1 * gravity()); // points upwards, same as local_gravity_estimate
-  const auto constraint = robust_gravity_direction(predicted_gravity, local_gravity_estimate);
+  const auto constraint = normalize_gravity_residual
+                              ? robust_gravity_direction(predicted_gravity, local_gravity_estimate)
+                              : robust_gravity_vector(predicted_gravity, local_gravity_estimate);
   const Eigen::Vector3d& residual = constraint.residual;
 
   Eigen::Matrix3_6d J_ori = Eigen::Matrix3_6d::Zero();
@@ -403,7 +406,8 @@ IcpResult icp(const Vector3dVector& frame,
       }
       if (beta >= 0) {
         const auto& [H_ori, b_ori, chi_ori] =
-            build_orientation_linear_system(current_pose, optional_accel_info->local_gravity_estimate);
+            build_orientation_linear_system(current_pose, optional_accel_info->local_gravity_estimate,
+                                            config.normalize_gravity_residual);
         return {H_icp + H_ori / beta, b_icp + b_ori / beta, chi_icp + chi_ori / beta};
       }
       return {H_icp, b_icp, chi_icp};

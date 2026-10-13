@@ -73,6 +73,7 @@ PYBIND11_MODULE(rko_lio_pybind, m) {
       .def_readwrite("double_downsample", &LIO::Config::double_downsample)
       .def_readwrite("legacy_voxel_downsample", &LIO::Config::legacy_voxel_downsample)
       .def_readwrite("samplewise_gyro_deskew", &LIO::Config::samplewise_gyro_deskew)
+      .def_readwrite("normalize_gravity_residual", &LIO::Config::normalize_gravity_residual)
       .def_readwrite("icp_keypoint_voxel_multiplier", &LIO::Config::icp_keypoint_voxel_multiplier)
       .def_readwrite("min_beta", &LIO::Config::min_beta)
       .def_readwrite("degeneracy_aware_solve", &LIO::Config::degeneracy_aware_solve)

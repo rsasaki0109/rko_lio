@@ -45,6 +45,14 @@ def test_lioconfig_samplewise_gyro_deskew_round_trips_to_pybind():
     assert native.samplewise_gyro_deskew is False
 
 
+def test_lioconfig_normalize_gravity_residual_round_trips_to_pybind():
+    assert LIOConfig().normalize_gravity_residual is True
+
+    native = LIOConfig(normalize_gravity_residual=False).to_pybind()
+
+    assert native.normalize_gravity_residual is False
+
+
 def test_lio_init_with_config():
     config = LIOConfig()
     lio_obj = LIO(config)

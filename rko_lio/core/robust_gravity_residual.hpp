@@ -37,4 +37,12 @@ inline GravityDirectionResidual robust_gravity_direction(const Eigen::Vector3d& 
   const Eigen::Vector3d residual = predicted_gravity - (GRAVITY_MAG / magnitude) * measured_gravity;
   return {residual, robust_gravity_residual(residual.squaredNorm())};
 }
+
+// The vector form used before the direction normalization: a specific-force magnitude
+// transient also counts as residual, so it down-weights the reference.
+inline GravityDirectionResidual robust_gravity_vector(const Eigen::Vector3d& predicted_gravity,
+                                                      const Eigen::Vector3d& measured_gravity) {
+  const Eigen::Vector3d residual = predicted_gravity - measured_gravity;
+  return {residual, robust_gravity_residual(residual.squaredNorm())};
+}
 }  // namespace rko_lio::core
