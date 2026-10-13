@@ -24,6 +24,7 @@
 
 #include <rko_lio/core/inertial_window.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 #include <catch2/catch_approx.hpp>
@@ -55,14 +56,15 @@ Sophus::SE3d pose(const double t) { return {attitude(t), position(t)}; }
 // the given bias estimates (as rko corrects samples with imu_bias before integrating).
 ImuPreintegration preintegrate(const double t0, const Eigen::Vector3d& true_accelerometer_bias,
                                const Eigen::Vector3d& true_gyroscope_bias, const Eigen::Vector3d& estimated_accelerometer_bias,
-                               const Eigen::Vector3d& estimated_gyroscope_bias) {
+                               const Eigen::Vector3d& estimated_gyroscope_bias,
+                               const Eigen::Vector3d& gravity = kGravity) {
   ImuPreintegration pre;
   pre.accelerometer_bias = estimated_accelerometer_bias;
   pre.gyroscope_bias = estimated_gyroscope_bias;
   const int steps = static_cast<int>(std::lround(kScan / kImuStep));
   for (int i = 0; i < steps; ++i) {
     const double t = t0 + (i + 0.5) * kImuStep;
-    const Eigen::Vector3d force = attitude(t).inverse() * (acceleration(t) - kGravity) + true_accelerometer_bias;
+    const Eigen::Vector3d force = attitude(t).inverse() * (acceleration(t) - gravity) + true_accelerometer_bias;
     const Eigen::Vector3d gyro = kAngularVelocity + true_gyroscope_bias;
     pre.add(gyro - estimated_gyroscope_bias, force - estimated_accelerometer_bias, kImuStep);
   }
@@ -140,3 +142,40 @@ TEST_CASE("One slipped registration barely moves the window velocity", "[inertia
   // Differencing the last two poses would be off by 3 m/s.
   REQUIRE((window.latest_velocity() - velocity(6.0)).norm() < 0.5);
 }
+
+TEST_CASE("A tilted gravity is estimated instead of leaking into the accelerometer bias", "[inertial_window]") {
+  // The registered world is tilted by 2 deg against the true one, as when the registration
+  // cannot fix the roll in a round tunnel: in it, the true gravity is kGravity turned by 2 deg.
+  const Eigen::Vector3d tilted = Sophus::SO3d::exp(Eigen::Vector3d(0.035, 0.0, 0.0)) * kGravity;
+  const auto run = [&](const bool estimate_gravity) {
+    InertialWindow::Config config;
+    config.estimate_gravity = estimate_gravity;
+    config.accelerometer_bias_prior_weight = 0.01;
+    config.gyroscope_bias_prior_weight = 0.01;
+    InertialWindow window(config);
+    window.set_biases(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+    Eigen::Vector3d accelerometer_estimate = Eigen::Vector3d::Zero();
+    Eigen::Vector3d gyroscope_estimate = Eigen::Vector3d::Zero();
+    window.add(0.0, pose(0.0), velocity(0.0), {});
+    for (int k = 1; k <= 300; ++k) {
+      const double t = k * kScan;
+      const Eigen::Vector3d zero = Eigen::Vector3d::Zero();
+      window.add(t, pose(t), velocity(t),
+                 preintegrate(t - kScan, zero, zero, accelerometer_estimate, gyroscope_estimate, tilted));
+      if (window.solve(kGravity)) {
+        accelerometer_estimate = window.accelerometer_bias();
+        gyroscope_estimate = window.gyroscope_bias();
+      }
+    }
+    return window;
+  };
+  const InertialWindow estimated = run(true);
+  const double tilt_error = std::acos(std::clamp(estimated.gravity().normalized().dot(tilted.normalized()), -1.0, 1.0));
+  REQUIRE(tilt_error < 0.1 * M_PI / 180.0);
+  REQUIRE(estimated.accelerometer_bias().norm() < 0.02);
+  REQUIRE((estimated.latest_velocity() - velocity(30.0)).norm() < 0.02);
+  // Held at the untilted gravity, the window explains the tilt with a false bias.
+  const InertialWindow held = run(false);
+  REQUIRE(held.accelerometer_bias().norm() > 0.1);
+}
+
