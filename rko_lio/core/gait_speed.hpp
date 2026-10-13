@@ -117,6 +117,23 @@ public:
     return best_f;
   }
 
+  /** Standard deviation (m/s^2) of the magnitude over the last ``window_sec`` (0 with fewer
+   *  than two samples). Steps shake a handheld sensor; standing hardly does. */
+  double magnitude_std(const double window_sec) const {
+    if (_samples.empty()) return 0.0;
+    const double start = _samples.back().first - window_sec;
+    double sum = 0.0, sum_squares = 0.0;
+    std::size_t count = 0;
+    for (auto it = _samples.rbegin(); it != _samples.rend() && it->first > start; ++it) {
+      sum += it->second;
+      sum_squares += it->second * it->second;
+      ++count;
+    }
+    if (count < 2) return 0.0;
+    const double mean = sum / static_cast<double>(count);
+    return std::sqrt(std::max(0.0, sum_squares / static_cast<double>(count) - mean * mean));
+  }
+
   /** Whether a step length (m) of registered speed over cadence is plausible. */
   bool plausible_step(const double step) const {
     return step >= _config.min_step_length && step <= _config.max_step_length;
@@ -160,6 +177,21 @@ inline Eigen::Vector3d apply_gait_speed(const Eigen::Vector3d& velocity, const E
                                         const double speed, const bool set_speed) {
   Eigen::Vector3d result = velocity + (speed - velocity.dot(u)) * u;
   if (set_speed && speed > 0.0) result *= speed / result.norm();
+  return result;
+}
+
+/** The velocity of a walker whose cadence has dropped out (turning, stopping) from the
+ *  registered ``velocity``: zero while ``standing``, otherwise never backwards along the
+ *  direction of travel ``u`` and no faster than ``last_speed``, the last gait speed. Without
+ *  steps there is nothing to speed up with, while a registration with no hold along the
+ *  travel (a tunnel) runs away with its own prediction. */
+inline Eigen::Vector3d hold_gait_speed(const Eigen::Vector3d& velocity, const Eigen::Vector3d& u,
+                                       const double last_speed, const bool standing, const bool set_speed) {
+  if (standing) return Eigen::Vector3d::Zero();
+  const double along = std::clamp(velocity.dot(u), 0.0, last_speed);
+  Eigen::Vector3d result = apply_gait_speed(velocity, u, along, set_speed);
+  const double speed = result.norm();
+  if (speed > last_speed) result *= last_speed / speed;
   return result;
 }
 

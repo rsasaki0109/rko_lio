@@ -32,6 +32,7 @@
 
 using rko_lio::core::apply_gait_speed;
 using rko_lio::core::GaitSpeedEstimator;
+using rko_lio::core::hold_gait_speed;
 
 namespace {
 // Specific force of a handheld sensor carried by someone walking at `cadence` steps/s.
@@ -101,4 +102,35 @@ TEST_CASE("Setting the gait speed stops a turning sensor from pumping it", "[gai
   const Eigen::Vector3d slow(0.4, 0.05, 0.0);
   REQUIRE(apply_gait_speed(slow, u, 1.2, false).dot(u) == Catch::Approx(1.2).margin(1e-12));
   REQUIRE(apply_gait_speed(slow, u, 1.2, true).norm() == Catch::Approx(1.2).margin(1e-12));
+}
+
+TEST_CASE("Only the last second tells standing from stepping", "[gait_speed]") {
+  GaitSpeedEstimator gait;
+  walk(gait, 0.0, 3.0, 1.8, 2.0, 0.05);
+  REQUIRE(gait.magnitude_std(1.0) > 1.0);
+  // Then the walker stops: the 4 s cadence window still holds steps, the last second does not.
+  walk(gait, 3.0, 1.5, 1.8, 0.0, 0.05);
+  REQUIRE(gait.magnitude_std(1.0) < 0.15);
+  REQUIRE(GaitSpeedEstimator().magnitude_std(1.0) == 0.0);
+}
+
+TEST_CASE("Without a cadence the walker keeps its bounds", "[gait_speed]") {
+  const Eigen::Vector3d u = Eigen::Vector3d::UnitX();
+  const double last_speed = 1.0;
+  // A walker standing still: no speed, whatever the registration says.
+  REQUIRE(hold_gait_speed(Eigen::Vector3d(7.0, 0.0, 0.0), u, last_speed, true, true).isZero());
+  for (const bool set_speed : {false, true}) {
+    // A registration running away along the tunnel: no faster than the last gait speed.
+    const Eigen::Vector3d runaway = hold_gait_speed(Eigen::Vector3d(7.0, 0.2, 0.0), u, last_speed, false, set_speed);
+    REQUIRE(runaway.norm() == Catch::Approx(last_speed).margin(1e-12));
+    REQUIRE(runaway.dot(u) > 0.9 * last_speed);
+    // Running away backwards: the walker does not walk backwards without turning.
+    const Eigen::Vector3d backwards =
+        hold_gait_speed(Eigen::Vector3d(-5.0, 0.1, 0.0), u, last_speed, false, set_speed);
+    REQUIRE(backwards.dot(u) == Catch::Approx(0.0).margin(1e-12));
+    REQUIRE(backwards.norm() <= last_speed + 1e-12);
+  }
+  // A plausible registration passes unchanged.
+  const Eigen::Vector3d slow(0.6, 0.05, 0.0);
+  REQUIRE((hold_gait_speed(slow, u, last_speed, false, false) - slow).norm() == Catch::Approx(0.0).margin(1e-12));
 }
