@@ -88,6 +88,12 @@ TEST_F(LatestPending, WorkerWaitsForNewFrameImuAndDrainsQueue) {
   stop(node);
   EXPECT_FALSE(node.atomic_node_running);
 }
+TEST_F(LatestPending, ParameterExtrinsicsNeedNoTfListener) {
+  // A Humble TransformListener destroyed right after construction can hang in its destructor.
+  ThreadedNode node("queue_test", options());
+  stop(node);
+  EXPECT_EQ(node.tf_listener, nullptr);
+}
 TEST_F(LatestPending, RejectsNonpositiveCapacity) {
   const auto context = rclcpp::contexts::get_global_default_context();
   const auto callbacks_before = context->get_on_shutdown_callbacks().size();

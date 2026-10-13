@@ -491,7 +491,6 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   // tf
   invert_odom_tf = node->declare_parameter<bool>("invert_odom_tf", invert_odom_tf);
   tf_buffer = std::make_shared<tf2_ros::Buffer>(node->get_clock());
-  tf_listener = std::make_shared<tf2_ros::TransformListener>(*tf_buffer);
   tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(*node);
 
   // publishing
@@ -1063,6 +1062,12 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
 
   // manually, if, define extrinsics
   parse_cli_extrinsics();
+  // Fork addition: listen to TF only when the extrinsics must come from it. On Humble, destroying a
+  // TransformListener shortly after constructing it can hang in its destructor (its spin thread may
+  // start after the cancel and then never stop).
+  if (!extrinsics_set) {
+    tf_listener = std::make_shared<tf2_ros::TransformListener>(*tf_buffer);
+  }
   if (lio->config.visual_fusion.enabled) {
     if (direct_visual_frontend) {
       configure_direct_visual_frontend();
