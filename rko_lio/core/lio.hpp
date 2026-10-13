@@ -181,6 +181,13 @@ public:
     /** Scale the whole velocity to the gait speed, keeping its direction, instead of only
      *  replacing its component along the direction of travel (see apply_gait_speed). */
     bool gait_sets_speed = false;
+    /** Once the step is learned, a scan in a gap of the cadence (turning, stopping) whose
+     *  registered speed exceeds the last gait speed keeps the walker's bounds (see
+     *  hold_gait_speed) and the along-travel correction limit. */
+    bool gait_hold_without_cadence = false;
+    /** Standard deviation (m/s^2) of the specific force magnitude over the last second below
+     *  which a walker without a cadence is standing. */
+    double gait_standing_accel_std = 0.3;
     /** Initial damping as a fraction of the largest diagonal entry of the system. */
     double icp_lm_initial_lambda_factor = 1e-9;
     /** Damping increases tried per iteration before giving up on a step. */
@@ -864,10 +871,16 @@ public:
   Eigen::Vector3d _gait_velocity_change = Eigen::Vector3d::Zero();
   std::deque<std::tuple<double, Eigen::Vector3d, Eigen::Vector3d, Sophus::SO3d>> _gait_velocity_history;
   double _gait_last_reversal_time = -1e9;
+  /** The last gait speed (m/s) from the learned step. */
+  std::optional<double> _gait_last_speed;
   /** Scans where the IMU reversed the direction of travel. */
   std::size_t gait_reversal_count = 0;
   /** Scans whose along-travel correction the gait limited. */
   std::size_t gait_correction_limited_count = 0;
+  /** Scans held through a gap in the cadence (gait_hold_without_cadence), and how many of
+   *  them stood. */
+  std::size_t gait_hold_count = 0;
+  std::size_t gait_standing_count = 0;
   ImuPreintegration _window_preintegration;
   Eigen::Vector3d _window_last_angular_velocity = Eigen::Vector3d::Zero();
   Eigen::Vector3d _window_last_specific_force = Eigen::Vector3d::Zero();

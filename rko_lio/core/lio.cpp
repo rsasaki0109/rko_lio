@@ -2206,9 +2206,22 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         if (step_length && _gait_direction_body) {
           lidar_state.velocity = apply_gait_speed(lidar_state.velocity, *_gait_direction_body,
                                                   *cadence * *step_length, config.gait_sets_speed);
+          if (_gait.step_length()) _gait_last_speed = *cadence * *step_length;
           ++gait_speed_applied_count;
           applied = true;
         }
+      } else if (config.gait_hold_without_cadence && _gait.step_length() && _gait_direction_body &&
+                 _gait_last_speed && lidar_state.velocity.norm() > *_gait_last_speed) {
+        // The cadence dropped out (the window holds a turn or a stop) and the registration
+        // runs faster than the last pace. Keep the walker's bounds, and the correction limit,
+        // until it is back. A registration slower than the last pace is left alone: a slow
+        // turn barely shakes the sensor, so the standing test alone would stop it.
+        const bool standing = _gait.magnitude_std(1.0) < config.gait_standing_accel_std;
+        lidar_state.velocity = hold_gait_speed(lidar_state.velocity, *_gait_direction_body, *_gait_last_speed,
+                                               standing, config.gait_sets_speed);
+        ++gait_hold_count;
+        if (standing) ++gait_standing_count;
+        applied = true;
       }
       _gait_prediction_active = applied;
       _gait_velocity_history.emplace_back(now, lidar_state.pose.so3() * lidar_state.velocity, scan_velocity_change,
