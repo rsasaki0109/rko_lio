@@ -29,7 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <optional>
+#include <limits>
 
 #include "persistent_weak_direction.hpp"
 
@@ -72,17 +72,17 @@ inline bool has_weak_information_direction(
 
 /** Smallest eigenvalue of the translation block of ``H`` (its first three coordinates) over the
  *  block's trace: how well the scan observes its weakest direction of translation, 1/3 when
- *  it observes every direction alike and near 0 along a tunnel's axis. None for an empty or
- *  non-finite system. */
-inline std::optional<double> weakest_translation_share(const Eigen::Matrix<double, 6, 6>& H) {
+ *  it observes every direction alike and near 0 along a tunnel's axis. NaN for an empty or
+ *  non-finite system. (C++14: graph_based_slam includes this header.) */
+inline double weakest_translation_share(const Eigen::Matrix<double, 6, 6>& H) {
   const Eigen::Matrix3d translation = 0.5 * (H.block<3, 3>(0, 0) + H.block<3, 3>(0, 0).transpose());
   if (!translation.allFinite()) {
-    return std::nullopt;
+    return std::numeric_limits<double>::quiet_NaN();
   }
   const Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> solver(translation);
   const double trace = solver.eigenvalues().sum();
   if (solver.info() != Eigen::Success || !std::isfinite(trace) || trace <= 1.0e-12) {
-    return std::nullopt;
+    return std::numeric_limits<double>::quiet_NaN();
   }
   return solver.eigenvalues().minCoeff() / trace;
 }
