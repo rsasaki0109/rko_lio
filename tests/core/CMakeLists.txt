@@ -37,6 +37,7 @@ compat_target_sources(
           test_bump_rotation_gate.cpp
           test_inertial_window.cpp
           test_gait_speed.cpp
+          test_weakest_translation_share.cpp
   PUBLIC
   FILE_SET
   HEADERS
