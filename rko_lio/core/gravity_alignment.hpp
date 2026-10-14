@@ -119,4 +119,11 @@ inline Sophus::SO3d limit_tilt_correction(const Sophus::SO3d& predicted, const S
   return Sophus::SO3d::exp(Eigen::Vector3d(tilt.x(), tilt.y(), correction.z())) * predicted;
 }
 
+/** Whether the tilt correction limit applies to a scan: it is set (cap_deg > 0) and the speed
+ *  is at least min_speed_mps. The limit holds a 16-beam LiDAR's pitch at road speeds; on a slow
+ *  UGV it cost accuracy on every device it ran on. */
+inline bool tilt_limit_applies(const double cap_deg, const double speed_mps, const double min_speed_mps) {
+  return cap_deg > 0.0 && speed_mps >= min_speed_mps;
+}
+
 } // namespace rko_lio::core

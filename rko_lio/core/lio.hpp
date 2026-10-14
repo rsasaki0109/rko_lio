@@ -381,6 +381,10 @@ public:
      *  vehicle pulls the pitch by about 1 deg/s in tunnels and on bridges; the gyro holds
      *  it, and gravity_window_alignment corrects the absolute tilt. */
     double max_tilt_correction_deg = 0.0;
+    /** Apply max_tilt_correction_deg only while the previous scan's speed (m/s) is at least
+     *  this (0: always). On GEODE's Metro Tunneling UGV (under 1 m/s) the limit cost the Livox
+     *  device 0.7-2.6 m; on its road sequences (9-31 m/s) the 16-beam LiDAR needs it. */
+    double tilt_limit_min_speed_mps = 0.0;
     /** Treat the start as moving, and leave the IMU biases at zero, when the mean gyro rate
      *  of the initialization interval exceeds this (rad/s; 0: always static). */
     double initialization_max_gyro_rad_s = 0.0;
@@ -931,6 +935,8 @@ public:
   StallGuard stall_guard;
   /** Scans whose roll/pitch correction hit max_tilt_correction_deg. */
   std::size_t tilt_correction_limited_count = 0;
+  /** Scans left unlimited because the speed was below tilt_limit_min_speed_mps. */
+  std::size_t tilt_limit_below_speed_count = 0;
   std::size_t gravity_alignment_attempt_count = 0;
   std::size_t gravity_alignment_applied_count = 0;
   double gravity_alignment_last_tilt_rad = 0.0;

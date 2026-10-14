@@ -717,6 +717,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   // ---- sliding-window absolute gravity alignment (fork addition; default-off) ----
   lio_config.max_tilt_correction_deg =
       node->declare_parameter<double>("max_tilt_correction_deg", lio_config.max_tilt_correction_deg);
+  lio_config.tilt_limit_min_speed_mps =
+      node->declare_parameter<double>("tilt_limit_min_speed_mps", lio_config.tilt_limit_min_speed_mps);
   lio_config.vehicle_stall_guard =
       node->declare_parameter<bool>("vehicle_stall_guard", lio_config.vehicle_stall_guard);
   lio_config.stall_guard.window_sec =
@@ -1896,7 +1898,8 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
                 << lio->stall_guard.hold_count << " stalls)\n";
     }
     if (lio->config.max_tilt_correction_deg > 0.0) {
-      std::cout << "Tilt correction limited on " << lio->tilt_correction_limited_count << " scans\n";
+      std::cout << "Tilt correction limited on " << lio->tilt_correction_limited_count << " scans; "
+                << lio->tilt_limit_below_speed_count << " scans below the speed gate\n";
     }
     // Kinematic velocity gate summary.
     if (lio->config.kinematic_velocity_gate) {

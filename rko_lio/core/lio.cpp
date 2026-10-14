@@ -2047,7 +2047,11 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // residual tilt is fed back as a small, capped, roll/pitch-only left-multiplicative
     // correction. Applied before the velocity/acceleration estimation below so the state
     // update sees the corrected orientation.
-    if (config.max_tilt_correction_deg > 0.0) {
+    if (config.max_tilt_correction_deg > 0.0 &&
+        !tilt_limit_applies(config.max_tilt_correction_deg, lidar_state.velocity.norm(),
+                            config.tilt_limit_min_speed_mps)) {
+      ++tilt_limit_below_speed_count;
+    } else if (config.max_tilt_correction_deg > 0.0) {
       // Keep roll and pitch from the gyro: limit the registration's correction of the
       // predicted attitude about horizontal axes. Yaw stays free, and the absolute tilt is
       // left to the gravity window alignment.
