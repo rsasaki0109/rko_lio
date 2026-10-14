@@ -1834,8 +1834,7 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
                                      {"reversal_count", lio->gait_reversal_count},
                                      {"hold_count", lio->gait_hold_count},
                                      {"standing_count", lio->gait_standing_count},
-                                     {"step_stop_count", lio->gait_step_stop_count},
-                                     {"step_restart_count", lio->gait_step_restart_count}};
+                                     {"step_stop_count", lio->gait_step_stop_count}};
       if (const auto step = lio->gait_step_length()) {
         gait_summary["step_length_m"] = *step;
       }

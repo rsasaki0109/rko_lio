@@ -189,9 +189,8 @@ public:
      *  which a walker without a cadence is standing. */
     double gait_standing_accel_std = 0.3;
     /** Once the step is learned, follow the steps themselves (StepDetector) instead of only the
-     *  4 s cadence window, which lags a stop or a restart by about 2 s: no step for
-     *  gait_step_timeout_sec stops the walker (zero velocity, the correction limit on), and
-     *  steps without a cadence yet keep the last gait speed. */
+     *  4 s cadence window, which lags a stop by about 2 s: no step for gait_step_timeout_sec
+     *  stops the walker (zero velocity, the correction limit on). */
     bool gait_step_events = false;
     double gait_step_timeout_sec = 1.0;
     /** Initial damping as a fraction of the largest diagonal entry of the system. */
@@ -888,9 +887,8 @@ public:
    *  them stood. */
   std::size_t gait_hold_count = 0;
   std::size_t gait_standing_count = 0;
-  /** Scans the step events stopped (no step for the timeout) or restarted (steps, no cadence). */
+  /** Scans the step events stopped (no step for the timeout). */
   std::size_t gait_step_stop_count = 0;
-  std::size_t gait_step_restart_count = 0;
   ImuPreintegration _window_preintegration;
   Eigen::Vector3d _window_last_angular_velocity = Eigen::Vector3d::Zero();
   Eigen::Vector3d _window_last_specific_force = Eigen::Vector3d::Zero();

@@ -2219,17 +2219,12 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           ++gait_speed_applied_count;
           applied = true;
         }
-      } else if (config.gait_step_events && _gait.step_length() && _gait_direction_body && _gait_last_speed) {
-        if (stepping) {
-          // Steps the cadence window does not show yet (a restart): keep the last pace.
-          lidar_state.velocity = apply_gait_speed(lidar_state.velocity, *_gait_direction_body, *_gait_last_speed,
-                                                  config.gait_sets_speed);
-          ++gait_step_restart_count;
-        } else {
-          // No step for the timeout: the walker stands or turns on the spot.
-          lidar_state.velocity.setZero();
-          ++gait_step_stop_count;
-        }
+      } else if (config.gait_step_events && !stepping && _gait.step_length() && _gait_direction_body &&
+                 _gait_last_speed) {
+        // No step for the timeout: the walker stands or turns on the spot. (Steps without a
+        // cadence are not taken as walking at the last pace: turning on the spot steps too.)
+        lidar_state.velocity.setZero();
+        ++gait_step_stop_count;
         applied = true;
       } else if (config.gait_hold_without_cadence && _gait.step_length() && _gait_direction_body &&
                  _gait_last_speed && lidar_state.velocity.norm() > *_gait_last_speed) {
