@@ -2104,8 +2104,9 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // where it sees every direction of translation (a stairwell), its correction stands.
     bool limit_correction = true;
     if (config.gait_correction_weak_ratio > 0.0) {
-      if (const auto share = weakest_translation_share(icp_H)) {
-        limit_correction = *share < config.gait_correction_weak_ratio;
+      const double share = weakest_translation_share(icp_H);
+      if (std::isfinite(share)) {
+        limit_correction = share < config.gait_correction_weak_ratio;
       }
     }
     if (config.gait_speed_prior && config.gait_max_correction_m > 0.0 && _gait_prediction_active &&
