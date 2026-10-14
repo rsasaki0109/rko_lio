@@ -578,6 +578,9 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<bool>("gait_hold_without_cadence", lio_config.gait_hold_without_cadence);
   lio_config.gait_standing_accel_std =
       node->declare_parameter<double>("gait_standing_accel_std", lio_config.gait_standing_accel_std);
+  lio_config.gait_step_events = node->declare_parameter<bool>("gait_step_events", lio_config.gait_step_events);
+  lio_config.gait_step_timeout_sec =
+      node->declare_parameter<double>("gait_step_timeout_sec", lio_config.gait_step_timeout_sec);
   lio_config.icp_levenberg_marquardt =
       node->declare_parameter<bool>("icp_levenberg_marquardt", lio_config.icp_levenberg_marquardt);
   lio_config.icp_lm_initial_lambda_factor =
@@ -1830,7 +1833,9 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
                                      {"correction_limited_count", lio->gait_correction_limited_count},
                                      {"reversal_count", lio->gait_reversal_count},
                                      {"hold_count", lio->gait_hold_count},
-                                     {"standing_count", lio->gait_standing_count}};
+                                     {"standing_count", lio->gait_standing_count},
+                                     {"step_stop_count", lio->gait_step_stop_count},
+                                     {"step_restart_count", lio->gait_step_restart_count}};
       if (const auto step = lio->gait_step_length()) {
         gait_summary["step_length_m"] = *step;
       }

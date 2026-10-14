@@ -902,6 +902,7 @@ void LIO::add_imu_measurement(const ImuControl& base_imu) {
   interval_stats.update(unbiased_ang_vel, unbiased_accel, compensated_accel);
   if (config.gait_speed_prior) {
     _gait.add_imu(to_seconds(base_imu.time), base_imu.acceleration);
+    if (config.gait_step_events) _steps.add(to_seconds(base_imu.time), base_imu.acceleration.norm());
     if (dt > 0.0) {
       _gait_velocity_change += (imu_state.pose.so3() * compensated_accel) * dt;
     }
@@ -2138,7 +2139,15 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       const double now = to_seconds(current_lidar_time);
       const Eigen::Vector3d scan_velocity_change = _gait_velocity_change;
       _gait_velocity_change.setZero();
-      if (const auto cadence = _gait.cadence()) {
+      std::optional<double> cadence = _gait.cadence();
+      bool stepping = true;
+      if (config.gait_step_events && _gait.step_length()) {
+        const auto last_step = _steps.last_step();
+        stepping = last_step && now - *last_step < config.gait_step_timeout_sec;
+        // The 4 s window still shows the walk for a while after the last step.
+        if (!stepping) cadence.reset();
+      }
+      if (cadence) {
         if (config.gait_reversal_lookback_sec > 0.0 && _gait_direction_body && _gait_prediction_active &&
             !_gait_velocity_history.empty()) {
           // Velocity now from the IMU alone, starting from the velocity a lookback ago.
@@ -2210,6 +2219,18 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           ++gait_speed_applied_count;
           applied = true;
         }
+      } else if (config.gait_step_events && _gait.step_length() && _gait_direction_body && _gait_last_speed) {
+        if (stepping) {
+          // Steps the cadence window does not show yet (a restart): keep the last pace.
+          lidar_state.velocity = apply_gait_speed(lidar_state.velocity, *_gait_direction_body, *_gait_last_speed,
+                                                  config.gait_sets_speed);
+          ++gait_step_restart_count;
+        } else {
+          // No step for the timeout: the walker stands or turns on the spot.
+          lidar_state.velocity.setZero();
+          ++gait_step_stop_count;
+        }
+        applied = true;
       } else if (config.gait_hold_without_cadence && _gait.step_length() && _gait_direction_body &&
                  _gait_last_speed && lidar_state.velocity.norm() > *_gait_last_speed) {
         // The cadence dropped out (the window holds a turn or a stop) and the registration

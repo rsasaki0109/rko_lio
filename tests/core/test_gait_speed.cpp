@@ -33,6 +33,7 @@
 using rko_lio::core::apply_gait_speed;
 using rko_lio::core::GaitSpeedEstimator;
 using rko_lio::core::hold_gait_speed;
+using rko_lio::core::StepDetector;
 
 namespace {
 // Specific force of a handheld sensor carried by someone walking at `cadence` steps/s.
@@ -133,4 +134,62 @@ TEST_CASE("Without a cadence the walker keeps its bounds", "[gait_speed]") {
   // A plausible registration passes unchanged.
   const Eigen::Vector3d slow(0.6, 0.05, 0.0);
   REQUIRE((hold_gait_speed(slow, u, last_speed, false, false) - slow).norm() == Catch::Approx(0.0).margin(1e-12));
+}
+
+namespace {
+// The same handheld walker as walk(), fed to the step detector: the last step it counted.
+std::optional<double> step(StepDetector& steps, const double t0, const double duration, const double cadence,
+                           const double amplitude, const double noise, const unsigned seed = 11) {
+  std::mt19937 rng(seed);
+  std::normal_distribution<double> n(0.0, noise);
+  for (double t = t0; t < t0 + duration; t += 0.01) {
+    const double bounce = amplitude * std::sin(2.0 * M_PI * cadence * t);
+    steps.add(t, Eigen::Vector3d(n(rng), n(rng), 9.81 + bounce + n(rng)).norm());
+  }
+  return steps.last_step();
+}
+} // namespace
+
+TEST_CASE("Steps stop and restart with the walker, not with the cadence window", "[gait_speed]") {
+  StepDetector steps;
+  // Walking: the last counted step is less than a stride old.
+  auto last = step(steps, 0.0, 20.0, 1.8, 2.0, 0.05);
+  REQUIRE(last.has_value());
+  REQUIRE(20.0 - *last < 0.8);
+  // Standing for 2 s: no step after the walk, so the walker shows as stopped within a second.
+  last = step(steps, 20.0, 2.0, 1.8, 0.0, 0.05);
+  REQUIRE(*last < 20.5);
+  // Walking again: steps within a second, long before a 4 s window would show a cadence.
+  last = step(steps, 22.0, 1.0, 1.8, 2.0, 0.05);
+  REQUIRE(*last > 22.2);
+}
+
+TEST_CASE("A gentle walker's steps count against its own typical step", "[gait_speed]") {
+  StepDetector steps;
+  // Peaks of 0.6 m/s^2 (Shield_tunnel5's walker): above the 0.3 floor and a quarter of the
+  // running median, below the strong walkers' peaks of 3-4 m/s^2.
+  const auto last = step(steps, 0.0, 20.0, 1.4, 0.6, 0.05);
+  REQUIRE(last.has_value());
+  REQUIRE(20.0 - *last < 1.0);
+}
+
+TEST_CASE("Steps are counted from IMU stamps that come in bursts", "[gait_speed]") {
+  // Livox internal IMU stamps: mostly 5 ms apart, some 1 ms bursts. Every sample must be decided,
+  // or peaks between bursts go uncounted and the walker looks stopped.
+  StepDetector steps;
+  std::mt19937 rng(3);
+  std::uniform_real_distribution<double> u(0.0, 1.0);
+  int counted = 0;
+  std::optional<double> previous;
+  double t = 0.0;
+  while (t < 30.0) {
+    t += u(rng) < 0.3 ? 0.001 : 0.007;
+    steps.add(t, std::abs(9.81 + 2.0 * std::sin(2.0 * M_PI * 1.8 * t)));
+    if (steps.last_step() != previous) {
+      previous = steps.last_step();
+      ++counted;
+    }
+  }
+  // 1.8 steps/s over the 30 s, less the first second while the filter is designed.
+  REQUIRE(counted >= 48);
 }

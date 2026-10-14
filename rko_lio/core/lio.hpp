@@ -188,6 +188,12 @@ public:
     /** Standard deviation (m/s^2) of the specific force magnitude over the last second below
      *  which a walker without a cadence is standing. */
     double gait_standing_accel_std = 0.3;
+    /** Once the step is learned, follow the steps themselves (StepDetector) instead of only the
+     *  4 s cadence window, which lags a stop or a restart by about 2 s: no step for
+     *  gait_step_timeout_sec stops the walker (zero velocity, the correction limit on), and
+     *  steps without a cadence yet keep the last gait speed. */
+    bool gait_step_events = false;
+    double gait_step_timeout_sec = 1.0;
     /** Initial damping as a fraction of the largest diagonal entry of the system. */
     double icp_lm_initial_lambda_factor = 1e-9;
     /** Damping increases tried per iteration before giving up on a step. */
@@ -864,6 +870,7 @@ public:
   std::size_t bump_rotation_fallback_count = 0;
   InertialWindow _inertial_window;
   GaitSpeedEstimator _gait;
+  StepDetector _steps;
   std::optional<Eigen::Vector3d> _gait_direction_body;
   bool _gait_prediction_active = false;
   /** World velocity change from the IMU since the last scan, and per scan: time, world
@@ -881,6 +888,9 @@ public:
    *  them stood. */
   std::size_t gait_hold_count = 0;
   std::size_t gait_standing_count = 0;
+  /** Scans the step events stopped (no step for the timeout) or restarted (steps, no cadence). */
+  std::size_t gait_step_stop_count = 0;
+  std::size_t gait_step_restart_count = 0;
   ImuPreintegration _window_preintegration;
   Eigen::Vector3d _window_last_angular_velocity = Eigen::Vector3d::Zero();
   Eigen::Vector3d _window_last_specific_force = Eigen::Vector3d::Zero();

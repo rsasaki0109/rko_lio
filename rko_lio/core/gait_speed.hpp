@@ -180,6 +180,142 @@ inline Eigen::Vector3d apply_gait_speed(const Eigen::Vector3d& velocity, const E
   return result;
 }
 
+/** Step events of a walker from the specific force magnitude: a causal 0.8-4 Hz band-pass
+ *  (Butterworth high- and low-pass biquads at the measured sample rate) and its peaks, each
+ *  confirmed ``confirm_sec`` later. A peak counts above ``relative_amplitude`` times the running
+ *  median of the counted peaks (and ``min_amplitude``). The 4 s cadence window lags a stop or a
+ *  restart by about 2 s; the steps themselves do not. */
+class StepDetector {
+public:
+  struct Config {
+    double low_hz = 0.8;
+    double high_hz = 4.0;
+    double confirm_sec = 0.15;
+    double min_interval_sec = 0.3;
+    double min_amplitude = 0.3;
+    double relative_amplitude = 0.25;
+    std::size_t typical_peaks = 40;
+    std::size_t min_typical_peaks = 10;
+  };
+
+  StepDetector() = default;
+  explicit StepDetector(const Config& config) : _config(config) {}
+
+  void add(const double time, const double magnitude) {
+    if (_last_time && time <= *_last_time) return;
+    if (!_ready) {
+      if (_last_time) _intervals.push_back(time - *_last_time);
+      _last_time = time;
+      if (_intervals.size() >= 50) design();
+      return;
+    }
+    _last_time = time;
+    const double y = _low.step(_high.step(magnitude));
+    _recent.emplace_back(time, y);
+    // Every sample at least confirm_sec old is decided once: a peak if it is the largest of the
+    // +-confirm_sec around it. IMU stamps come in bursts, so several can become due at once.
+    const double confirm = _config.confirm_sec;
+    for (const auto& [candidate_time, candidate_value] : _recent) {
+      if (candidate_time > time - confirm) break;
+      if (_last_decided && candidate_time <= *_last_decided) continue;
+      _last_decided = candidate_time;
+      if (candidate_time - _recent.front().first < confirm) continue;  // its past is not all here
+      bool peak = true;
+      for (const auto& [t, v] : _recent) {
+        if (t < candidate_time - confirm) continue;
+        if (t > candidate_time + confirm) break;
+        if (v > candidate_value) {
+          peak = false;
+          break;
+        }
+      }
+      if (peak) count(candidate_time, candidate_value);
+    }
+    while (!_recent.empty() && _recent.front().first < time - 3.0 * confirm) _recent.pop_front();
+  }
+
+  /** Time of the last counted step. */
+  std::optional<double> last_step() const { return _last_step; }
+
+private:
+  void count(const double peak_time, const double amplitude) {
+    if (_last_step && peak_time - *_last_step < _config.min_interval_sec) return;
+    double threshold = _config.min_amplitude;
+    if (_peaks.size() >= _config.min_typical_peaks) {
+      std::vector<double> values(_peaks.begin(), _peaks.end());
+      std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+      threshold = std::max(threshold, _config.relative_amplitude * values[values.size() / 2]);
+    }
+    if (amplitude <= threshold) return;
+    _last_step = peak_time;
+    _peaks.push_back(amplitude);
+    while (_peaks.size() > _config.typical_peaks) _peaks.pop_front();
+  }
+
+  struct Biquad {
+    double b0 = 1.0, b1 = 0.0, b2 = 0.0, a1 = 0.0, a2 = 0.0;
+    double x1 = 0.0, x2 = 0.0, y1 = 0.0, y2 = 0.0;
+    bool primed = false;
+    double step(const double x) {
+      if (!primed) {
+        // Start from rest at the first input (the high-pass otherwise rings on gravity).
+        x1 = x2 = x;
+        y1 = y2 = x * (b0 + b1 + b2) / (1.0 + a1 + a2);
+        primed = true;
+      }
+      const double y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+      x2 = x1;
+      x1 = x;
+      y2 = y1;
+      y1 = y;
+      return y;
+    }
+  };
+
+  // Butterworth (Q = 1/sqrt 2) biquads from the RBJ cookbook.
+  static Biquad design_biquad(const double cutoff_hz, const double sample_hz, const bool high_pass) {
+    const double w0 = 2.0 * M_PI * cutoff_hz / sample_hz;
+    const double alpha = std::sin(w0) / std::sqrt(2.0);
+    const double c = std::cos(w0);
+    const double a0 = 1.0 + alpha;
+    Biquad q;
+    if (high_pass) {
+      q.b0 = (1.0 + c) / 2.0 / a0;
+      q.b1 = -(1.0 + c) / a0;
+      q.b2 = (1.0 + c) / 2.0 / a0;
+    } else {
+      q.b0 = (1.0 - c) / 2.0 / a0;
+      q.b1 = (1.0 - c) / a0;
+      q.b2 = (1.0 - c) / 2.0 / a0;
+    }
+    q.a1 = -2.0 * c / a0;
+    q.a2 = (1.0 - alpha) / a0;
+    return q;
+  }
+
+  void design() {
+    std::vector<double> values(_intervals.begin(), _intervals.end());
+    std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+    const double dt = values[values.size() / 2];
+    if (dt <= 0.0) return;
+    const double sample_hz = 1.0 / dt;
+    const double high_hz = std::min(_config.high_hz, 0.45 * sample_hz);
+    _high = design_biquad(_config.low_hz, sample_hz, true);
+    _low = design_biquad(high_hz, sample_hz, false);
+    _ready = true;
+  }
+
+  Config _config;
+  bool _ready = false;
+  std::optional<double> _last_time;
+  std::vector<double> _intervals;
+  Biquad _high, _low;
+  std::deque<std::pair<double, double>> _recent;
+  std::optional<double> _last_decided;
+  std::deque<double> _peaks;
+  std::optional<double> _last_step;
+};
+
 /** The velocity of a walker whose cadence has dropped out (turning, stopping) from the
  *  registered ``velocity``: zero while ``standing``, otherwise never backwards along the
  *  direction of travel ``u`` and no faster than ``last_speed``, the last gait speed. Without
