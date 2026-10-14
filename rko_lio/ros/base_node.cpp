@@ -578,6 +578,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<bool>("gait_hold_without_cadence", lio_config.gait_hold_without_cadence);
   lio_config.gait_standing_accel_std =
       node->declare_parameter<double>("gait_standing_accel_std", lio_config.gait_standing_accel_std);
+  lio_config.gait_correction_weak_ratio =
+      node->declare_parameter<double>("gait_correction_weak_ratio", lio_config.gait_correction_weak_ratio);
   lio_config.icp_levenberg_marquardt =
       node->declare_parameter<bool>("icp_levenberg_marquardt", lio_config.icp_levenberg_marquardt);
   lio_config.icp_lm_initial_lambda_factor =

@@ -188,6 +188,11 @@ public:
     /** Standard deviation (m/s^2) of the specific force magnitude over the last second below
      *  which a walker without a cadence is standing. */
     double gait_standing_accel_std = 0.3;
+    /** Limit the registration's correction along the travel (gait_max_correction_m) only while
+     *  its weakest translation information is below this share of the trace (a tunnel's axis);
+     *  where it sees every direction (a stairwell, a room) its correction stands. 0 limits it
+     *  everywhere. */
+    double gait_correction_weak_ratio = 0.0;
     /** Initial damping as a fraction of the largest diagonal entry of the system. */
     double icp_lm_initial_lambda_factor = 1e-9;
     /** Damping increases tried per iteration before giving up on a step. */

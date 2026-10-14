@@ -2100,8 +2100,16 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       }
     }
 
+    // The correction limit guards a registration that cannot see the travel (a tunnel's axis);
+    // where it sees every direction of translation (a stairwell), its correction stands.
+    bool limit_correction = true;
+    if (config.gait_correction_weak_ratio > 0.0) {
+      if (const auto share = weakest_translation_share(icp_H)) {
+        limit_correction = *share < config.gait_correction_weak_ratio;
+      }
+    }
     if (config.gait_speed_prior && config.gait_max_correction_m > 0.0 && _gait_prediction_active &&
-        _gait_direction_body) {
+        _gait_direction_body && limit_correction) {
       const Eigen::Vector3d u = optimized_pose.so3() * *_gait_direction_body;
       const double correction = (optimized_pose.translation() - initial_guess.translation()).dot(u);
       if (std::abs(correction) > config.gait_max_correction_m) {
