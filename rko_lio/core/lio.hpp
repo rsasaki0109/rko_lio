@@ -193,6 +193,10 @@ public:
      *  where it sees every direction (a stairwell, a room) its correction stands. 0 limits it
      *  everywhere. */
     double gait_correction_weak_ratio = 0.0;
+    /** Keep refining the learned step from scans whose weakest translation share is at least
+     *  gait_correction_weak_ratio (the registration sees the travel there). The first step is
+     *  learned in the walk's first seconds, where a tunnel registration may slip. */
+    bool gait_refine_step_where_observed = false;
     /** Initial damping as a fraction of the largest diagonal entry of the system. */
     double icp_lm_initial_lambda_factor = 1e-9;
     /** Damping increases tried per iteration before giving up on a step. */
@@ -766,6 +770,7 @@ public:
   /** Scans whose predicted speed came from the gait (gait_speed_prior). */
   std::size_t gait_speed_applied_count = 0;
   std::optional<double> gait_step_length() const { return _gait.step_length(); }
+  std::size_t gait_refined_sample_count() const { return _gait.refined_sample_count(); }
 
   /** Inertial window solves (inertial_window). */
   std::size_t inertial_window_solve_count = 0;

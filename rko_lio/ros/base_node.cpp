@@ -580,6 +580,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("gait_standing_accel_std", lio_config.gait_standing_accel_std);
   lio_config.gait_correction_weak_ratio =
       node->declare_parameter<double>("gait_correction_weak_ratio", lio_config.gait_correction_weak_ratio);
+  lio_config.gait_refine_step_where_observed = node->declare_parameter<bool>(
+      "gait_refine_step_where_observed", lio_config.gait_refine_step_where_observed);
   lio_config.icp_levenberg_marquardt =
       node->declare_parameter<bool>("icp_levenberg_marquardt", lio_config.icp_levenberg_marquardt);
   lio_config.icp_lm_initial_lambda_factor =
@@ -1836,6 +1838,7 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
       if (const auto step = lio->gait_step_length()) {
         gait_summary["step_length_m"] = *step;
       }
+      gait_summary["refined_sample_count"] = lio->gait_refined_sample_count();
       const std::filesystem::path gait_file = output_dir / "gait_speed_summary.json";
       if (std::ofstream file(gait_file); file.is_open()) {
         file << gait_summary.dump(4) << "\n";

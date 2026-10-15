@@ -2190,6 +2190,12 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         }
         const double registered_speed = lidar_state.velocity.norm();
         _gait.observe(registered_speed, *cadence);
+        if (config.gait_refine_step_where_observed && config.gait_correction_weak_ratio > 0.0) {
+          const double share = weakest_translation_share(icp_H);
+          if (std::isfinite(share) && share >= config.gait_correction_weak_ratio) {
+            _gait.refine(registered_speed, *cadence);
+          }
+        }
         if (registered_speed > config.gait_min_direction_speed) {
           const Eigen::Vector3d registered_direction = lidar_state.velocity / registered_speed;
           if (!_gait_direction_body || !_gait.step_length()) {

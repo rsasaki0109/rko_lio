@@ -84,6 +84,22 @@ TEST_CASE("The step length is frozen once learned", "[gait_speed]") {
   REQUIRE(*gait.step_length() == Catch::Approx(0.7).margin(1e-9));
 }
 
+TEST_CASE("Scans that see the travel refine the learned step", "[gait_speed]") {
+  GaitSpeedEstimator::Config config;
+  config.min_calibration_samples = 10;
+  GaitSpeedEstimator gait(config);
+  gait.refine(0.7 * 2.0, 2.0);  // nothing to refine before the step is learned
+  REQUIRE(gait.refined_sample_count() == 0);
+  for (int i = 0; i < 10; ++i) gait.observe(0.8 * 2.0, 2.0);  // learned while slipping
+  REQUIRE(*gait.step_length() == Catch::Approx(0.8).margin(1e-9));
+  for (int i = 0; i < 9; ++i) gait.refine(0.7 * 2.0, 2.0);
+  gait.refine(4.0, 2.0);  // a runaway is not a step
+  REQUIRE(*gait.step_length() == Catch::Approx(0.8).margin(1e-9));
+  gait.refine(0.7 * 2.0, 2.0);
+  REQUIRE(gait.refined_sample_count() == 10);
+  REQUIRE(*gait.step_length() == Catch::Approx(0.7).margin(1e-9));
+}
+
 TEST_CASE("Setting the gait speed stops a turning sensor from pumping it", "[gait_speed]") {
   // A walker stops and turns the sensor by 180 degrees in 20 scans; the registration has no
   // hold along the tunnel and returns the predicted velocity unchanged.

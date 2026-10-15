@@ -152,12 +152,31 @@ public:
     }
   }
 
+  /** Refine the frozen step from a scan whose registration sees the travel: there it runs
+   *  free of the gait, so its speed does not teach the gait's own step back. Once
+   *  min_calibration_samples such steps are in, the step is their median. */
+  void refine(const double registered_speed, const double cadence) {
+    if (!_frozen || cadence <= 0.0) return;
+    const double step = registered_speed / cadence;
+    if (!plausible_step(step)) return;
+    _refined_steps.push_back(step);
+    if (_refined_steps.size() >= std::max<std::size_t>(1, _config.min_calibration_samples)) {
+      std::vector<double> values = _refined_steps;
+      std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+      _frozen = values[values.size() / 2];
+    }
+  }
+
+  /** Steps taken in by refine(). */
+  std::size_t refined_sample_count() const { return _refined_steps.size(); }
+
   /** The frozen step length (m), once learned. */
   std::optional<double> step_length() const { return _frozen; }
 
   void reset() {
     _samples.clear();
     _steps.clear();
+    _refined_steps.clear();
     _frozen.reset();
   }
 
@@ -165,6 +184,7 @@ private:
   Config _config;
   std::deque<std::pair<double, double>> _samples;
   std::vector<double> _steps;
+  std::vector<double> _refined_steps;
   std::optional<double> _frozen;
 };
 
