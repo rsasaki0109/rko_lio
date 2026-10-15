@@ -611,6 +611,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "inertial_window_gravity_max_tilt_deg", lio_config.inertial_window_gravity_max_tilt_deg);
   lio_config.inertial_window_keep_gait_speed = node->declare_parameter<bool>(
       "inertial_window_keep_gait_speed", lio_config.inertial_window_keep_gait_speed);
+  lio_config.inertial_window_gait_agreement = node->declare_parameter<double>(
+      "inertial_window_gait_agreement", lio_config.inertial_window_gait_agreement);
   lio_config.inertial_window_max_mean_cost = node->declare_parameter<double>(
       "inertial_window_max_mean_cost", lio_config.inertial_window_max_mean_cost);
   lio_config.inertial_window_robust_cost_scale = node->declare_parameter<double>(
@@ -1866,6 +1868,7 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
           {"solve_count", lio->inertial_window_solve_count},
           {"gate_count", lio->inertial_window_gate_count},
           {"weak_direction_count", lio->inertial_window_weak_direction_count},
+          {"gait_disagreement_count", lio->inertial_window_gait_disagreement_count},
           {"final_accelerometer_bias_mps2",
            {window.accelerometer_bias()(0), window.accelerometer_bias()(1), window.accelerometer_bias()(2)}},
           {"final_gyroscope_bias_radps",

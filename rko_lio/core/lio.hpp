@@ -264,6 +264,11 @@ public:
     double inertial_window_gravity_prior_weight = 5.0;
     double inertial_window_gravity_max_tilt_deg = 0.0;
     bool inertial_window_keep_gait_speed = false;
+    /** Keep the window's velocity only while its speed along the gait's direction is within
+     *  this fraction of the gait's speed (0: always). Outside it the window is fitting a
+     *  registration that stalled (a speed near zero) or ran away, and the gait's speed is
+     *  applied instead. */
+    double inertial_window_gait_agreement = 0.0;
     double inertial_window_max_mean_cost = 0.0;
     double inertial_window_robust_cost_scale = 0.0;
     double inertial_window_attitude_prior_sigma = 0.0;
@@ -784,6 +789,8 @@ public:
   std::size_t inertial_window_solve_count = 0;
   std::size_t inertial_window_gate_count = 0;
   std::size_t inertial_window_weak_direction_count = 0;
+  /** Solves whose speed disagreed with the gait's (inertial_window_gait_agreement). */
+  std::size_t inertial_window_gait_disagreement_count = 0;
   const InertialWindow& inertial_window() const { return _inertial_window; }
 
 

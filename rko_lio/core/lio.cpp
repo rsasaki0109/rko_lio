@@ -2414,6 +2414,15 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         } else {
         lidar_state.velocity = lidar_state.pose.so3().inverse() * _inertial_window.latest_velocity();
         }
+        if (config.inertial_window_gait_agreement > 0.0 && applied_gait && applied_gait->second > 0.0) {
+          const double window_speed = lidar_state.velocity.dot(applied_gait->first);
+          if (std::abs(window_speed - applied_gait->second) >
+              config.inertial_window_gait_agreement * applied_gait->second) {
+            lidar_state.velocity = apply_gait_speed(lidar_state.velocity, applied_gait->first, applied_gait->second,
+                                                    config.gait_sets_speed);
+            ++inertial_window_gait_disagreement_count;
+          }
+        }
         if (config.inertial_window_keep_gait_speed && applied_gait) {
           // The window takes the direction, the gait keeps the speed: a stalled registration
           // would otherwise drive the window, and with it the prediction, to standstill.
