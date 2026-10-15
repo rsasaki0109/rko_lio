@@ -44,6 +44,9 @@
 // stl
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
 #include <unordered_map>
 #include <functional>
 #include <iostream>
@@ -2190,6 +2193,13 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         }
         const double registered_speed = lidar_state.velocity.norm();
         _gait.observe(registered_speed, *cadence);
+        // [experiment] RKO_GAIT_LOG=path: time, cadence, registered speed, weakest translation
+        // share, frozen step (-1 before it is learned).
+        if (const char* gait_log_path = std::getenv("RKO_GAIT_LOG")) {
+          static std::ofstream gait_log(gait_log_path);
+          gait_log << std::setprecision(12) << now << ' ' << *cadence << ' ' << registered_speed << ' '
+                   << weakest_translation_share(icp_H) << ' ' << _gait.step_length().value_or(-1.0) << '\n';
+        }
         if (registered_speed > config.gait_min_direction_speed) {
           const Eigen::Vector3d registered_direction = lidar_state.velocity / registered_speed;
           if (!_gait_direction_body || !_gait.step_length()) {
