@@ -384,6 +384,10 @@ public:
     /** Treat the start as moving, and leave the IMU biases at zero, when the mean gyro rate
      *  of the initialization interval exceeds this (rad/s; 0: always static). */
     double initialization_max_gyro_rad_s = 0.0;
+    /** Average the IMU over this many seconds of scans (dropped) before initializing
+     *  (0: one scan interval). One interval holds 10-20 IMU samples, and the gyro bias
+     *  it gives is off by 0.1-0.5 deg/s on GEODE's vehicle sequences. */
+    double initialization_window_sec = 0.0;
 
     /** Hold a vehicle's speed while its registration stalls (see stall_guard.hpp). */
     bool vehicle_stall_guard = false;
@@ -1037,6 +1041,9 @@ private:
 
   /** True if odometry initialization has been completed. */
   bool _initialized = false;
+  /** IMU sums over the initialization window (initialization_window_sec). */
+  IntervalStats _initialization_stats;
+  Nsec _initialization_window_start{0};
 
   /** Timestamp of the most recent real IMU measurement. */
   Nsec _last_real_imu_time{0};

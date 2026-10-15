@@ -1017,6 +1017,25 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                                 " seconds exceeds max_scan_delta_sec; re-anchoring at the new timestamp.");
   }
 
+  if (config.initialization_phase && !_initialized && config.initialization_window_sec > 0.0) {
+    // Collect the IMU over the whole window; its scans are dropped like the first one.
+    if (_initialization_stats.imu_count == 0) _initialization_window_start = lidar_state.time;
+    _initialization_stats.imu_count += interval_stats.imu_count;
+    _initialization_stats.angular_velocity_sum += interval_stats.angular_velocity_sum;
+    _initialization_stats.imu_acceleration_sum += interval_stats.imu_acceleration_sum;
+    _initialization_stats.body_acceleration_sum += interval_stats.body_acceleration_sum;
+    if (to_seconds(current_lidar_time - _initialization_window_start) < config.initialization_window_sec) {
+      lidar_state.time = current_lidar_time;
+      imu_state = lidar_state;
+      interval_stats.reset();
+      gyro_deskew_history.clear();
+      return {};
+    }
+    interval_stats.imu_count = _initialization_stats.imu_count;
+    interval_stats.angular_velocity_sum = _initialization_stats.angular_velocity_sum;
+    interval_stats.imu_acceleration_sum = _initialization_stats.imu_acceleration_sum;
+    interval_stats.body_acceleration_sum = _initialization_stats.body_acceleration_sum;
+  }
   const auto [avg_body_accel, avg_ang_vel] = motion_priors_from_imu(current_lidar_time);
 
   const Nsec earliest = std::min(lidar_state.time, *std::min_element(timestamps.begin(), timestamps.end()));
