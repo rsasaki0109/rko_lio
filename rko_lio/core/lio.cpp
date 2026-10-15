@@ -44,6 +44,9 @@
 // stl
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
 #include <unordered_map>
 #include <functional>
 #include <iostream>
@@ -2047,6 +2050,23 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // residual tilt is fed back as a small, capped, roll/pitch-only left-multiplicative
     // correction. Applied before the velocity/acceleration estimation below so the state
     // update sees the corrected orientation.
+    // [experiment] Tilt observability: RKO_TILT_LOG=path writes one row per registered scan with
+    // the registration's information on the world-horizontal rotation axes once translation is
+    // marginalized (Schur complement of icp_H, independent of the rotation centre).
+    if (const char* tilt_log_path = std::getenv("RKO_TILT_LOG")) {
+      static std::ofstream tilt_log(tilt_log_path);
+      const Eigen::Matrix3d H_tt = 0.5 * (icp_H.block<3, 3>(0, 0) + icp_H.block<3, 3>(0, 0).transpose());
+      const Eigen::Matrix3d H_tr = icp_H.block<3, 3>(0, 3);
+      const Eigen::Matrix3d H_rr = 0.5 * (icp_H.block<3, 3>(3, 3) + icp_H.block<3, 3>(3, 3).transpose());
+      Eigen::Matrix3d S = H_rr - H_tr.transpose() * H_tt.ldlt().solve(H_tr);
+      S = 0.5 * (S + S.transpose());
+      const Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> tilt_solver(S.block<2, 2>(0, 0));
+      const Eigen::Vector3d tilt_correction = (optimized_pose.so3() * initial_guess.so3().inverse()).log();
+      tilt_log << std::setprecision(12) << to_seconds(current_lidar_time) << ' ' << lidar_state.velocity.norm() << ' '
+               << std::hypot(tilt_correction.x(), tilt_correction.y()) * 180.0 / M_PI << ' '
+               << tilt_solver.eigenvalues()(0) << ' ' << tilt_solver.eigenvalues()(1) << ' ' << S(2, 2) << ' '
+               << S.trace() << ' ' << weakest_translation_share(icp_H) << ' ' << H_tt.trace() << '\n';
+    }
     if (config.max_tilt_correction_deg > 0.0) {
       // Keep roll and pitch from the gyro: limit the registration's correction of the
       // predicted attitude about horizontal axes. Yaw stays free, and the absolute tilt is
