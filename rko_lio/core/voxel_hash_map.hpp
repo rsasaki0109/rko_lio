@@ -32,6 +32,8 @@
 #include "voxel_down_sample.hpp"
 
 #include <Eigen/Core>
+#include <array>
+#include <cstdint>
 #include <optional>
 #include <sophus/se3.hpp>
 #include <tsl/robin_map.h>
@@ -66,6 +68,19 @@ struct VoxelHashMap {
   // relocalization paths that need a wider correspondence search than plain ICP.
   std::tuple<Eigen::Vector3d, double> get_closest_neighbor(const Eigen::Vector3d& query,
                                                            int voxel_search_radius) const;
+
+  /** Points of the 3x3x3 voxels around one query voxel, looked up lazily and kept across calls.
+   *  ICP queries every keypoint once per iteration and keypoints rarely change voxels between
+   *  iterations, so most hash lookups can be reused. Valid only while the map is not modified. */
+  struct NeighborhoodCache {
+    Voxel voxel = Voxel::Zero();
+    std::uint32_t looked_up = 0; // bit i: shift i has been looked up
+    std::array<const Eigen::Vector3d*, 27> points{};
+    std::array<std::uint32_t, 27> sizes{};
+  };
+  /** Same result as the single-argument overload, reusing `cache` for the voxel lookups. */
+  std::tuple<Eigen::Vector3d, double> get_closest_neighbor(const Eigen::Vector3d& query,
+                                                           NeighborhoodCache& cache) const;
 
   /** Opt into per-voxel surface-normal maintenance (localizability weighting). Off by
    *  default so the common path pays nothing; when on, add_points() refreshes a PCA

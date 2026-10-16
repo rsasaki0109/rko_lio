@@ -188,7 +188,8 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                                      const int voxel_search_radius = 1,
                                      const std::optional<Eigen::Vector3d>& localizability_axis = std::nullopt,
                                      const double localizability_boost = 0.0,
-                                     IcpWeightingStats* weighting_stats = nullptr) {
+                                     IcpWeightingStats* weighting_stats = nullptr,
+                                     std::vector<VoxelHashMap::NeighborhoodCache>* neighborhoods = nullptr) {
   // H, b, chi, weight sum. The weight sum replaces the correspondence count in
   // the H/b normalization; with weighting disabled every weight is exactly 1
   // and the result is bit-identical to the historical count-normalized system.
@@ -240,8 +241,11 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
         return std::transform_reduce(r.begin(), r.end(), J, linear_system_reduce, [&](const auto& point) {
           // Compute data association and linear system
           const Eigen::Vector3d transformed_point = current_pose * point;
+          // neighborhoods holds one cache per point of frame, indexed like frame.
           const auto& [closest_neighbor, distance] =
-              voxel_map.get_closest_neighbor(transformed_point, voxel_search_radius);
+              neighborhoods != nullptr
+                  ? voxel_map.get_closest_neighbor(transformed_point, (*neighborhoods)[&point - frame.data()])
+                  : voxel_map.get_closest_neighbor(transformed_point, voxel_search_radius);
           if (distance < max_correspondence_distance) {
             correspondences_counter++;
             return linear_system_for_one_point(transformed_point, closest_neighbor);
@@ -354,6 +358,9 @@ IcpResult icp(const Vector3dVector& frame,
   IcpWeightingStats weighting_stats;
   int photometric_patches = 0;
   double lm_lambda = -1.0;
+  // voxel_map does not change during this loop, so the voxel lookups of every keypoint can be
+  // kept between iterations. Only the 3x3x3 search (radius 1) has such a cache.
+  std::vector<VoxelHashMap::NeighborhoodCache> neighborhoods(voxel_search_radius <= 1 ? frame.size() : 0);
   for (size_t i = 0; i < iteration_budget; ++i) {
     // The system at a pose; Levenberg-Marquardt also evaluates candidate steps with it.
     auto build_system = [&](const Sophus::SE3d& evaluation_pose) -> LinearSystem {
@@ -375,7 +382,7 @@ IcpResult icp(const Vector3dVector& frame,
       if (!bump_used) {
         geometric = build_icp_linear_system(current_pose, frame, voxel_map, config.max_correspondence_distance,
                                             voxel_search_radius, localizability_axis, localizability_boost,
-                                            &weighting_stats);
+                                            &weighting_stats, voxel_search_radius <= 1 ? &neighborhoods : nullptr);
       }
       auto [H_icp, b_icp, chi_icp] = geometric;
       if (photometric != nullptr && weighting_stats.correspondences > 0) {
