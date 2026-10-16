@@ -33,6 +33,7 @@
 #include <Eigen/Eigenvalues>
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -45,9 +46,35 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#if defined(_MSC_VER) && !defined(__clang__) && (defined(_M_X64) || defined(_M_IX86))
+#include <xmmintrin.h>
+#endif
 
 namespace {
 using rko_lio::core::Voxel;
+
+// A hint to load `address` into the cache. It changes nothing that is read or computed.
+inline void prefetch(const void* address) {
+#if defined(__GNUC__) || defined(__clang__)
+  __builtin_prefetch(address);
+#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+  _mm_prefetch(static_cast<const char*>(address), _MM_HINT_T0);
+#else
+  static_cast<void>(address);
+#endif
+}
+
+// The first cache lines (up to three, or eight points) of the `count` points at `points`.
+inline void prefetch_points(const Eigen::Vector3d* points, const std::uint32_t count) {
+  if (points == nullptr) {
+    return;
+  }
+  const char* bytes = reinterpret_cast<const char*>(points);
+  const std::size_t size = std::min<std::size_t>(std::size_t{count} * sizeof(Eigen::Vector3d), 3 * 64);
+  for (std::size_t offset = 0; offset < size; offset += 64) {
+    prefetch(bytes + offset);
+  }
+}
 
 static const std::array<Voxel, 27> shifts{
     Voxel{-1, -1, -1}, Voxel{-1, -1, 0}, Voxel{-1, -1, 1}, //
@@ -139,6 +166,14 @@ std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eig
   if (voxel != cache.voxel) {
     cache.voxel = voxel;
     cache.looked_up = 0;
+  } else {
+    // The search below reads again the points of the voxels found by the earlier calls, and those
+    // are rarely still in the cache by then. Requesting them all first lets the misses overlap
+    // instead of stalling the search one voxel at a time.
+    for (std::uint32_t pending = cache.looked_up; pending != 0; pending &= pending - 1) {
+      const auto shift = static_cast<std::size_t>(std::countr_zero(pending));
+      prefetch_points(cache.points[shift], cache.sizes[shift]);
+    }
   }
   return closest_neighbor_around(query, voxel, voxel_size_, [&](const std::size_t shift) {
     const std::uint32_t bit = std::uint32_t{1} << shift;
