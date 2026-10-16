@@ -51,6 +51,8 @@ struct VoxelHashMap {
   void clear() {
     map_.clear();
     normal_map_.clear();
+    voxel_fronts_.clear();
+    far_bound_sq_ = 0.0;
   }
   bool empty() const { return map_.empty(); }
   void update(const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& pose);
@@ -91,6 +93,17 @@ struct VoxelHashMap {
 
 private:
   void refresh_normal(const Voxel& voxel, const VoxelBlock& points);
+
+  // The first point of every voxel, which remove_points_far_from_location() judges the voxel by,
+  // with its key, in no particular order. Scanning this list is much cheaper than walking map_.
+  struct VoxelFront {
+    Eigen::Vector3d point;
+    Voxel voxel;
+  };
+  std::vector<VoxelFront> voxel_fronts_;
+  // Upper bound on the squared distance from far_bound_origin_ to any point of voxel_fronts_.
+  Eigen::Vector3d far_bound_origin_ = Eigen::Vector3d::Zero();
+  double far_bound_sq_ = 0.0;
 };
 
 } // namespace rko_lio::core
