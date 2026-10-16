@@ -39,6 +39,7 @@
 // tbb
 #include <tbb/blocked_range.h>
 #include <tbb/global_control.h>
+#include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/task_arena.h>
 // stl
@@ -122,10 +123,13 @@ Vector3dVector deskew_scan(const Vector3dVector& frame,
                            const Functor& relative_pose_at_time) {
   const Sophus::SE3d scan_to_scan_motion_inverse = relative_pose_at_time(end_time).inverse();
   Vector3dVector deskewed(frame.size());
-  std::transform(frame.cbegin(), frame.cend(), timestamps.cbegin(), deskewed.begin(),
-                 [&](const Eigen::Vector3d& point, const Nsec timestamp) {
-                   return (scan_to_scan_motion_inverse * relative_pose_at_time(timestamp)) * point;
-                 });
+  // Each point is computed on its own and written to its own slot, so the output does not
+  // depend on how the points are split across threads.
+  tbb::parallel_for(tbb::blocked_range<std::size_t>{0, frame.size()}, [&](const tbb::blocked_range<std::size_t>& r) {
+    for (std::size_t i = r.begin(); i != r.end(); ++i) {
+      deskewed[i] = (scan_to_scan_motion_inverse * relative_pose_at_time(timestamps[i])) * frame[i];
+    }
+  });
   return deskewed;
 }
 
