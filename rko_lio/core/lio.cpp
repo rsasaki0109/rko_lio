@@ -39,6 +39,7 @@
 // tbb
 #include <tbb/blocked_range.h>
 #include <tbb/global_control.h>
+#include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/task_arena.h>
 // stl
@@ -58,9 +59,17 @@ constexpr double EPSILON = 1e-8;
 constexpr auto EPSILON_TIME = std::chrono::nanoseconds(10);
 using namespace rko_lio::core;
 
-inline void transform_points(const Sophus::SE3d& T, Vector3dVector& points) {
-  std::transform(points.begin(), points.end(), points.begin(), [&](const auto& point) { return T * point; });
+// Each point is transformed on its own, so splitting the range across threads changes nothing.
+// `transformed` may be `points`.
+inline void transform_points(const Sophus::SE3d& T, const Vector3dVector& points, Vector3dVector& transformed) {
+  tbb::parallel_for(tbb::blocked_range<std::size_t>{0, points.size()}, [&](const tbb::blocked_range<std::size_t>& r) {
+    for (std::size_t i = r.begin(); i != r.end(); ++i) {
+      transformed[i] = T * points[i];
+    }
+  });
 }
+
+inline void transform_points(const Sophus::SE3d& T, Vector3dVector& points) { transform_points(T, points, points); }
 
 struct AccelInfo {
   double accel_mag_variance;
@@ -2408,8 +2417,7 @@ Vector3dVector LIO::register_scan(const Sophus::SE3d& extrinsic_lidar2base,
   }
 
   Vector3dVector transformed_scan(scan.size());
-  std::transform(scan.cbegin(), scan.cend(), transformed_scan.begin(),
-                 [&](const Eigen::Vector3d& p) { return extrinsic_lidar2base * p; });
+  transform_points(extrinsic_lidar2base, scan, transformed_scan);
   Vector3dVector frame = register_scan(transformed_scan, timestamps, intensities);
   transform_points(extrinsic_lidar2base.inverse(), frame);
   return frame;
