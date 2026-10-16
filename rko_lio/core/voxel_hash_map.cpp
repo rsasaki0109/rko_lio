@@ -40,6 +40,7 @@
 #include <optional>
 #include <sophus/se3.hpp>
 #include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
 #include <tuple>
 #include <utility>
@@ -304,8 +305,12 @@ void VoxelHashMap::remove_points_far_from_location(const Eigen::Vector3d& origin
 
 void VoxelHashMap::update(const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& pose) {
   std::vector<Eigen::Vector3d> points_transformed(points.size());
-  std::transform(points.cbegin(), points.cend(), points_transformed.begin(),
-                 [&](const auto& point) { return pose * point; });
+  // Each point is transformed on its own; add_points() below keeps the order of the points.
+  tbb::parallel_for(tbb::blocked_range<std::size_t>{0, points.size()}, [&](const tbb::blocked_range<std::size_t>& r) {
+    for (std::size_t i = r.begin(); i != r.end(); ++i) {
+      points_transformed[i] = pose * points[i];
+    }
+  });
   const Eigen::Vector3d& origin = pose.translation();
   add_points(points_transformed);
   remove_points_far_from_location(origin);
