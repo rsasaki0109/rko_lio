@@ -37,7 +37,10 @@
 #include <limits>
 #include <optional>
 #include <sophus/se3.hpp>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_reduce.h>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -173,6 +176,10 @@ void VoxelHashMap::add_points(const std::vector<Eigen::Vector3d>& points) {
                     [&](const auto& voxel_point) { return (voxel_point - p).squaredNorm() < map_resolution_sq; })) {
       return;
     }
+    if (voxel_points.empty()) {
+      voxel_fronts_.push_back({p, voxel});
+      far_bound_sq_ = std::max(far_bound_sq_, (p - far_bound_origin_).squaredNorm());
+    }
     voxel_points.reserve(max_points_per_voxel_);
     voxel_points.emplace_back(p);
     if (maintain_normals_) {
@@ -219,16 +226,47 @@ std::optional<Eigen::Vector3d> VoxelHashMap::voxel_normal(const Eigen::Vector3d&
 }
 
 void VoxelHashMap::remove_points_far_from_location(const Eigen::Vector3d& origin) {
+  // When no first point can be beyond the clipping distance, nothing is erased. The relative
+  // margin is far larger than the rounding of these distances.
+  if (std::sqrt(far_bound_sq_) + (origin - far_bound_origin_).norm() < clipping_distance_ * (1.0 - 1e-9)) {
+    return;
+  }
   const double clipping_distance_sq = clipping_distance_ * clipping_distance_;
-  for (auto it = map_.begin(); it != map_.end();) {
-    const VoxelBlock& voxel_points = it->second;
-    if ((voxel_points.front() - origin).squaredNorm() > clipping_distance_sq) {
-      normal_map_.erase(it->first);
-      it = map_.erase(it);
-    } else {
-      ++it;
+  const auto distance_sq = [&](const VoxelFront& front) { return (front.point - origin).squaredNorm(); };
+  // The largest distance among the voxels that stay, and whether any voxel goes. Both reductions
+  // are exact, so the split across threads does not matter.
+  using FarScan = std::pair<double, bool>;
+  const auto [kept_sq, any_far] = tbb::parallel_reduce(
+      tbb::blocked_range<std::size_t>{0, voxel_fronts_.size()}, FarScan{0.0, false},
+      [&](const tbb::blocked_range<std::size_t>& r, FarScan scan) {
+        for (std::size_t i = r.begin(); i != r.end(); ++i) {
+          const double d = distance_sq(voxel_fronts_[i]);
+          if (d > clipping_distance_sq) {
+            scan.second = true;
+          } else {
+            scan.first = std::max(scan.first, d);
+          }
+        }
+        return scan;
+      },
+      [](const FarScan& a, const FarScan& b) { return FarScan{std::max(a.first, b.first), a.second || b.second}; });
+  if (any_far) {
+    // Erasing the far voxels in this order instead of map_'s iteration order leaves map_ the same:
+    // backward-shift deletion keeps the remaining entries in their order, each as close to its
+    // ideal bucket as that order allows, whatever the order of the deletions.
+    for (std::size_t i = 0; i < voxel_fronts_.size();) {
+      if (distance_sq(voxel_fronts_[i]) > clipping_distance_sq) {
+        normal_map_.erase(voxel_fronts_[i].voxel);
+        map_.erase(voxel_fronts_[i].voxel);
+        voxel_fronts_[i] = voxel_fronts_.back();
+        voxel_fronts_.pop_back();
+      } else {
+        ++i;
+      }
     }
   }
+  far_bound_origin_ = origin;
+  far_bound_sq_ = kept_sq;
 }
 
 void VoxelHashMap::update(const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& pose) {
