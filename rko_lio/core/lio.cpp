@@ -206,15 +206,23 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
   // count in the H/b normalization; with weighting disabled every weight is exactly 1
   // and the result is bit-identical to the historical count-normalized system.
   using WeightedSystem = std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double, double, int>;
-  auto linear_system_reduce = [](WeightedSystem lhs, const WeightedSystem& rhs) {
-    auto& [lhs_H, lhs_b, lhs_chi, lhs_w, lhs_n] = lhs;
-    const auto& [rhs_H, rhs_b, rhs_chi, rhs_w, rhs_n] = rhs;
-    lhs_H += rhs_H;
-    lhs_b += rhs_b;
-    lhs_chi += rhs_chi;
-    lhs_w += rhs_w;
-    lhs_n += rhs_n;
-    return lhs;
+  struct SystemSum {
+    Eigen::Matrix6d H = Eigen::Matrix6d::Zero();
+    Eigen::Vector6d b = Eigen::Vector6d::Zero();
+    double chi = 0.0;
+    double weight = 0.0;
+    int correspondences = 0;
+    void add(const Eigen::Matrix6d& H_add,
+             const Eigen::Vector6d& b_add,
+             const double chi_add,
+             const double weight_add,
+             const int correspondences_add) {
+      H += H_add;
+      b += b_add;
+      chi += chi_add;
+      weight += weight_add;
+      correspondences += correspondences_add;
+    }
   };
 
   const bool weighting_enabled = localizability_axis.has_value() && localizability_boost > 0.0;
@@ -244,31 +252,43 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
   // different trajectories.
   // The correspondences are counted in the reduction too: a shared atomic counter made every
   // thread contend for one cache line on every correspondence.
+  // The sums are kept in place instead of being passed around as tuples, which copied the 6x6
+  // system at every leaf and join of the tree. The tree does not change: with grain size 1 every
+  // leaf is a single point, whose system is added to zeros, and every join adds the right sum to
+  // the left one, as before. A point without a correspondence adds nothing; its zeros never
+  // changed a sum either.
   using points_iterator = std::vector<Eigen::Vector3d>::const_iterator;
-  const auto& [H_icp, b_icp, chi_icp, weight_sum, correspondences] = tbb::parallel_deterministic_reduce(
-      // Range
-      tbb::blocked_range<points_iterator>{frame.cbegin(), frame.cend()},
-      // Identity
-      WeightedSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0, 0.0, 0),
-      // 1st Lambda: Parallel computation
-      [&](const tbb::blocked_range<points_iterator>& r, WeightedSystem J) -> WeightedSystem {
-        return std::transform_reduce(r.begin(), r.end(), J, linear_system_reduce, [&](const auto& point) {
-          // Compute data association and linear system
-          const Eigen::Vector3d transformed_point = current_pose * point;
-          // neighborhoods holds one cache per point of frame, indexed like frame.
-          const auto& [closest_neighbor, distance] =
-              neighborhoods != nullptr
-                  ? voxel_map.get_closest_neighbor(transformed_point, (*neighborhoods)[&point - frame.data()])
-                  : voxel_map.get_closest_neighbor(transformed_point, voxel_search_radius);
-          if (distance < max_correspondence_distance) {
-            return linear_system_for_one_point(transformed_point, closest_neighbor);
-          }
-          // TODO (meher): additional 0 add flops, which may hurt single threaded perf slightly
-          return WeightedSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0, 0.0, 0);
-        });
-      },
-      // 2nd Lambda: Parallel reduction of the private Jacobians
-      linear_system_reduce);
+  auto add_point_system = [&](const Eigen::Vector3d& point, SystemSum& sum) {
+    // Compute data association and linear system
+    const Eigen::Vector3d transformed_point = current_pose * point;
+    // neighborhoods holds one cache per point of frame, indexed like frame.
+    const auto& [closest_neighbor, distance] =
+        neighborhoods != nullptr
+            ? voxel_map.get_closest_neighbor(transformed_point, (*neighborhoods)[&point - frame.data()])
+            : voxel_map.get_closest_neighbor(transformed_point, voxel_search_radius);
+    if (distance < max_correspondence_distance) {
+      const auto& [H, b, chi, weight, correspondences] =
+          linear_system_for_one_point(transformed_point, closest_neighbor);
+      sum.add(H, b, chi, weight, correspondences);
+    }
+  };
+  struct SystemSumBody {
+    decltype(add_point_system)& add_point;
+    SystemSum sum;
+    explicit SystemSumBody(decltype(add_point_system)& add_point_) : add_point(add_point_) {}
+    SystemSumBody(SystemSumBody& other, tbb::split) : add_point(other.add_point) {}
+    void operator()(const tbb::blocked_range<points_iterator>& r) {
+      for (auto point = r.begin(); point != r.end(); ++point) {
+        add_point(*point, sum);
+      }
+    }
+    void join(SystemSumBody& rhs) {
+      sum.add(rhs.sum.H, rhs.sum.b, rhs.sum.chi, rhs.sum.weight, rhs.sum.correspondences);
+    }
+  };
+  SystemSumBody body(add_point_system);
+  tbb::parallel_deterministic_reduce(tbb::blocked_range<points_iterator>{frame.cbegin(), frame.cend()}, body);
+  const auto& [H_icp, b_icp, chi_icp, weight_sum, correspondences] = body.sum;
 
   if (correspondences == 0) {
     throw std::runtime_error("Number of correspondences are 0.");
