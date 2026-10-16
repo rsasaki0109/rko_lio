@@ -255,4 +255,29 @@ TEST(VoxelHashMap, PruningLeavesTheMapAsAWalkOverItWould) {
   }
 }
 
+// A query that wanders across voxel boundaries, so the cache is both reused and invalidated.
+TEST(VoxelHashMap, CachedNeighborhoodSearchMatchesTheUncachedOne) {
+  std::uint64_t state = 42;
+  const auto uniform = [&state]() {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    return static_cast<double>(state >> 11) / static_cast<double>(std::uint64_t{1} << 53);
+  };
+  VoxelHashMap grid(0.5, 100.0, 20U);
+  std::vector<Eigen::Vector3d> points;
+  for (int i = 0; i < 2000; ++i) {
+    points.emplace_back(4.0 * uniform() - 2.0, 4.0 * uniform() - 2.0, uniform() - 0.5);
+  }
+  grid.add_points(points);
+
+  VoxelHashMap::NeighborhoodCache cache;
+  Eigen::Vector3d query(0.1, 0.2, 0.0);
+  for (int step = 0; step < 1000; ++step) {
+    query += Eigen::Vector3d(0.1 * uniform() - 0.05, 0.1 * uniform() - 0.05, 0.04 * uniform() - 0.02);
+    const auto [expected, expected_distance] = grid.get_closest_neighbor(query);
+    const auto [actual, distance] = grid.get_closest_neighbor(query, cache);
+    EXPECT_TRUE(actual == expected) << "query: " << query.transpose();
+    EXPECT_EQ(distance, expected_distance) << "query: " << query.transpose();
+  }
+}
+
 } // namespace
