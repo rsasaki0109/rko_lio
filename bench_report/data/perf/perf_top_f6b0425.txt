@@ -1,0 +1,40 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 86K of event 'cpu-clock'
+# Event count (approx.): 173264527672
+#
+# Overhead  Symbol                                                                                                                                                                                      
+# ........  ............................................................................................................................................................................................
+#
+    49.01%  [.] rko_lio::core::VoxelHashMap::get_closest_neighbor(Eigen::Matrix<double, 3, 1, 0, 3, 1> const&, rko_lio::core::VoxelHashMap::NeighborhoodCache&) const                                   
+     5.62%  [.] tbb::detail::d1::start_for<tbb::detail::d1::blocked_range<unsigned long>, (anonymous namespace)::deskew_scan<rko_lio::core::LIO::register_scan(std::vector<Eigen::Matrix<double, 3, 1, 0
+     4.03%  [.] __sched_yield                                                                                                                                                                           
+     2.51%  [.] Sophus::SE3<double, 0>::exp(Eigen::Matrix<double, 6, 1, 0, 6, 1> const&)                                                                                                                
+     2.48%  [k] __schedule                                                                                                                                                                              
+     2.47%  [.] tbb::detail::d1::start_deterministic_reduce<tbb::detail::d1::blocked_range<__gnu_cxx::__normal_iterator<Eigen::Matrix<double, 3, 1, 0, 3, 1> const*, std::vector<Eigen::Matrix<double, 3
+     2.43%  [.] (anonymous namespace)::build_icp_linear_system(Sophus::SE3<double, 0> const&, std::vector<Eigen::Matrix<double, 3, 1, 0, 3, 1>, std::allocator<Eigen::Matrix<double, 3, 1, 0, 3, 1> > > 
+     2.35%  [.] std::tuple<Eigen::Matrix<double, 6, 6, 0, 6, 6>, Eigen::Matrix<double, 6, 1, 0, 6, 1>, double, double, int> std::transform_reduce<__gnu_cxx::__normal_iterator<Eigen::Matrix<double, 3, 
+     2.14%  [.] tbb::detail::d1::lambda_reduce_body<tbb::detail::d1::blocked_range<__gnu_cxx::__normal_iterator<Eigen::Matrix<double, 3, 1, 0, 3, 1> const*, std::vector<Eigen::Matrix<double, 3, 1, 0, 
+     1.98%  [.] __memmove_evex_unaligned_erms                                                                                                                                                           
+     1.85%  [.] __sincos_fma                                                                                                                                                                            
+     1.70%  [.] rko_lio::core::VoxelHashMap::add_points(std::vector<Eigen::Matrix<double, 3, 1, 0, 3, 1>, std::allocator<Eigen::Matrix<double, 3, 1, 0, 3, 1> > > const&)                               
+     1.50%  [.] tbb::detail::r1::arena::process(tbb::detail::r1::thread_data&)                                                                                                                          
+     1.36%  [.] Sophus::SO3<double, 0>::expAndTheta(Eigen::Matrix<double, 3, 1, 0, 3, 1> const&, double*)                                                                                               
+     1.06%  [.] rko_lio::core::voxel_down_sample_sorted(std::vector<Eigen::Matrix<double, 3, 1, 0, 3, 1>, std::allocator<Eigen::Matrix<double, 3, 1, 0, 3, 1> > > const&, double)                       
+     0.90%  [.] __memset_evex_unaligned_erms                                                                                                                                                            
+     0.81%  [k] rep_movs_alternative                                                                                                                                                                    
+     0.72%  [.] tbb::detail::d1::start_reduce<tbb::detail::d1::blocked_range<unsigned long>, tbb::detail::d1::lambda_reduce_body<tbb::detail::d1::blocked_range<unsigned long>, std::pair<double, bool>,
+     0.72%  [.] tbb::detail::r1::arena_slot::get_task(tbb::detail::r1::execution_data_ext&, long)                                                                                                       
+     0.71%  [k] do_syscall_64                                                                                                                                                                           
+     0.67%  [.] tbb::detail::d1::lambda_reduce_body<tbb::detail::d1::blocked_range<__gnu_cxx::__normal_iterator<Eigen::Matrix<double, 3, 1, 0, 3, 1> const*, std::vector<Eigen::Matrix<double, 3, 1, 0, 
+     0.67%  [.] rko_lio::ros::utils::point_cloud2_to_eigen_with_timestamps(std::shared_ptr<sensor_msgs::msg::PointCloud2_<std::allocator<void> > const> const&)                                         
+     0.63%  [.] Sophus::SO3Base<Sophus::SO3<double, 0> >::normalize()                                                                                                                                   
+     0.62%  [.] tbb::detail::d1::start_for<tbb::detail::d1::blocked_range<unsigned long>, (anonymous namespace)::transform_points(Sophus::SE3<double, 0> const&, std::vector<Eigen::Matrix<double, 3, 1,
+     0.56%  [.] _mid_memalign.isra.0                                                                                                                                                                    
+     0.55%  [k] do_sched_yield                                                                                                                                                                          
+#
+# (Cannot load tips.txt file, please install perf!)
+#
