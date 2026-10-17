@@ -18,6 +18,7 @@
 | バックエンドは律速か | **律速ではない**。graph_based_slam は平均 0.1 コア（約 45 秒で CPU 4.2 秒）、フロントエンドは平均 3.4 コア。壁時計はフロントエンドの終了 + 約 3 秒 |
 | ループ閉じ込みを有効にした場合（10 章） | **バックエンドが律速になる**。ループ候補の NDT 照合が 1 候補あたり CPU 約 17〜24 秒かかり、バックエンドが約 2.3 コアを使ってフロントエンドを 1.5 コア前後まで押し下げる。RTF はベース 1.631 → f6b0425 0.974（比 0.597）、f6b0425 0.880 → 734d54f 0.810（比 0.921）。フロントエンド終了後もバックエンドは 17〜20 秒働き続ける。照合中に入力が溢れ、キーフレーム（サブマップ）を取りこぼす（40 個中、ベース 34 個、f6b0425 と 734d54f は 29 個）。exp04 では採用されたループは 0 件 |
 | さらに 2 コミット（12 章、GLIM に速さで並ぶため） | 734d54f→a92dfd4：exp04 39.97 → **26.07 秒（比 0.652）**、MID-360 29.22 → **17.38 秒（比 0.595）**（直接の ABAB 3 組）。ICP の近傍探索を、前回の最近傍が三角不等式で最も近いままと言えるときだけ省き（exp04 で 82.8% を省略）、決定的リダクションの葉を 64 点にして同じ木を逐次にたどる。省いた探索 1.1 億回と連立方程式 6.3 万回を元の計算と全数照合して不一致 0。全体（graph_based_slam 込み、結果の保存まで）は GLIM CPU の 0.770 倍（ループ無効）、0.884 倍（ループ有効）の時間 |
+| bag の最後で止まる不具合（13 章） | IMU が LiDAR より先に終わる bag で、offline_node の読み込みと登録のスレッドが互いを待って止まっていた（MapsHD underground-garage の trial-1）。40b3a06 で、登録が IMU を待っている間は読み続けるようにした。exp04・MID-360・Oxford の軌跡の md5 は変わらない |
 
 ## 1. 環境
 
@@ -217,6 +218,7 @@ perf（cpu-clock、全スレッド）で f6b0425 を見ると、CPU サンプル
 | 734d54f | Sum the ICP systems in place instead of passing tuples through the tree |
 | d209cb4 | Skip the ICP neighbour search when the cached neighbour must still be the nearest（12 章） |
 | a92dfd4 | Sum the ICP systems of up to 64 points per reduction task with the same tree（12 章） |
+| 40b3a06 | Keep reading the bag while registration waits for IMU data（13 章、出力は変わらない） |
 | （このレポート） | bench_report/ を追加（コードには触れない） |
 
 master、fix/configurable-voxel-sampling、既存の perf/* には push していない。force push もしていない。PR も作っていない。
@@ -351,6 +353,22 @@ graph_based_slam の出力（軌跡・グラフ・ループ辺・地図）は、
 - d209cb4 の余裕には座標に比例する項（1e-12 倍）があるので、座標の大きさによらず丸め（座標の 1e-15 倍程度）より約 1000 倍大きい。座標が極端に大きいと余裕が近傍の大きさを超えて省けなくなるだけで、結果は変わらない。前提は 7 章と同じで、x86-64 の既定ターゲット（FMA への縮約なし）。aarch64 などでは md5 を取り直すこと。
 - a92dfd4 は TBB の `blocked_range` の分割規則（真ん中で割る）と、決定的リダクションの body の扱いに依存している。oneTBB を上げるときは、検証ビルドの全数照合（`scripts/verify_exact_patches.py grain`）をもう一度走らせること。
 - フロントエンドが速くなったぶん、起動直後にバックエンドがまだ購読していないと、失われる走査が増える。VM の再起動直後（graph_based_slam のライブラリがディスクから読まれた初回）に、冒頭の約 260 走査が失われてサブマップが 40 → 37 個になった。これは既存の挙動で（offline_node は購読者を待たない）、ライブラリがキャッシュに載った 2 回目以降は起きていない。
+
+## 13. bag の最後で止まる不具合の修正（追記、2026-10-17）
+
+- **症状**：MapsHD HUMANOID-LIO-DATASET の underground-garage の trial-1（rsasaki0109/lidar_slam_ros2 の bench_report 15 章）で、offline_node が終わらなかった。CPU をほとんど使わないまま 25 分止まっていた。
+  - この bag は、IMU が LiDAR より 9.9 秒早く終わる（LiDAR は 1779234957.6 まで、IMU は 1779234947.7 まで）。
+- **原因**：2 つのスレッドが互いを待っていた。
+  - 読み込みのスレッドは、LiDAR のバッファが 9 割（45 フレーム）になると、読むのを止めて待つ。
+  - 最後の 9.9 秒のフレームは、後ろに IMU がないので登録できない。登録のスレッドは IMU を待つ。
+  - bag を読み終えたときに残りのフレームを捨てる既存の処理（フォークでの修正）は、読み終える前に止まるので働かなかった。
+- **修正（40b3a06）**：登録のスレッドが進める間（登録できるフレームがあるか、登録中）だけ、読むのを止める。
+  - 登録のスレッドが IMU を待って止まっているときは、IMU は bag からしか来ないので読み続ける。
+  - バッファが一杯になると、LiDAR のコールバックが既存の処理で古いフレームから捨てる。
+- **出力は変わらない**：時刻順の bag では、45 フレームたまった時点で IMU は先頭のフレームを覆っているので、2 つのフラグのどちらかが必ず立っている。
+  - exp04、MID-360、Oxford Keble 05（moving-start guard あり）で、軌跡の md5 は修正前と同じ（`bc231992…`、`2a1c8107…`、`3fe77723…`。`data/deadlock/runs_40b3a06.csv`）。
+- **修正後**：underground-garage の trial-1 は 27.5 秒で終わり、3,610 姿勢を出す。IMU のない最後の 100 フレームは捨てる（50 フレームは読み込み中に、残りの 50 フレームは読み終えた後に。`data/deadlock/garage1_40b3a06_log_excerpt.txt`）。
+- **テスト**：ROS の bag を読む経路なので、単体テストは足していない。確認は `scripts/deadlock_fix_check.sh`。
 
 ## 付録：全ランの表
 
