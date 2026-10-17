@@ -102,13 +102,18 @@ inline double axis_bound_sq(const double frac, const double voxel_size, const in
 // The 3x3x3 search around `voxel`. points_of(i) returns the points of voxel + shifts[i] as a pointer
 // and a count (nullptr and 0 when that voxel does not exist); it is called only for the voxels
 // that the distance bound does not rule out, in the order of `shifts`.
-template <typename PointsOf>
+// With kBoundOthers it also stores in *others_squared_distance a lower bound on the squared
+// distance from `query` to every point of the 27 voxels but the one returned: the smallest
+// squared distance among the other points it read, and the bound of every voxel it skipped.
+template <bool kBoundOthers = false, typename PointsOf>
 std::tuple<Eigen::Vector3d, double> closest_neighbor_around(const Eigen::Vector3d& query,
                                                             const Voxel& voxel,
                                                             const double voxel_size,
-                                                            const PointsOf& points_of) {
+                                                            const PointsOf& points_of,
+                                                            double* others_squared_distance = nullptr) {
   Eigen::Vector3d closest_neighbor = Eigen::Vector3d::Zero();
   double closest_squared_distance = std::numeric_limits<double>::max();
+  [[maybe_unused]] double others = std::numeric_limits<double>::max();
   const Eigen::Vector3d fractional = query - voxel.cast<double>() * voxel_size;
   std::array<std::array<double, 3>, 3> axis_bounds;
   for (int axis = 0; axis < 3; ++axis) {
@@ -122,22 +127,39 @@ std::tuple<Eigen::Vector3d, double> closest_neighbor_around(const Eigen::Vector3
                             axis_bounds[1][voxel_shift.y() + 1] +
                             axis_bounds[2][voxel_shift.z() + 1];
     if (bound_sq >= closest_squared_distance) {
+      if constexpr (kBoundOthers) {
+        others = std::min(others, bound_sq);
+      }
       continue;
     }
     const auto [points, count] = points_of(shift);
     for (std::size_t i = 0; i < count; ++i) {
       const double squared_distance = (points[i] - query).squaredNorm();
       if (squared_distance < closest_squared_distance) {
+        if constexpr (kBoundOthers) {
+          others = std::min(others, closest_squared_distance);
+        }
         closest_neighbor = points[i];
         closest_squared_distance = squared_distance;
+      } else if constexpr (kBoundOthers) {
+        others = std::min(others, squared_distance);
       }
     }
+  }
+  if constexpr (kBoundOthers) {
+    *others_squared_distance = others;
   }
   const double closest_distance = closest_squared_distance == std::numeric_limits<double>::max()
                                       ? std::numeric_limits<double>::max()
                                       : std::sqrt(closest_squared_distance);
   return std::make_tuple(closest_neighbor, closest_distance);
 }
+
+// How much closer than every other point the cached neighbour must stay before a search is skipped.
+// It is many orders of magnitude above the rounding of the distances involved: about 1e-15 of the
+// coordinates for the point and query differences, and as much for the voxel bounds and for which
+// voxel a point near a voxel face was put in.
+inline double reuse_margin(const Eigen::Vector3d& query) { return 1e-6 + 1e-12 * query.cwiseAbs().maxCoeff(); }
 
 } // namespace
 
@@ -166,7 +188,19 @@ std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eig
   if (voxel != cache.voxel) {
     cache.voxel = voxel;
     cache.looked_up = 0;
+    cache.has_reference = false;
   } else {
+    if (cache.has_reference) {
+      // Every other point of the 27 voxels is at least reference_others_distance from
+      // reference_query, so at least that minus `moved` from query. When the reference neighbour is
+      // closer than that by the margin, it is the strict nearest point, and the search below would
+      // return it with this very distance, computed the same way.
+      const double distance = std::sqrt((cache.reference_neighbor - query).squaredNorm());
+      const double moved = (query - cache.reference_query).norm();
+      if (distance + moved + reuse_margin(query) < cache.reference_others_distance) {
+        return std::make_tuple(cache.reference_neighbor, distance);
+      }
+    }
     // The search below reads again the points of the voxels found by the earlier calls, and those
     // are rarely still in the cache by then. Requesting them all first lets the misses overlap
     // instead of stalling the search one voxel at a time.
@@ -175,16 +209,25 @@ std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eig
       prefetch_points(cache.points[shift], cache.sizes[shift]);
     }
   }
-  return closest_neighbor_around(query, voxel, voxel_size_, [&](const std::size_t shift) {
-    const std::uint32_t bit = std::uint32_t{1} << shift;
-    if ((cache.looked_up & bit) == 0) {
-      const auto search = map_.find(voxel + shifts[shift]);
-      cache.points[shift] = search != map_.end() ? search.value().data() : nullptr;
-      cache.sizes[shift] = search != map_.end() ? static_cast<std::uint32_t>(search.value().size()) : 0U;
-      cache.looked_up |= bit;
-    }
-    return std::pair<const Eigen::Vector3d*, std::size_t>(cache.points[shift], cache.sizes[shift]);
-  });
+  double others_squared_distance = std::numeric_limits<double>::max();
+  const auto result = closest_neighbor_around<true>(
+      query, voxel, voxel_size_,
+      [&](const std::size_t shift) {
+        const std::uint32_t bit = std::uint32_t{1} << shift;
+        if ((cache.looked_up & bit) == 0) {
+          const auto search = map_.find(voxel + shifts[shift]);
+          cache.points[shift] = search != map_.end() ? search.value().data() : nullptr;
+          cache.sizes[shift] = search != map_.end() ? static_cast<std::uint32_t>(search.value().size()) : 0U;
+          cache.looked_up |= bit;
+        }
+        return std::pair<const Eigen::Vector3d*, std::size_t>(cache.points[shift], cache.sizes[shift]);
+      },
+      &others_squared_distance);
+  cache.has_reference = std::get<1>(result) != std::numeric_limits<double>::max();
+  cache.reference_query = query;
+  cache.reference_neighbor = std::get<0>(result);
+  cache.reference_others_distance = std::sqrt(others_squared_distance);
+  return result;
 }
 
 std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eigen::Vector3d& query,

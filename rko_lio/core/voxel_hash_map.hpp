@@ -73,10 +73,19 @@ struct VoxelHashMap {
 
   /** Points of the 3x3x3 voxels around one query voxel, looked up lazily and kept across calls.
    *  ICP queries every keypoint once per iteration and keypoints rarely change voxels between
-   *  iterations, so most hash lookups can be reused. Valid only while the map is not modified. */
+   *  iterations, so most hash lookups can be reused. Valid only while the map is not modified.
+   *
+   *  It also keeps the last full search in this voxel: its query, the point it found, and a lower
+   *  bound on the distance from that query to every other point of the 3x3x3 voxels. A later
+   *  query that has moved less than that gap leaves the same point the nearest by a clear margin,
+   *  so the search is not repeated. */
   struct NeighborhoodCache {
     Voxel voxel = Voxel::Zero();
-    std::uint32_t looked_up = 0; // bit i: shift i has been looked up
+    bool has_reference = false;
+    Eigen::Vector3d reference_query = Eigen::Vector3d::Zero();
+    Eigen::Vector3d reference_neighbor = Eigen::Vector3d::Zero();
+    double reference_others_distance = 0.0; // lower bound, from reference_query
+    std::uint32_t looked_up = 0;            // bit i: shift i has been looked up
     std::array<const Eigen::Vector3d*, 27> points{};
     std::array<std::uint32_t, 27> sizes{};
   };

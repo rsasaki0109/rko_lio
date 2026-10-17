@@ -280,4 +280,57 @@ TEST(VoxelHashMap, CachedNeighborhoodSearchMatchesTheUncachedOne) {
   }
 }
 
+// ICP moves a keypoint by less and less as it converges, which is when the cache skips searches.
+// Every answer must still be bit-identical to a full search: while the nearest point stays the
+// same, when it changes, and when two points are exactly as near (where the first in the search
+// order must win, as before).
+TEST(VoxelHashMap, CachedSearchSkipsOnlyWhenTheNearestPointCannotChange) {
+  std::uint64_t state = 7;
+  const auto uniform = [&state]() {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    return static_cast<double>(state >> 11) / static_cast<double>(std::uint64_t{1} << 53);
+  };
+  const auto expect_same = [](const VoxelHashMap& grid, VoxelHashMap::NeighborhoodCache& cache,
+                              const Eigen::Vector3d& query) {
+    const auto [expected, expected_distance] = grid.get_closest_neighbor(query);
+    const auto [actual, distance] = grid.get_closest_neighbor(query, cache);
+    EXPECT_TRUE(actual == expected) << "query: " << query.transpose();
+    EXPECT_EQ(distance, expected_distance) << "query: " << query.transpose();
+  };
+
+  // Converging walks: every walk starts at a random place and its steps shrink geometrically.
+  VoxelHashMap grid(0.5, 100.0, 20U);
+  std::vector<Eigen::Vector3d> points;
+  for (int i = 0; i < 4000; ++i) {
+    points.emplace_back(6.0 * uniform() - 3.0, 6.0 * uniform() - 3.0, 2.0 * uniform() - 1.0);
+  }
+  grid.add_points(points);
+  for (int walk = 0; walk < 200; ++walk) {
+    VoxelHashMap::NeighborhoodCache cache;
+    Eigen::Vector3d query(4.0 * uniform() - 2.0, 4.0 * uniform() - 2.0, uniform() - 0.5);
+    double step = 0.05;
+    for (int iteration = 0; iteration < 30; ++iteration) {
+      expect_same(grid, cache, query);
+      query += step * Eigen::Vector3d(2.0 * uniform() - 1.0, 2.0 * uniform() - 1.0, 2.0 * uniform() - 1.0);
+      step *= 0.6;
+    }
+  }
+
+  // The nearest point changes halfway through a slow straight walk inside one voxel.
+  VoxelHashMap pair(1.0, 100.0, 20U);
+  pair.add_points({{0.30, 0.50, 0.50}, {0.70, 0.50, 0.50}});
+  VoxelHashMap::NeighborhoodCache pair_cache;
+  for (int i = 0; i <= 400; ++i) {
+    expect_same(pair, pair_cache, Eigen::Vector3d(0.40 + 0.0005 * i, 0.52, 0.47));
+  }
+
+  // Two points exactly as near to every query on the plane between them.
+  VoxelHashMap tie(1.0, 100.0, 20U);
+  tie.add_points({{0.25, 0.50, 0.50}, {0.75, 0.50, 0.50}});
+  VoxelHashMap::NeighborhoodCache tie_cache;
+  for (int i = 0; i <= 100; ++i) {
+    expect_same(tie, tie_cache, Eigen::Vector3d(0.50, 0.40 + 0.001 * i, 0.50));
+  }
+}
+
 } // namespace
