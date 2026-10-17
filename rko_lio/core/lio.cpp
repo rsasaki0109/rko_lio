@@ -272,22 +272,37 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
       sum.add(H, b, chi, weight, correspondences);
     }
   };
+  // The reduction splits ranges of up to kLeafPoints points no further and sums each of them
+  // serially with the very tree it used to build with tasks down to single points (grain size 1):
+  // split in the middle as tbb::blocked_range does, the left half summed into the sum, the right
+  // half into a zero sum that is then added to it. Every body is still zero when its range is
+  // run, as before, so every point's system is added to zeros and every sum is formed in the same
+  // order as with one task per point, without the cost of those tasks.
+  constexpr std::size_t kLeafPoints = 64;
   struct SystemSumBody {
     decltype(add_point_system)& add_point;
     SystemSum sum;
     explicit SystemSumBody(decltype(add_point_system)& add_point_) : add_point(add_point_) {}
     SystemSumBody(SystemSumBody& other, tbb::split) : add_point(other.add_point) {}
-    void operator()(const tbb::blocked_range<points_iterator>& r) {
-      for (auto point = r.begin(); point != r.end(); ++point) {
-        add_point(*point, sum);
+    void sum_tree(const points_iterator first, const points_iterator last, SystemSum& tree_sum) {
+      if (last - first == 1) {
+        add_point(*first, tree_sum);
+        return;
       }
+      const points_iterator middle = first + (last - first) / 2;
+      sum_tree(first, middle, tree_sum);
+      SystemSum right;
+      sum_tree(middle, last, right);
+      tree_sum.add(right.H, right.b, right.chi, right.weight, right.correspondences);
     }
+    void operator()(const tbb::blocked_range<points_iterator>& r) { sum_tree(r.begin(), r.end(), sum); }
     void join(SystemSumBody& rhs) {
       sum.add(rhs.sum.H, rhs.sum.b, rhs.sum.chi, rhs.sum.weight, rhs.sum.correspondences);
     }
   };
   SystemSumBody body(add_point_system);
-  tbb::parallel_deterministic_reduce(tbb::blocked_range<points_iterator>{frame.cbegin(), frame.cend()}, body);
+  tbb::parallel_deterministic_reduce(
+      tbb::blocked_range<points_iterator>{frame.cbegin(), frame.cend(), kLeafPoints}, body);
   const auto& [H_icp, b_icp, chi_icp, weight_sum, correspondences] = body.sum;
 
   if (correspondences == 0) {
