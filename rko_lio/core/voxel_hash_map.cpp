@@ -292,7 +292,13 @@ void VoxelHashMap::add_points(const std::vector<Eigen::Vector3d>& points) {
       voxel_fronts_.push_back({p, voxel});
       far_bound_sq_ = std::max(far_bound_sq_, (p - far_bound_origin_).squaredNorm());
     }
-    voxel_points.reserve(max_points_per_voxel_);
+    // Grow each voxel's storage in steps (4, 8, 16, ..., capped at max_points_per_voxel_) instead of
+    // reserving the cap for every voxel: most voxels hold far fewer points than the cap. The points
+    // and their order are the same; the map is only read through pointers while it does not change.
+    if (voxel_points.size() == voxel_points.capacity()) {
+      const std::size_t grown = std::max<std::size_t>(4, 2 * voxel_points.capacity());
+      voxel_points.reserve(std::min<std::size_t>(max_points_per_voxel_, grown));
+    }
     voxel_points.emplace_back(p);
     if (maintain_normals_) {
       refresh_normal(voxel, voxel_points);
