@@ -4,7 +4,9 @@
 
 #include <sophus/se3.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
@@ -173,6 +175,162 @@ TEST(VoxelHashMap, RadiusOnePreservesTieOrderAndEmptySentinel) {
   const auto [exact, zero_distance] = grid.get_closest_neighbor(nearest);
   EXPECT_TRUE(exact == nearest);
   EXPECT_DOUBLE_EQ(zero_distance, 0.0);
+}
+
+// remove_points_far_from_location() skips its walk over the map when no voxel can be far enough.
+// Move the origin so that walks are both skipped and run, and add a voxel after a skipped walk.
+TEST(VoxelHashMap, RemovesExactlyTheFarVoxelsAsTheOriginMoves) {
+  constexpr double clipping_distance = 10.0;
+  VoxelHashMap grid(0.5, clipping_distance, 20U);
+  std::vector<Eigen::Vector3d> expected;
+  const auto add = [&](const std::vector<Eigen::Vector3d>& points) {
+    grid.add_points(points);
+    expected.insert(expected.end(), points.begin(), points.end());
+  };
+  const auto lexicographic = [](const Eigen::Vector3d& a, const Eigen::Vector3d& b) {
+    return std::lexicographical_compare(a.data(), a.data() + 3, b.data(), b.data() + 3);
+  };
+  const auto remove = [&](const Eigen::Vector3d& origin) {
+    grid.remove_points_far_from_location(origin);
+    std::erase_if(expected, [&](const Eigen::Vector3d& point) {
+      return (point - origin).squaredNorm() > clipping_distance * clipping_distance;
+    });
+    std::vector<Eigen::Vector3d> actual = grid.pointcloud();
+    std::vector<Eigen::Vector3d> sorted_expected = expected;
+    std::sort(actual.begin(), actual.end(), lexicographic);
+    std::sort(sorted_expected.begin(), sorted_expected.end(), lexicographic);
+    EXPECT_TRUE(actual == sorted_expected) << "origin: " << origin.transpose();
+  };
+
+  std::vector<Eigen::Vector3d> line; // one point per voxel, x from 0.25 to 19.75
+  for (int i = 0; i < 40; ++i) {
+    line.emplace_back(0.5 * i + 0.25, 0.25, 0.25);
+  }
+  add(line);
+  remove({0.0, 0.0, 0.0});
+  remove({0.5, 0.0, 0.0});
+  add({{-8.75, 0.25, 0.25}});
+  remove({1.0, 0.0, 0.0});
+  remove({4.0, 0.0, 0.0});
+  remove({-3.0, 0.0, 0.0});
+  EXPECT_FALSE(grid.empty());
+  remove({30.0, 0.0, 0.0});
+  EXPECT_TRUE(grid.empty());
+}
+
+// The map must end up exactly as the historical walk over map_ (erasing far voxels in iteration
+// order) leaves it, including its iteration order, which VoxelHashMap::transform() depends on.
+TEST(VoxelHashMap, PruningLeavesTheMapAsAWalkOverItWould) {
+  constexpr double clipping_distance = 15.0;
+  const auto walk_and_prune = [](VoxelHashMap& map, const Eigen::Vector3d& origin) {
+    const double clipping_distance_sq = map.clipping_distance_ * map.clipping_distance_;
+    for (auto it = map.map_.begin(); it != map.map_.end();) {
+      if ((it->second.front() - origin).squaredNorm() > clipping_distance_sq) {
+        map.normal_map_.erase(it->first);
+        it = map.map_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  };
+  std::uint64_t state = 7;
+  const auto uniform = [&state]() {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    return static_cast<double>(state >> 11) / static_cast<double>(std::uint64_t{1} << 53);
+  };
+  VoxelHashMap grid(0.5, clipping_distance, 5U);
+  VoxelHashMap reference(0.5, clipping_distance, 5U);
+  Eigen::Vector3d origin = Eigen::Vector3d::Zero();
+  for (int step = 0; step < 200; ++step) {
+    origin += Eigen::Vector3d(4.0 * uniform() - 1.0, 4.0 * uniform() - 2.0, 0.2 * uniform() - 0.1);
+    std::vector<Eigen::Vector3d> points;
+    for (int i = 0; i < 500; ++i) {
+      points.push_back(origin + Eigen::Vector3d(30.0 * uniform() - 15.0, 30.0 * uniform() - 15.0, 4.0 * uniform()));
+    }
+    grid.add_points(points);
+    reference.add_points(points);
+    grid.remove_points_far_from_location(origin);
+    walk_and_prune(reference, origin);
+    ASSERT_TRUE(grid.pointcloud() == reference.pointcloud()) << "step " << step;
+  }
+}
+
+// A query that wanders across voxel boundaries, so the cache is both reused and invalidated.
+TEST(VoxelHashMap, CachedNeighborhoodSearchMatchesTheUncachedOne) {
+  std::uint64_t state = 42;
+  const auto uniform = [&state]() {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    return static_cast<double>(state >> 11) / static_cast<double>(std::uint64_t{1} << 53);
+  };
+  VoxelHashMap grid(0.5, 100.0, 20U);
+  std::vector<Eigen::Vector3d> points;
+  for (int i = 0; i < 2000; ++i) {
+    points.emplace_back(4.0 * uniform() - 2.0, 4.0 * uniform() - 2.0, uniform() - 0.5);
+  }
+  grid.add_points(points);
+
+  VoxelHashMap::NeighborhoodCache cache;
+  Eigen::Vector3d query(0.1, 0.2, 0.0);
+  for (int step = 0; step < 1000; ++step) {
+    query += Eigen::Vector3d(0.1 * uniform() - 0.05, 0.1 * uniform() - 0.05, 0.04 * uniform() - 0.02);
+    const auto [expected, expected_distance] = grid.get_closest_neighbor(query);
+    const auto [actual, distance] = grid.get_closest_neighbor(query, cache);
+    EXPECT_TRUE(actual == expected) << "query: " << query.transpose();
+    EXPECT_EQ(distance, expected_distance) << "query: " << query.transpose();
+  }
+}
+
+// ICP moves a keypoint by less and less as it converges, which is when the cache skips searches.
+// Every answer must still be bit-identical to a full search: while the nearest point stays the
+// same, when it changes, and when two points are exactly as near (where the first in the search
+// order must win, as before).
+TEST(VoxelHashMap, CachedSearchSkipsOnlyWhenTheNearestPointCannotChange) {
+  std::uint64_t state = 7;
+  const auto uniform = [&state]() {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    return static_cast<double>(state >> 11) / static_cast<double>(std::uint64_t{1} << 53);
+  };
+  const auto expect_same = [](const VoxelHashMap& grid, VoxelHashMap::NeighborhoodCache& cache,
+                              const Eigen::Vector3d& query) {
+    const auto [expected, expected_distance] = grid.get_closest_neighbor(query);
+    const auto [actual, distance] = grid.get_closest_neighbor(query, cache);
+    EXPECT_TRUE(actual == expected) << "query: " << query.transpose();
+    EXPECT_EQ(distance, expected_distance) << "query: " << query.transpose();
+  };
+
+  // Converging walks: every walk starts at a random place and its steps shrink geometrically.
+  VoxelHashMap grid(0.5, 100.0, 20U);
+  std::vector<Eigen::Vector3d> points;
+  for (int i = 0; i < 4000; ++i) {
+    points.emplace_back(6.0 * uniform() - 3.0, 6.0 * uniform() - 3.0, 2.0 * uniform() - 1.0);
+  }
+  grid.add_points(points);
+  for (int walk = 0; walk < 200; ++walk) {
+    VoxelHashMap::NeighborhoodCache cache;
+    Eigen::Vector3d query(4.0 * uniform() - 2.0, 4.0 * uniform() - 2.0, uniform() - 0.5);
+    double step = 0.05;
+    for (int iteration = 0; iteration < 30; ++iteration) {
+      expect_same(grid, cache, query);
+      query += step * Eigen::Vector3d(2.0 * uniform() - 1.0, 2.0 * uniform() - 1.0, 2.0 * uniform() - 1.0);
+      step *= 0.6;
+    }
+  }
+
+  // The nearest point changes halfway through a slow straight walk inside one voxel.
+  VoxelHashMap pair(1.0, 100.0, 20U);
+  pair.add_points({{0.30, 0.50, 0.50}, {0.70, 0.50, 0.50}});
+  VoxelHashMap::NeighborhoodCache pair_cache;
+  for (int i = 0; i <= 400; ++i) {
+    expect_same(pair, pair_cache, Eigen::Vector3d(0.40 + 0.0005 * i, 0.52, 0.47));
+  }
+
+  // Two points exactly as near to every query on the plane between them.
+  VoxelHashMap tie(1.0, 100.0, 20U);
+  tie.add_points({{0.25, 0.50, 0.50}, {0.75, 0.50, 0.50}});
+  VoxelHashMap::NeighborhoodCache tie_cache;
+  for (int i = 0; i <= 100; ++i) {
+    expect_same(tie, tie_cache, Eigen::Vector3d(0.50, 0.40 + 0.001 * i, 0.50));
+  }
 }
 
 } // namespace

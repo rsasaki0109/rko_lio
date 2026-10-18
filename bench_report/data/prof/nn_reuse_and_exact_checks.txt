@@ -1,0 +1,9 @@
+# NN reuse counters (scripts/instrument_nn_reuse.py on d209cb4; local build, not committed)
+instr_exp04 NN_REUSE calls=69970308 new_voxel=4141345 skipped=57907507 full_same_voxel=7921456 systems=23353 md5=bc23199243971466e1645e4eed7640ca
+instr_mid360 NN_REUSE calls=60479648 new_voxel=4393678 skipped=52522575 full_same_voxel=3563395 systems=39572 md5=2a1c810771773f2ed719735cdf9c11fd
+
+# Exactness self-checks (scripts/verify_exact_patches.py on a92dfd4; local builds, not committed)
+verify_nn_exp04 EXACT_CHECK nn skipped_searches_checked=57907507 mismatched=0 md5=bc23199243971466e1645e4eed7640ca
+verify_nn_mid360 EXACT_CHECK nn skipped_searches_checked=52522575 mismatched=0 md5=2a1c810771773f2ed719735cdf9c11fd
+verify_grain_exp04 EXACT_CHECK grain systems_checked=23353 mismatched=0 md5=bc23199243971466e1645e4eed7640ca
+verify_grain_mid360 EXACT_CHECK grain systems_checked=39572 mismatched=0 md5=2a1c810771773f2ed719735cdf9c11fd

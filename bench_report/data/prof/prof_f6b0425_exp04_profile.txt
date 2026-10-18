@@ -1,0 +1,94 @@
+RKO LIO Offline Node took 53.8191 seconds.
+prof counters: icp_calls=1256 systems=23353 keypoints_per_system=2996.2 deskew_points_per_scan=60239.4
+Profiling results
+	ICP:
+		Execution count: 1256
+		Average time: 28.07 ms
+		Std. dev. time: 23.40 ms
+		Average frequency: 35.63Hz
+		Max (worst-case) frequency: 5.79Hz
+	prof: add_imu_measurements:
+		Execution count: 1258
+		Average time: 0.03 ms
+		Std. dev. time: 0.01 ms
+		Average frequency: 31872.42Hz
+		Max (worst-case) frequency: 5972.61Hz
+	prof: extrinsic transform out:
+		Execution count: 1258
+		Average time: 0.19 ms
+		Std. dev. time: 0.16 ms
+		Average frequency: 5299.43Hz
+		Max (worst-case) frequency: 277.08Hz
+	prof: deskew:
+		Execution count: 1257
+		Average time: 5.34 ms
+		Std. dev. time: 1.22 ms
+		Average frequency: 187.13Hz
+		Max (worst-case) frequency: 61.16Hz
+	prof: map remove_far:
+		Execution count: 1257
+		Average time: 0.96 ms
+		Std. dev. time: 1.09 ms
+		Average frequency: 1039.09Hz
+		Max (worst-case) frequency: 150.68Hz
+	prof: register_scan outer:
+		Execution count: 1258
+		Average time: 41.43 ms
+		Std. dev. time: 26.29 ms
+		Average frequency: 24.14Hz
+		Max (worst-case) frequency: 5.10Hz
+	prof: register_scan_locked:
+		Execution count: 1258
+		Average time: 41.43 ms
+		Std. dev. time: 26.29 ms
+		Average frequency: 24.14Hz
+		Max (worst-case) frequency: 5.10Hz
+	prof: icp():
+		Execution count: 1256
+		Average time: 28.05 ms
+		Std. dev. time: 23.40 ms
+		Average frequency: 35.66Hz
+		Max (worst-case) frequency: 5.79Hz
+	ROS Registration Loop:
+		Execution count: 1259
+		Average time: 42.51 ms
+		Std. dev. time: 31.27 ms
+		Average frequency: 23.52Hz
+		Max (worst-case) frequency: 1.56Hz
+	prof: preprocess:
+		Execution count: 1257
+		Average time: 3.06 ms
+		Std. dev. time: 1.72 ms
+		Average frequency: 327.29Hz
+		Max (worst-case) frequency: 79.68Hz
+	prof: publish outputs+tf:
+		Execution count: 1257
+		Average time: 0.52 ms
+		Std. dev. time: 0.23 ms
+		Average frequency: 1915.39Hz
+		Max (worst-case) frequency: 304.86Hz
+	prof: map add_points:
+		Execution count: 1257
+		Average time: 2.81 ms
+		Std. dev. time: 2.83 ms
+		Average frequency: 356.27Hz
+		Max (worst-case) frequency: 15.68Hz
+	prof: update_maps:
+		Execution count: 1257
+		Average time: 3.88 ms
+		Std. dev. time: 3.34 ms
+		Average frequency: 257.61Hz
+		Max (worst-case) frequency: 15.18Hz
+	prof: extrinsic transform in:
+		Execution count: 1258
+		Average time: 0.21 ms
+		Std. dev. time: 0.16 ms
+		Average frequency: 4737.36Hz
+		Max (worst-case) frequency: 283.13Hz
+	prof: build_icp_linear_system:
+		Execution count: 23353
+		Average time: 1.49 ms
+		Std. dev. time: 1.11 ms
+		Average frequency: 669.42Hz
+		Max (worst-case) frequency: 38.12Hz
+prof counters: icp_calls=1256 systems=23353 keypoints_per_system=2996.2 deskew_points_per_scan=60239.4

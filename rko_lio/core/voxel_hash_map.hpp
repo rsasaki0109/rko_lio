@@ -32,6 +32,8 @@
 #include "voxel_down_sample.hpp"
 
 #include <Eigen/Core>
+#include <array>
+#include <cstdint>
 #include <optional>
 #include <sophus/se3.hpp>
 #include <tsl/robin_map.h>
@@ -51,6 +53,8 @@ struct VoxelHashMap {
   void clear() {
     map_.clear();
     normal_map_.clear();
+    voxel_fronts_.clear();
+    far_bound_sq_ = 0.0;
   }
   bool empty() const { return map_.empty(); }
   void update(const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& pose);
@@ -66,6 +70,28 @@ struct VoxelHashMap {
   // relocalization paths that need a wider correspondence search than plain ICP.
   std::tuple<Eigen::Vector3d, double> get_closest_neighbor(const Eigen::Vector3d& query,
                                                            int voxel_search_radius) const;
+
+  /** Points of the 3x3x3 voxels around one query voxel, looked up lazily and kept across calls.
+   *  ICP queries every keypoint once per iteration and keypoints rarely change voxels between
+   *  iterations, so most hash lookups can be reused. Valid only while the map is not modified.
+   *
+   *  It also keeps the last full search in this voxel: its query, the point it found, and a lower
+   *  bound on the distance from that query to every other point of the 3x3x3 voxels. A later
+   *  query that has moved less than that gap leaves the same point the nearest by a clear margin,
+   *  so the search is not repeated. */
+  struct NeighborhoodCache {
+    Voxel voxel = Voxel::Zero();
+    bool has_reference = false;
+    Eigen::Vector3d reference_query = Eigen::Vector3d::Zero();
+    Eigen::Vector3d reference_neighbor = Eigen::Vector3d::Zero();
+    double reference_others_distance = 0.0; // lower bound, from reference_query
+    std::uint32_t looked_up = 0;            // bit i: shift i has been looked up
+    std::array<const Eigen::Vector3d*, 27> points{};
+    std::array<std::uint32_t, 27> sizes{};
+  };
+  /** Same result as the single-argument overload, reusing `cache` for the voxel lookups. */
+  std::tuple<Eigen::Vector3d, double> get_closest_neighbor(const Eigen::Vector3d& query,
+                                                           NeighborhoodCache& cache) const;
 
   /** Opt into per-voxel surface-normal maintenance (localizability weighting). Off by
    *  default so the common path pays nothing; when on, add_points() refreshes a PCA
@@ -91,6 +117,17 @@ struct VoxelHashMap {
 
 private:
   void refresh_normal(const Voxel& voxel, const VoxelBlock& points);
+
+  // The first point of every voxel, which remove_points_far_from_location() judges the voxel by,
+  // with its key, in no particular order. Scanning this list is much cheaper than walking map_.
+  struct VoxelFront {
+    Eigen::Vector3d point;
+    Voxel voxel;
+  };
+  std::vector<VoxelFront> voxel_fronts_;
+  // Upper bound on the squared distance from far_bound_origin_ to any point of voxel_fronts_.
+  Eigen::Vector3d far_bound_origin_ = Eigen::Vector3d::Zero();
+  double far_bound_sq_ = 0.0;
 };
 
 } // namespace rko_lio::core

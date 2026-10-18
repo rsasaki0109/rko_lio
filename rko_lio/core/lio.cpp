@@ -39,6 +39,7 @@
 // tbb
 #include <tbb/blocked_range.h>
 #include <tbb/global_control.h>
+#include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/task_arena.h>
 // stl
@@ -58,9 +59,17 @@ constexpr double EPSILON = 1e-8;
 constexpr auto EPSILON_TIME = std::chrono::nanoseconds(10);
 using namespace rko_lio::core;
 
-inline void transform_points(const Sophus::SE3d& T, Vector3dVector& points) {
-  std::transform(points.begin(), points.end(), points.begin(), [&](const auto& point) { return T * point; });
+// Each point is transformed on its own, so splitting the range across threads changes nothing.
+// `transformed` may be `points`.
+inline void transform_points(const Sophus::SE3d& T, const Vector3dVector& points, Vector3dVector& transformed) {
+  tbb::parallel_for(tbb::blocked_range<std::size_t>{0, points.size()}, [&](const tbb::blocked_range<std::size_t>& r) {
+    for (std::size_t i = r.begin(); i != r.end(); ++i) {
+      transformed[i] = T * points[i];
+    }
+  });
 }
+
+inline void transform_points(const Sophus::SE3d& T, Vector3dVector& points) { transform_points(T, points, points); }
 
 struct AccelInfo {
   double accel_mag_variance;
@@ -122,10 +131,13 @@ Vector3dVector deskew_scan(const Vector3dVector& frame,
                            const Functor& relative_pose_at_time) {
   const Sophus::SE3d scan_to_scan_motion_inverse = relative_pose_at_time(end_time).inverse();
   Vector3dVector deskewed(frame.size());
-  std::transform(frame.cbegin(), frame.cend(), timestamps.cbegin(), deskewed.begin(),
-                 [&](const Eigen::Vector3d& point, const Nsec timestamp) {
-                   return (scan_to_scan_motion_inverse * relative_pose_at_time(timestamp)) * point;
-                 });
+  // Each point is computed on its own and written to its own slot, so the output does not
+  // depend on how the points are split across threads.
+  tbb::parallel_for(tbb::blocked_range<std::size_t>{0, frame.size()}, [&](const tbb::blocked_range<std::size_t>& r) {
+    for (std::size_t i = r.begin(); i != r.end(); ++i) {
+      deskewed[i] = (scan_to_scan_motion_inverse * relative_pose_at_time(timestamps[i])) * frame[i];
+    }
+  });
   return deskewed;
 }
 
@@ -188,19 +200,29 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                                      const int voxel_search_radius = 1,
                                      const std::optional<Eigen::Vector3d>& localizability_axis = std::nullopt,
                                      const double localizability_boost = 0.0,
-                                     IcpWeightingStats* weighting_stats = nullptr) {
-  // H, b, chi, weight sum. The weight sum replaces the correspondence count in
-  // the H/b normalization; with weighting disabled every weight is exactly 1
+                                     IcpWeightingStats* weighting_stats = nullptr,
+                                     std::vector<VoxelHashMap::NeighborhoodCache>* neighborhoods = nullptr) {
+  // H, b, chi, weight sum, correspondence count. The weight sum replaces the correspondence
+  // count in the H/b normalization; with weighting disabled every weight is exactly 1
   // and the result is bit-identical to the historical count-normalized system.
-  using WeightedSystem = std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double, double>;
-  auto linear_system_reduce = [](WeightedSystem lhs, const WeightedSystem& rhs) {
-    auto& [lhs_H, lhs_b, lhs_chi, lhs_w] = lhs;
-    const auto& [rhs_H, rhs_b, rhs_chi, rhs_w] = rhs;
-    lhs_H += rhs_H;
-    lhs_b += rhs_b;
-    lhs_chi += rhs_chi;
-    lhs_w += rhs_w;
-    return lhs;
+  using WeightedSystem = std::tuple<Eigen::Matrix6d, Eigen::Vector6d, double, double, int>;
+  struct SystemSum {
+    Eigen::Matrix6d H = Eigen::Matrix6d::Zero();
+    Eigen::Vector6d b = Eigen::Vector6d::Zero();
+    double chi = 0.0;
+    double weight = 0.0;
+    int correspondences = 0;
+    void add(const Eigen::Matrix6d& H_add,
+             const Eigen::Vector6d& b_add,
+             const double chi_add,
+             const double weight_add,
+             const int correspondences_add) {
+      H += H_add;
+      b += b_add;
+      chi += chi_add;
+      weight += weight_add;
+      correspondences += correspondences_add;
+    }
   };
 
   const bool weighting_enabled = localizability_axis.has_value() && localizability_boost > 0.0;
@@ -221,43 +243,73 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
     return WeightedSystem(weight * J_r.transpose() * J_r,      // JTJ
                           weight * J_r.transpose() * residual, // JTr
                           weight * residual.squaredNorm(),     // chi
-                          weight);
+                          weight, 1);
   };
 
   // The only parallel part. The deterministic reduce sums the per-point systems in the
   // same order on every run; tbb::parallel_reduce's order depends on thread timing, and a
   // registration that is barely constrained turns those rounding differences into
   // different trajectories.
+  // The correspondences are counted in the reduction too: a shared atomic counter made every
+  // thread contend for one cache line on every correspondence.
+  // The sums are kept in place instead of being passed around as tuples, which copied the 6x6
+  // system at every leaf and join of the tree. The tree does not change: with grain size 1 every
+  // leaf is a single point, whose system is added to zeros, and every join adds the right sum to
+  // the left one, as before. A point without a correspondence adds nothing; its zeros never
+  // changed a sum either.
   using points_iterator = std::vector<Eigen::Vector3d>::const_iterator;
-  std::atomic<int> correspondences_counter = 0;
-  const auto& [H_icp, b_icp, chi_icp, weight_sum] = tbb::parallel_deterministic_reduce(
-      // Range
-      tbb::blocked_range<points_iterator>{frame.cbegin(), frame.cend()},
-      // Identity
-      WeightedSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0, 0.0),
-      // 1st Lambda: Parallel computation
-      [&](const tbb::blocked_range<points_iterator>& r, WeightedSystem J) -> WeightedSystem {
-        return std::transform_reduce(r.begin(), r.end(), J, linear_system_reduce, [&](const auto& point) {
-          // Compute data association and linear system
-          const Eigen::Vector3d transformed_point = current_pose * point;
-          const auto& [closest_neighbor, distance] =
-              voxel_map.get_closest_neighbor(transformed_point, voxel_search_radius);
-          if (distance < max_correspondence_distance) {
-            correspondences_counter++;
-            return linear_system_for_one_point(transformed_point, closest_neighbor);
-          }
-          // TODO (meher): additional 0 add flops, which may hurt single threaded perf slightly
-          return WeightedSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero(), 0.0, 0.0);
-        });
-      },
-      // 2nd Lambda: Parallel reduction of the private Jacobians
-      linear_system_reduce);
+  auto add_point_system = [&](const Eigen::Vector3d& point, SystemSum& sum) {
+    // Compute data association and linear system
+    const Eigen::Vector3d transformed_point = current_pose * point;
+    // neighborhoods holds one cache per point of frame, indexed like frame.
+    const auto& [closest_neighbor, distance] =
+        neighborhoods != nullptr
+            ? voxel_map.get_closest_neighbor(transformed_point, (*neighborhoods)[&point - frame.data()])
+            : voxel_map.get_closest_neighbor(transformed_point, voxel_search_radius);
+    if (distance < max_correspondence_distance) {
+      const auto& [H, b, chi, weight, correspondences] =
+          linear_system_for_one_point(transformed_point, closest_neighbor);
+      sum.add(H, b, chi, weight, correspondences);
+    }
+  };
+  // The reduction splits ranges of up to kLeafPoints points no further and sums each of them
+  // serially with the very tree it used to build with tasks down to single points (grain size 1):
+  // split in the middle as tbb::blocked_range does, the left half summed into the sum, the right
+  // half into a zero sum that is then added to it. Every body is still zero when its range is
+  // run, as before, so every point's system is added to zeros and every sum is formed in the same
+  // order as with one task per point, without the cost of those tasks.
+  constexpr std::size_t kLeafPoints = 64;
+  struct SystemSumBody {
+    decltype(add_point_system)& add_point;
+    SystemSum sum;
+    explicit SystemSumBody(decltype(add_point_system)& add_point_) : add_point(add_point_) {}
+    SystemSumBody(SystemSumBody& other, tbb::split) : add_point(other.add_point) {}
+    void sum_tree(const points_iterator first, const points_iterator last, SystemSum& tree_sum) {
+      if (last - first == 1) {
+        add_point(*first, tree_sum);
+        return;
+      }
+      const points_iterator middle = first + (last - first) / 2;
+      sum_tree(first, middle, tree_sum);
+      SystemSum right;
+      sum_tree(middle, last, right);
+      tree_sum.add(right.H, right.b, right.chi, right.weight, right.correspondences);
+    }
+    void operator()(const tbb::blocked_range<points_iterator>& r) { sum_tree(r.begin(), r.end(), sum); }
+    void join(SystemSumBody& rhs) {
+      sum.add(rhs.sum.H, rhs.sum.b, rhs.sum.chi, rhs.sum.weight, rhs.sum.correspondences);
+    }
+  };
+  SystemSumBody body(add_point_system);
+  tbb::parallel_deterministic_reduce(
+      tbb::blocked_range<points_iterator>{frame.cbegin(), frame.cend(), kLeafPoints}, body);
+  const auto& [H_icp, b_icp, chi_icp, weight_sum, correspondences] = body.sum;
 
-  if (correspondences_counter == 0) {
+  if (correspondences == 0) {
     throw std::runtime_error("Number of correspondences are 0.");
   }
   if (weighting_stats != nullptr) {
-    weighting_stats->correspondences = correspondences_counter;
+    weighting_stats->correspondences = correspondences;
     weighting_stats->boosted = boosted_counter;
   }
 
@@ -354,6 +406,9 @@ IcpResult icp(const Vector3dVector& frame,
   IcpWeightingStats weighting_stats;
   int photometric_patches = 0;
   double lm_lambda = -1.0;
+  // voxel_map does not change during this loop, so the voxel lookups of every keypoint can be
+  // kept between iterations. Only the 3x3x3 search (radius 1) has such a cache.
+  std::vector<VoxelHashMap::NeighborhoodCache> neighborhoods(voxel_search_radius <= 1 ? frame.size() : 0);
   for (size_t i = 0; i < iteration_budget; ++i) {
     // The system at a pose; Levenberg-Marquardt also evaluates candidate steps with it.
     auto build_system = [&](const Sophus::SE3d& evaluation_pose) -> LinearSystem {
@@ -375,7 +430,7 @@ IcpResult icp(const Vector3dVector& frame,
       if (!bump_used) {
         geometric = build_icp_linear_system(current_pose, frame, voxel_map, config.max_correspondence_distance,
                                             voxel_search_radius, localizability_axis, localizability_boost,
-                                            &weighting_stats);
+                                            &weighting_stats, voxel_search_radius <= 1 ? &neighborhoods : nullptr);
       }
       auto [H_icp, b_icp, chi_icp] = geometric;
       if (photometric != nullptr && weighting_stats.correspondences > 0) {
@@ -2408,8 +2463,7 @@ Vector3dVector LIO::register_scan(const Sophus::SE3d& extrinsic_lidar2base,
   }
 
   Vector3dVector transformed_scan(scan.size());
-  std::transform(scan.cbegin(), scan.cend(), transformed_scan.begin(),
-                 [&](const Eigen::Vector3d& p) { return extrinsic_lidar2base * p; });
+  transform_points(extrinsic_lidar2base, scan, transformed_scan);
   Vector3dVector frame = register_scan(transformed_scan, timestamps, intensities);
   transform_points(extrinsic_lidar2base.inverse(), frame);
   return frame;

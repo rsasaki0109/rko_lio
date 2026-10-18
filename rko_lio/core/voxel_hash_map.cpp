@@ -33,15 +33,48 @@
 #include <Eigen/Eigenvalues>
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <sophus/se3.hpp>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+#include <tbb/parallel_reduce.h>
 #include <tuple>
+#include <utility>
 #include <vector>
+#if defined(_MSC_VER) && !defined(__clang__) && (defined(_M_X64) || defined(_M_IX86))
+#include <xmmintrin.h>
+#endif
 
 namespace {
 using rko_lio::core::Voxel;
+
+// A hint to load `address` into the cache. It changes nothing that is read or computed.
+inline void prefetch(const void* address) {
+#if defined(__GNUC__) || defined(__clang__)
+  __builtin_prefetch(address);
+#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+  _mm_prefetch(static_cast<const char*>(address), _MM_HINT_T0);
+#else
+  static_cast<void>(address);
+#endif
+}
+
+// The first cache lines (up to three, or eight points) of the `count` points at `points`.
+inline void prefetch_points(const Eigen::Vector3d* points, const std::uint32_t count) {
+  if (points == nullptr) {
+    return;
+  }
+  const char* bytes = reinterpret_cast<const char*>(points);
+  const std::size_t size = std::min<std::size_t>(std::size_t{count} * sizeof(Eigen::Vector3d), 3 * 64);
+  for (std::size_t offset = 0; offset < size; offset += 64) {
+    prefetch(bytes + offset);
+  }
+}
 
 static const std::array<Voxel, 27> shifts{
     Voxel{-1, -1, -1}, Voxel{-1, -1, 0}, Voxel{-1, -1, 1}, //
@@ -66,6 +99,68 @@ inline double axis_bound_sq(const double frac, const double voxel_size, const in
   return clamped * clamped;
 }
 
+// The 3x3x3 search around `voxel`. points_of(i) returns the points of voxel + shifts[i] as a pointer
+// and a count (nullptr and 0 when that voxel does not exist); it is called only for the voxels
+// that the distance bound does not rule out, in the order of `shifts`.
+// With kBoundOthers it also stores in *others_squared_distance a lower bound on the squared
+// distance from `query` to every point of the 27 voxels but the one returned: the smallest
+// squared distance among the other points it read, and the bound of every voxel it skipped.
+template <bool kBoundOthers = false, typename PointsOf>
+std::tuple<Eigen::Vector3d, double> closest_neighbor_around(const Eigen::Vector3d& query,
+                                                            const Voxel& voxel,
+                                                            const double voxel_size,
+                                                            const PointsOf& points_of,
+                                                            double* others_squared_distance = nullptr) {
+  Eigen::Vector3d closest_neighbor = Eigen::Vector3d::Zero();
+  double closest_squared_distance = std::numeric_limits<double>::max();
+  [[maybe_unused]] double others = std::numeric_limits<double>::max();
+  const Eigen::Vector3d fractional = query - voxel.cast<double>() * voxel_size;
+  std::array<std::array<double, 3>, 3> axis_bounds;
+  for (int axis = 0; axis < 3; ++axis) {
+    for (int offset = -1; offset <= 1; ++offset) {
+      axis_bounds[axis][offset + 1] = axis_bound_sq(fractional[axis], voxel_size, offset);
+    }
+  }
+  for (std::size_t shift = 0; shift < shifts.size(); ++shift) {
+    const Voxel& voxel_shift = shifts[shift];
+    const double bound_sq = axis_bounds[0][voxel_shift.x() + 1] +
+                            axis_bounds[1][voxel_shift.y() + 1] +
+                            axis_bounds[2][voxel_shift.z() + 1];
+    if (bound_sq >= closest_squared_distance) {
+      if constexpr (kBoundOthers) {
+        others = std::min(others, bound_sq);
+      }
+      continue;
+    }
+    const auto [points, count] = points_of(shift);
+    for (std::size_t i = 0; i < count; ++i) {
+      const double squared_distance = (points[i] - query).squaredNorm();
+      if (squared_distance < closest_squared_distance) {
+        if constexpr (kBoundOthers) {
+          others = std::min(others, closest_squared_distance);
+        }
+        closest_neighbor = points[i];
+        closest_squared_distance = squared_distance;
+      } else if constexpr (kBoundOthers) {
+        others = std::min(others, squared_distance);
+      }
+    }
+  }
+  if constexpr (kBoundOthers) {
+    *others_squared_distance = others;
+  }
+  const double closest_distance = closest_squared_distance == std::numeric_limits<double>::max()
+                                      ? std::numeric_limits<double>::max()
+                                      : std::sqrt(closest_squared_distance);
+  return std::make_tuple(closest_neighbor, closest_distance);
+}
+
+// How much closer than every other point the cached neighbour must stay before a search is skipped.
+// It is many orders of magnitude above the rounding of the distances involved: about 1e-15 of the
+// coordinates for the point and query differences, and as much for the voxel bounds and for which
+// voxel a point near a voxel face was put in.
+inline double reuse_margin(const Eigen::Vector3d& query) { return 1e-6 + 1e-12 * query.cwiseAbs().maxCoeff(); }
+
 } // namespace
 
 namespace rko_lio::core {
@@ -79,40 +174,60 @@ VoxelHashMap::VoxelHashMap(const double voxel_size,
       max_points_per_voxel_(max_points_per_voxel) {}
 
 std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eigen::Vector3d& query) const {
-  Eigen::Vector3d closest_neighbor = Eigen::Vector3d::Zero();
-  double closest_squared_distance = std::numeric_limits<double>::max();
   const Voxel voxel = point_to_voxel(query, inv_voxel_size_);
-  const Eigen::Vector3d fractional = query - voxel.cast<double>() * voxel_size_;
-  std::array<std::array<double, 3>, 3> axis_bounds;
-  for (int axis = 0; axis < 3; ++axis) {
-    for (int offset = -1; offset <= 1; ++offset) {
-      axis_bounds[axis][offset + 1] = axis_bound_sq(fractional[axis], voxel_size_, offset);
-    }
-  }
-  std::for_each(shifts.cbegin(), shifts.cend(), [&](const Voxel& voxel_shift) {
-    const double bound_sq = axis_bounds[0][voxel_shift.x() + 1] +
-                            axis_bounds[1][voxel_shift.y() + 1] +
-                            axis_bounds[2][voxel_shift.z() + 1];
-    if (bound_sq >= closest_squared_distance) {
-      return;
-    }
-    const Voxel query_voxel = voxel + voxel_shift;
-    const auto search = map_.find(query_voxel);
-    if (search != map_.end()) {
-      const VoxelBlock& voxel_points = search.value();
-      for (const Eigen::Vector3d& point : voxel_points) {
-        const double squared_distance = (point - query).squaredNorm();
-        if (squared_distance < closest_squared_distance) {
-          closest_neighbor = point;
-          closest_squared_distance = squared_distance;
-        }
+  return closest_neighbor_around(query, voxel, voxel_size_, [&](const std::size_t shift) {
+    const auto search = map_.find(voxel + shifts[shift]);
+    return search != map_.end() ? std::pair(search.value().data(), search.value().size())
+                                : std::pair<const Eigen::Vector3d*, std::size_t>(nullptr, 0);
+  });
+}
+
+std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eigen::Vector3d& query,
+                                                                        NeighborhoodCache& cache) const {
+  const Voxel voxel = point_to_voxel(query, inv_voxel_size_);
+  if (voxel != cache.voxel) {
+    cache.voxel = voxel;
+    cache.looked_up = 0;
+    cache.has_reference = false;
+  } else {
+    if (cache.has_reference) {
+      // Every other point of the 27 voxels is at least reference_others_distance from
+      // reference_query, so at least that minus `moved` from query. When the reference neighbour is
+      // closer than that by the margin, it is the strict nearest point, and the search below would
+      // return it with this very distance, computed the same way.
+      const double distance = std::sqrt((cache.reference_neighbor - query).squaredNorm());
+      const double moved = (query - cache.reference_query).norm();
+      if (distance + moved + reuse_margin(query) < cache.reference_others_distance) {
+        return std::make_tuple(cache.reference_neighbor, distance);
       }
     }
-  });
-  const double closest_distance = closest_squared_distance == std::numeric_limits<double>::max()
-                                      ? std::numeric_limits<double>::max()
-                                      : std::sqrt(closest_squared_distance);
-  return std::make_tuple(closest_neighbor, closest_distance);
+    // The search below reads again the points of the voxels found by the earlier calls, and those
+    // are rarely still in the cache by then. Requesting them all first lets the misses overlap
+    // instead of stalling the search one voxel at a time.
+    for (std::uint32_t pending = cache.looked_up; pending != 0; pending &= pending - 1) {
+      const auto shift = static_cast<std::size_t>(std::countr_zero(pending));
+      prefetch_points(cache.points[shift], cache.sizes[shift]);
+    }
+  }
+  double others_squared_distance = std::numeric_limits<double>::max();
+  const auto result = closest_neighbor_around<true>(
+      query, voxel, voxel_size_,
+      [&](const std::size_t shift) {
+        const std::uint32_t bit = std::uint32_t{1} << shift;
+        if ((cache.looked_up & bit) == 0) {
+          const auto search = map_.find(voxel + shifts[shift]);
+          cache.points[shift] = search != map_.end() ? search.value().data() : nullptr;
+          cache.sizes[shift] = search != map_.end() ? static_cast<std::uint32_t>(search.value().size()) : 0U;
+          cache.looked_up |= bit;
+        }
+        return std::pair<const Eigen::Vector3d*, std::size_t>(cache.points[shift], cache.sizes[shift]);
+      },
+      &others_squared_distance);
+  cache.has_reference = std::get<1>(result) != std::numeric_limits<double>::max();
+  cache.reference_query = query;
+  cache.reference_neighbor = std::get<0>(result);
+  cache.reference_others_distance = std::sqrt(others_squared_distance);
+  return result;
 }
 
 std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eigen::Vector3d& query,
@@ -173,7 +288,17 @@ void VoxelHashMap::add_points(const std::vector<Eigen::Vector3d>& points) {
                     [&](const auto& voxel_point) { return (voxel_point - p).squaredNorm() < map_resolution_sq; })) {
       return;
     }
-    voxel_points.reserve(max_points_per_voxel_);
+    if (voxel_points.empty()) {
+      voxel_fronts_.push_back({p, voxel});
+      far_bound_sq_ = std::max(far_bound_sq_, (p - far_bound_origin_).squaredNorm());
+    }
+    // Grow each voxel's storage in steps (4, 8, 16, ..., capped at max_points_per_voxel_) instead of
+    // reserving the cap for every voxel: most voxels hold far fewer points than the cap. The points
+    // and their order are the same; the map is only read through pointers while it does not change.
+    if (voxel_points.size() == voxel_points.capacity()) {
+      const std::size_t grown = std::max<std::size_t>(4, 2 * voxel_points.capacity());
+      voxel_points.reserve(std::min<std::size_t>(max_points_per_voxel_, grown));
+    }
     voxel_points.emplace_back(p);
     if (maintain_normals_) {
       refresh_normal(voxel, voxel_points);
@@ -219,22 +344,57 @@ std::optional<Eigen::Vector3d> VoxelHashMap::voxel_normal(const Eigen::Vector3d&
 }
 
 void VoxelHashMap::remove_points_far_from_location(const Eigen::Vector3d& origin) {
+  // When no first point can be beyond the clipping distance, nothing is erased. The relative
+  // margin is far larger than the rounding of these distances.
+  if (std::sqrt(far_bound_sq_) + (origin - far_bound_origin_).norm() < clipping_distance_ * (1.0 - 1e-9)) {
+    return;
+  }
   const double clipping_distance_sq = clipping_distance_ * clipping_distance_;
-  for (auto it = map_.begin(); it != map_.end();) {
-    const VoxelBlock& voxel_points = it->second;
-    if ((voxel_points.front() - origin).squaredNorm() > clipping_distance_sq) {
-      normal_map_.erase(it->first);
-      it = map_.erase(it);
-    } else {
-      ++it;
+  const auto distance_sq = [&](const VoxelFront& front) { return (front.point - origin).squaredNorm(); };
+  // The largest distance among the voxels that stay, and whether any voxel goes. Both reductions
+  // are exact, so the split across threads does not matter.
+  using FarScan = std::pair<double, bool>;
+  const auto [kept_sq, any_far] = tbb::parallel_reduce(
+      tbb::blocked_range<std::size_t>{0, voxel_fronts_.size()}, FarScan{0.0, false},
+      [&](const tbb::blocked_range<std::size_t>& r, FarScan scan) {
+        for (std::size_t i = r.begin(); i != r.end(); ++i) {
+          const double d = distance_sq(voxel_fronts_[i]);
+          if (d > clipping_distance_sq) {
+            scan.second = true;
+          } else {
+            scan.first = std::max(scan.first, d);
+          }
+        }
+        return scan;
+      },
+      [](const FarScan& a, const FarScan& b) { return FarScan{std::max(a.first, b.first), a.second || b.second}; });
+  if (any_far) {
+    // Erasing the far voxels in this order instead of map_'s iteration order leaves map_ the same:
+    // backward-shift deletion keeps the remaining entries in their order, each as close to its
+    // ideal bucket as that order allows, whatever the order of the deletions.
+    for (std::size_t i = 0; i < voxel_fronts_.size();) {
+      if (distance_sq(voxel_fronts_[i]) > clipping_distance_sq) {
+        normal_map_.erase(voxel_fronts_[i].voxel);
+        map_.erase(voxel_fronts_[i].voxel);
+        voxel_fronts_[i] = voxel_fronts_.back();
+        voxel_fronts_.pop_back();
+      } else {
+        ++i;
+      }
     }
   }
+  far_bound_origin_ = origin;
+  far_bound_sq_ = kept_sq;
 }
 
 void VoxelHashMap::update(const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& pose) {
   std::vector<Eigen::Vector3d> points_transformed(points.size());
-  std::transform(points.cbegin(), points.cend(), points_transformed.begin(),
-                 [&](const auto& point) { return pose * point; });
+  // Each point is transformed on its own; add_points() below keeps the order of the points.
+  tbb::parallel_for(tbb::blocked_range<std::size_t>{0, points.size()}, [&](const tbb::blocked_range<std::size_t>& r) {
+    for (std::size_t i = r.begin(); i != r.end(); ++i) {
+      points_transformed[i] = pose * points[i];
+    }
+  });
   const Eigen::Vector3d& origin = pose.translation();
   add_points(points_transformed);
   remove_points_far_from_location(origin);

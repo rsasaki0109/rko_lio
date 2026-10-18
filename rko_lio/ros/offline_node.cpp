@@ -114,7 +114,11 @@ public:
     }
     while (rclcpp::ok() && !bag->finished()) {
       {
-        if (lidar_buffer.size() >= 0.9 * max_lidar_buffer_size) {
+        // Throttle only while the registration thread can drain the buffer. When it is idle because the
+        // oldest queued frame still waits for IMU data, that data can only come from the bag, so keep
+        // reading (the LiDAR callback drops the oldest frame once the buffer is full). Otherwise a bag whose
+        // IMU stream ends before its LiDAR stream leaves both threads waiting on each other forever.
+        if (lidar_buffer.size() >= 0.9 * max_lidar_buffer_size && (atomic_can_process || registration_busy.load())) {
           RCLCPP_WARN_STREAM_ONCE(node->get_logger(),
                                   "Lidar buffer size: " << lidar_buffer.size()
                                                         << ", max_lidar_buffer_size: " << max_lidar_buffer_size

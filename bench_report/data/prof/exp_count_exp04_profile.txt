@@ -1,0 +1,16 @@
+RKO LIO Offline Node took 58.0435 seconds.
+search counters: queries=69970308 scanned_voxels/q=5.75723 points/q=49.0646 pruned_by_cell/q=15.461 aabb_skippable_voxels/q=1.23201 aabb_skippable_points/q=6.18225
+Profiling results
+	ICP:
+		Execution count: 1256
+		Average time: 32.45 ms
+		Std. dev. time: 26.84 ms
+		Average frequency: 30.81Hz
+		Max (worst-case) frequency: 5.68Hz
+	ROS Registration Loop:
+		Execution count: 1259
+		Average time: 45.89 ms
+		Std. dev. time: 33.36 ms
+		Average frequency: 21.79Hz
+		Max (worst-case) frequency: 1.73Hz
+search counters: queries=69970308 scanned_voxels/q=5.75723 points/q=49.0646 pruned_by_cell/q=15.461 aabb_skippable_voxels/q=1.23201 aabb_skippable_points/q=6.18225

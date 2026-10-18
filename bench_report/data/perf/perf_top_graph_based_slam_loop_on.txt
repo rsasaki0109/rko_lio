@@ -1,0 +1,25 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 100K of event 'cpu-clock'
+# Event count (approx.): 335856126501
+#
+# Overhead  Shared Object                                              Symbol                                                                                                                           
+# ........  .........................................................  .................................................................................................................................
+#
+    66.13%  libgraph_based_slam_component.so                           [.] pclomp::NormalDistributionsTransform<pcl::PointXYZI, pcl::PointXYZI>::computeDerivatives(Eigen::Matrix<double, 6, 1, 0, 6, 1>
+    13.39%  libgraph_based_slam_component.so                           [.] pclomp::VoxelGridCovariance<pcl::PointXYZI>::getNeighborhoodAtPoint(Eigen::Matrix<int, -1, -1, 0, -1, -1> const&, pcl::PointX
+     4.32%  libgomp.so.1.0.0                                           [.] 0x00000000000258a2                                                                                                           
+     3.72%  libgomp.so.1.0.0                                           [.] 0x00000000000256c2                                                                                                           
+     2.46%  libc.so.6                                                  [.] __libc_calloc                                                                                                                
+     1.63%  libm.so.6                                                  [.] __ieee754_exp_fma                                                                                                            
+     0.73%  libgomp.so.1.0.0                                           [.] 0x00000000000258a6                                                                                                           
+     0.67%  libc.so.6                                                  [.] __memmove_evex_unaligned_erms                                                                                                
+     0.66%  libc.so.6                                                  [.] _int_free                                                                                                                    
+     0.59%  libgomp.so.1.0.0                                           [.] 0x00000000000256c6                                                                                                           
+     0.50%  libm.so.6                                                  [.] exp@@GLIBC_2.29                                                                                                              
+#
+# (Cannot load tips.txt file, please install perf!)
+#

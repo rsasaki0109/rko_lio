@@ -1,0 +1,13 @@
+run,frontend_commit,frontend_params,offline_node_peak_rss_kib
+exp04_basew,40b3a06,same,459620
+mid360_base,40b3a06,same,113908
+oxford_base,40b3a06,same,541300
+exp04_mem2,77072e4,same,376984
+mid360_mem2,77072e4,same,106272
+oxford_mem2,77072e4,same,454760
+exp04_mem4,77072e4,same,366228
+mid360_mem4,77072e4,same,104804
+oxford_mem4,77072e4,same,454424
+exp04_mem5,77072e4,buffer10,289896
+mid360_mem5,77072e4,buffer10,80332
+oxford_mem5,77072e4,buffer10,360252

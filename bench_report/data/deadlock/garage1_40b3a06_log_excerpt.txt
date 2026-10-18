@@ -1,0 +1,3 @@
+[WARN] [1792262509.022203536] [rko_lio_offline_node]: Lidar buffer size: 45, max_lidar_buffer_size: 50, throttling the bag reading thread as it's too fast.
+[INFO] [1792262535.862637589] [rko_lio_offline_node]: Bag exhausted with 50 trailing LiDAR frame(s) that can no longer be matched with IMU data. Dropping them and finishing the run.
+RKO LIO Offline Node took 27.4698 seconds.

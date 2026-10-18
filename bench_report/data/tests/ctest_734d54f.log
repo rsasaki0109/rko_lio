@@ -1,0 +1,215 @@
+Test project /home/user/ws/test_734d54f/build/rko_lio
+        Start   1: test_initialized_output
+  1/103 Test   #1: test_initialized_output ........................................................   Passed    0.13 sec
+        Start   2: test_gyro_deskew_history
+  2/103 Test   #2: test_gyro_deskew_history .......................................................   Passed    0.12 sec
+        Start   3: test_robust_gravity_residual
+  3/103 Test   #3: test_robust_gravity_residual ...................................................   Passed    0.10 sec
+        Start   4: test_imu_acceleration_unit
+  4/103 Test   #4: test_imu_acceleration_unit .....................................................   Passed    0.10 sec
+        Start   5: test_latest_pending
+  5/103 Test   #5: test_latest_pending ............................................................   Passed    0.49 sec
+        Start   6: test_direct_visual_odometry
+  6/103 Test   #6: test_direct_visual_odometry ....................................................   Passed    0.16 sec
+        Start   7: test_voxel_hash_map
+  7/103 Test   #7: test_voxel_hash_map ............................................................   Passed    0.24 sec
+        Start   8: test_gravity_alignment
+  8/103 Test   #8: test_gravity_alignment .........................................................   Passed    0.12 sec
+        Start   9: test_localizability_weighting
+  9/103 Test   #9: test_localizability_weighting ..................................................   Passed    0.13 sec
+        Start  10: test_kinematic_velocity_gate
+ 10/103 Test  #10: test_kinematic_velocity_gate ...................................................   Passed    0.13 sec
+        Start  11: test_kinematic_velocity_blend
+ 11/103 Test  #11: test_kinematic_velocity_blend ..................................................   Passed    0.11 sec
+        Start  12: test_stall_guard
+ 12/103 Test  #12: test_stall_guard ...............................................................   Passed    0.11 sec
+        Start  13: test_kinematic_scene_range_gate
+ 13/103 Test  #13: test_kinematic_scene_range_gate ................................................   Passed    0.16 sec
+        Start  14: IntervalStats: default-constructed state is zero
+ 14/103 Test  #14: IntervalStats: default-constructed state is zero ...............................   Passed    0.01 sec
+        Start  15: IntervalStats: single update
+ 15/103 Test  #15: IntervalStats: single update ...................................................   Passed    0.01 sec
+        Start  16: IntervalStats: constant accel magnitude over N updates -> variance = 0
+ 16/103 Test  #16: IntervalStats: constant accel magnitude over N updates -> variance = 0 .........   Passed    0.01 sec
+        Start  17: IntervalStats: variance matches naive formula
+ 17/103 Test  #17: IntervalStats: variance matches naive formula ..................................   Passed    0.01 sec
+        Start  18: IntervalStats: reset zeros every field
+ 18/103 Test  #18: IntervalStats: reset zeros every field .........................................   Passed    0.01 sec
+        Start  19: IntervalStats: sums accumulate across updates
+ 19/103 Test  #19: IntervalStats: sums accumulate across updates ..................................   Passed    0.00 sec
+        Start  20: voxel_down_sample: empty input -> empty output
+ 20/103 Test  #20: voxel_down_sample: empty input -> empty output .................................   Passed    0.01 sec
+        Start  21: voxel_down_sample: all points within one voxel -> 1 output
+ 21/103 Test  #21: voxel_down_sample: all points within one voxel -> 1 output .....................   Passed    0.01 sec
+        Start  22: voxel_down_sample: N well-separated points -> N outputs
+ 22/103 Test  #22: voxel_down_sample: N well-separated points -> N outputs ........................   Passed    0.00 sec
+        Start  23: voxel_down_sample: order independence
+ 23/103 Test  #23: voxel_down_sample: order independence ..........................................   Passed    0.00 sec
+        Start  24: voxel_down_sample: doubling voxel size collapses points
+ 24/103 Test  #24: voxel_down_sample: doubling voxel size collapses points ........................   Passed    0.00 sec
+        Start  25: voxel_down_sample_legacy: keeps the first representative per voxel
+ 25/103 Test  #25: voxel_down_sample_legacy: keeps the first representative per voxel .............   Passed    0.00 sec
+        Start  26: voxel_down_sample_sorted: empty input -> empty output
+ 26/103 Test  #26: voxel_down_sample_sorted: empty input -> empty output ..........................   Passed    0.00 sec
+        Start  27: voxel_down_sample_sorted: same occupied voxels as voxel_down_sample
+ 27/103 Test  #27: voxel_down_sample_sorted: same occupied voxels as voxel_down_sample ............   Passed    0.00 sec
+        Start  28: voxel_down_sample_sorted: output is sorted by hash(voxel)
+ 28/103 Test  #28: voxel_down_sample_sorted: output is sorted by hash(voxel) ......................   Passed    0.01 sec
+        Start  29: process_timestamps: absolute seconds, header ~= min -> unchanged
+ 29/103 Test  #29: process_timestamps: absolute seconds, header ~= min -> unchanged ...............   Passed    0.01 sec
+        Start  30: process_timestamps: relative seconds, min ~= 0 -> header offset added
+ 30/103 Test  #30: process_timestamps: relative seconds, min ~= 0 -> header offset added ..........   Passed    0.01 sec
+        Start  31: process_timestamps: absolute nanoseconds -> heuristic infers ns source
+ 31/103 Test  #31: process_timestamps: absolute nanoseconds -> heuristic infers ns source .........   Passed    0.01 sec
+        Start  32: process_timestamps: relative nanoseconds
+ 32/103 Test  #32: process_timestamps: relative nanoseconds .......................................   Passed    0.00 sec
+        Start  33: process_timestamps: force_absolute overrides heuristic
+ 33/103 Test  #33: process_timestamps: force_absolute overrides heuristic .........................   Passed    0.01 sec
+        Start  34: process_timestamps: force_relative overrides heuristic
+ 34/103 Test  #34: process_timestamps: force_relative overrides heuristic .........................   Passed    0.00 sec
+        Start  35: process_timestamps: custom multiplier_to_seconds is honored
+ 35/103 Test  #35: process_timestamps: custom multiplier_to_seconds is honored ....................   Passed    0.01 sec
+        Start  36: process_timestamps: ambiguous case throws
+ 36/103 Test  #36: process_timestamps: ambiguous case throws ......................................   Passed    0.01 sec
+        Start  37: process_timestamps: empty raw_timestamps throws instead of UB
+ 37/103 Test  #37: process_timestamps: empty raw_timestamps throws instead of UB ..................   Passed    0.01 sec
+        Start  38: intensity profile reports a separated secondary peak
+ 38/103 Test  #38: intensity profile reports a separated secondary peak ...........................   Passed    0.00 sec
+        Start  39: intensity profile rejects periodic alias peaks
+ 39/103 Test  #39: intensity profile rejects periodic alias peaks .................................   Passed    0.00 sec
+        Start  40: zero peak margin preserves legacy acceptance
+ 40/103 Test  #40: zero peak margin preserves legacy acceptance ...................................   Passed    0.01 sec
+        Start  41: intensity profile reports bounded overlap-local correlation
+ 41/103 Test  #41: intensity profile reports bounded overlap-local correlation ....................   Passed    0.01 sec
+        Start  42: overlap-local correlation rejects zero-variance texture
+ 42/103 Test  #42: overlap-local correlation rejects zero-variance texture ........................   Passed    0.01 sec
+        Start  43: generic peak selector exposes rejection reason
+ 43/103 Test  #43: generic peak selector exposes rejection reason .................................   Passed    0.00 sec
+        Start  44: generic peak selector exclusion radius is policy controlled
+ 44/103 Test  #44: generic peak selector exclusion radius is policy controlled ....................   Passed    0.01 sec
+        Start  45: generic peak selector excludes multidimensional neighbours
+ 45/103 Test  #45: generic peak selector excludes multidimensional neighbours .....................   Passed    0.01 sec
+        Start  46: oriented intensity grid recovers a two-dimensional translation
+ 46/103 Test  #46: oriented intensity grid recovers a two-dimensional translation .................   Passed    0.01 sec
+        Start  47: height channel disambiguates repeated reflectivity
+ 47/103 Test  #47: height channel disambiguates repeated reflectivity .............................   Passed    0.01 sec
+        Start  48: oriented intensity grid rejects collinear axes
+ 48/103 Test  #48: oriented intensity grid rejects collinear axes .................................   Passed    0.01 sec
+        Start  49: preprocess_scan: clipping by min/max range
+ 49/103 Test  #49: preprocess_scan: clipping by min/max range .....................................   Passed    0.00 sec
+        Start  50: preprocess_scan: double_downsample = false -> no map_frame
+ 50/103 Test  #50: preprocess_scan: double_downsample = false -> no map_frame .....................   Passed    0.01 sec
+        Start  51: preprocess_scan: legacy voxel mode preserves compatibility order
+ 51/103 Test  #51: preprocess_scan: legacy voxel mode preserves compatibility order ...............   Passed    0.01 sec
+        Start  52: preprocess_scan: legacy voxel mode covers both downsample passes
+ 52/103 Test  #52: preprocess_scan: legacy voxel mode covers both downsample passes ...............   Passed    0.01 sec
+        Start  53: preprocess_scan: double_downsample = true -> all three populated
+ 53/103 Test  #53: preprocess_scan: double_downsample = true -> all three populated ...............   Passed    0.01 sec
+        Start  54: IMU before first LiDAR is silently dropped
+ 54/103 Test  #54: IMU before first LiDAR is silently dropped .....................................   Passed    0.01 sec
+        Start  55: Static IMU at rest: gravity is compensated
+ 55/103 Test  #55: Static IMU at rest: gravity is compensated .....................................   Passed    0.01 sec
+        Start  56: Pure rotation: gyro integration matches exp(omega*T)
+ 56/103 Test  #56: Pure rotation: gyro integration matches exp(omega*T) ...........................   Passed    0.01 sec
+        Start  57: Gyro bias is subtracted before integration
+ 57/103 Test  #57: Gyro bias is subtracted before integration .....................................   Passed    0.01 sec
+        Start  58: Extrinsic overload: identity extrinsic delegates to base-frame
+ 58/103 Test  #58: Extrinsic overload: identity extrinsic delegates to base-frame .................   Passed    0.01 sec
+        Start  59: Extrinsic overload: pure-rotation extrinsic transforms omega
+ 59/103 Test  #59: Extrinsic overload: pure-rotation extrinsic transforms omega ...................   Passed    0.01 sec
+        Start  60: Static IMU at rest: imu_state translation stays zero
+ 60/103 Test  #60: Static IMU at rest: imu_state translation stays zero ...........................   Passed    0.01 sec
+        Start  61: Constant body acceleration: position grows as 0.5 * a * t^2
+ 61/103 Test  #61: Constant body acceleration: position grows as 0.5 * a * t^2 ....................   Passed    0.01 sec
+        Start  62: register_scan resets imu_state to optimized pose
+ 62/103 Test  #62: register_scan resets imu_state to optimized pose ...............................   Passed    0.01 sec
+        Start  63: First scan: empty map -> populated, single pose at lidar_state.time
+ 63/103 Test  #63: First scan: empty map -> populated, single pose at lidar_state.time ............   Passed    0.01 sec
+        Start  64: Identity registration: same cloud twice -> pose ~= identity
+ 64/103 Test  #64: Identity registration: same cloud twice -> pose ~= identity ....................   Passed    0.01 sec
+        Start  65: deskew = false: register_scan still produces a valid pose
+ 65/103 Test  #65: deskew = false: register_scan still produces a valid pose ......................   Passed    0.01 sec
+        Start  66: Pure translation: recover +1m in x
+ 66/103 Test  #66: Pure translation: recover +1m in x .............................................   Passed    0.01 sec
+        Start  67: Pure rotation: recover 5 deg yaw
+ 67/103 Test  #67: Pure rotation: recover 5 deg yaw ...............................................   Passed    0.01 sec
+        Start  68: Full SE(3): translation + rotation combined
+ 68/103 Test  #68: Full SE(3): translation + rotation combined ....................................   Passed    0.01 sec
+        Start  69: Noisy: pure translation +1m in x
+ 69/103 Test  #69: Noisy: pure translation +1m in x ...............................................   Passed    0.01 sec
+        Start  70: Noisy: pure rotation 5 deg yaw
+ 70/103 Test  #70: Noisy: pure rotation 5 deg yaw .................................................   Passed    0.01 sec
+        Start  71: Noisy: full SE(3) translation + rotation
+ 71/103 Test  #71: Noisy: full SE(3) translation + rotation .......................................   Passed    0.01 sec
+        Start  72: Levenberg-Marquardt matches Gauss-Newton on a well-constrained scan
+ 72/103 Test  #72: Levenberg-Marquardt matches Gauss-Newton on a well-constrained scan ............   Passed    0.01 sec
+        Start  73: register_scan: empty timestamps throws instead of UB
+ 73/103 Test  #73: register_scan: empty timestamps throws instead of UB ...........................   Passed    0.01 sec
+        Start  74: Scans below min_icp_keypoints are not registered
+ 74/103 Test  #74: Scans below min_icp_keypoints are not registered ...............................   Passed    0.01 sec
+        Start  75: Scan gap re-anchor keeps the motion the IMU propagated
+ 75/103 Test  #75: Scan gap re-anchor keeps the motion the IMU propagated .........................   Passed    0.01 sec
+        Start  76: samplewise_gyro_deskew only matters when the rate changes within an interval
+ 76/103 Test  #76: samplewise_gyro_deskew only matters when the rate changes within an interval ...   Passed    0.02 sec
+        Start  77: image model maps cloud indices and pixels both ways
+ 77/103 Test  #77: image model maps cloud indices and pixels both ways ............................   Passed    0.01 sec
+        Start  78: projection hits the pixel a beam was cast from and its Jacobian matches
+ 78/103 Test  #78: projection hits the pixel a beam was cast from and its Jacobian matches ........   Passed    0.01 sec
+        Start  79: brightness normalization divides by the local mean
+ 79/103 Test  #79: brightness normalization divides by the local mean .............................   Passed    0.01 sec
+        Start  80: every deskewed point projects back to the pixel it was captured at
+ 80/103 Test  #80: every deskewed point projects back to the pixel it was captured at .............   Passed    0.02 sec
+        Start  81: photometric terms alone recover motion along a featureless corridor axis
+ 81/103 Test  #81: photometric terms alone recover motion along a featureless corridor axis .......   Passed    0.04 sec
+        Start  82: weak directions are the axes few surface normals face
+ 82/103 Test  #82: weak directions are the axes few surface normals face ..........................   Passed    0.01 sec
+        Start  83: Bump image stores the surface relief
+ 83/103 Test  #83: Bump image stores the surface relief ...........................................   Passed    0.07 sec
+        Start  84: Bump image registration recovers an in-plane offset
+ 84/103 Test  #84: Bump image registration recovers an in-plane offset ............................   Passed    0.07 sec
+        Start  85: Informed sampling keeps the voxels with relief
+ 85/103 Test  #85: Informed sampling keeps the voxels with relief .................................   Passed    0.06 sec
+        Start  86: Window and count of one fall back on every exceeding scan
+ 86/103 Test  #86: Window and count of one fall back on every exceeding scan ......................   Passed    0.01 sec
+        Start  87: An isolated large correction keeps its bump result
+ 87/103 Test  #87: An isolated large correction keeps its bump result .............................   Passed    0.01 sec
+        Start  88: The hard limit falls back at once
+ 88/103 Test  #88: The hard limit falls back at once ..............................................   Passed    0.01 sec
+        Start  89: A count above the window can never be met
+ 89/103 Test  #89: A count above the window can never be met ......................................   Passed    0.01 sec
+        Start  90: Preintegration predicts the next pose and velocity
+ 90/103 Test  #90: Preintegration predicts the next pose and velocity .............................   Passed    0.01 sec
+        Start  91: Bias Jacobians match reintegration
+ 91/103 Test  #91: Bias Jacobians match reintegration .............................................   Passed    0.01 sec
+        Start  92: The window recovers velocity and biases from exact poses
+ 92/103 Test  #92: The window recovers velocity and biases from exact poses .......................   Passed    0.63 sec
+        Start  93: One slipped registration barely moves the window velocity
+ 93/103 Test  #93: One slipped registration barely moves the window velocity ......................   Passed    0.05 sec
+        Start  94: The cadence is the step rhythm of the specific force
+ 94/103 Test  #94: The cadence is the step rhythm of the specific force ...........................   Passed    0.01 sec
+        Start  95: Standing still is not walking
+ 95/103 Test  #95: Standing still is not walking ..................................................   Passed    0.01 sec
+        Start  96: The step length ignores stalls and runaways
+ 96/103 Test  #96: The step length ignores stalls and runaways ....................................   Passed    0.01 sec
+        Start  97: The step length is frozen once learned
+ 97/103 Test  #97: The step length is frozen once learned .........................................   Passed    0.01 sec
+        Start  98: Setting the gait speed stops a turning sensor from pumping it
+ 98/103 Test  #98: Setting the gait speed stops a turning sensor from pumping it ..................   Passed    0.01 sec
+        Start  99: Only the last second tells standing from stepping
+ 99/103 Test  #99: Only the last second tells standing from stepping ..............................   Passed    0.01 sec
+        Start 100: Without a cadence the walker keeps its bounds
+100/103 Test #100: Without a cadence the walker keeps its bounds ..................................   Passed    0.01 sec
+        Start 101: A scan that sees every direction alike shares a third
+101/103 Test #101: A scan that sees every direction alike shares a third ..........................   Passed    0.01 sec
+        Start 102: A tunnel's axis is the weakest translation, whatever the rotation block
+102/103 Test #102: A tunnel's axis is the weakest translation, whatever the rotation block ........   Passed    0.01 sec
+        Start 103: An empty or broken system observes nothing to compare
+103/103 Test #103: An empty or broken system observes nothing to compare ..........................   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 103
+
+Label Time Summary:
+gtest    =   2.12 sec*proc (13 tests)
+
+Total Test time (real) =   3.71 sec
+rc=0
