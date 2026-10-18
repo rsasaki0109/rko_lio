@@ -19,6 +19,7 @@
 | ループ閉じ込みを有効にした場合（10 章） | **バックエンドが律速になる**。ループ候補の NDT 照合が 1 候補あたり CPU 約 17〜24 秒かかり、バックエンドが約 2.3 コアを使ってフロントエンドを 1.5 コア前後まで押し下げる。RTF はベース 1.631 → f6b0425 0.974（比 0.597）、f6b0425 0.880 → 734d54f 0.810（比 0.921）。フロントエンド終了後もバックエンドは 17〜20 秒働き続ける。照合中に入力が溢れ、キーフレーム（サブマップ）を取りこぼす（40 個中、ベース 34 個、f6b0425 と 734d54f は 29 個）。exp04 では採用されたループは 0 件 |
 | さらに 2 コミット（12 章、GLIM に速さで並ぶため） | 734d54f→a92dfd4：exp04 39.97 → **26.07 秒（比 0.652）**、MID-360 29.22 → **17.38 秒（比 0.595）**（直接の ABAB 3 組）。ICP の近傍探索を、前回の最近傍が三角不等式で最も近いままと言えるときだけ省き（exp04 で 82.8% を省略）、決定的リダクションの葉を 64 点にして同じ木を逐次にたどる。省いた探索 1.1 億回と連立方程式 6.3 万回を元の計算と全数照合して不一致 0。全体（graph_based_slam 込み、結果の保存まで）は GLIM CPU の 0.770 倍（ループ無効）、0.884 倍（ループ有効）の時間 |
 | bag の最後で止まる不具合（13 章） | IMU が LiDAR より先に終わる bag で、offline_node の読み込みと登録のスレッドが互いを待って止まっていた（MapsHD underground-garage の trial-1）。40b3a06 で、登録が IMU を待っている間は読み続けるようにした。exp04・MID-360・Oxford の軌跡の md5 は変わらない |
+| 地図の voxel の領域（14 章） | voxel ごとに上限の 20 点分を最初から確保していたのを、4、8、16、20 と段階的に広げるようにした（77072e4）。パイプラインの中のフロントエンドのピーク RSS は exp04 で 449 → 358〜368 MiB、Oxford で 529 → 444 MiB。軌跡の md5 は 3 系列とも変わらない。速さはほぼ同じ（ABAB で比 0.986〜0.994） |
 
 ## 1. 環境
 
@@ -219,6 +220,7 @@ perf（cpu-clock、全スレッド）で f6b0425 を見ると、CPU サンプル
 | d209cb4 | Skip the ICP neighbour search when the cached neighbour must still be the nearest（12 章） |
 | a92dfd4 | Sum the ICP systems of up to 64 points per reduction task with the same tree（12 章） |
 | 40b3a06 | Keep reading the bag while registration waits for IMU data（13 章、出力は変わらない） |
+| 77072e4 | Grow each map voxel's point storage in steps instead of reserving the cap（14 章、出力は変わらない） |
 | （このレポート） | bench_report/ を追加（コードには触れない） |
 
 master、fix/configurable-voxel-sampling、既存の perf/* には push していない。force push もしていない。PR も作っていない。
@@ -369,6 +371,36 @@ graph_based_slam の出力（軌跡・グラフ・ループ辺・地図）は、
   - exp04、MID-360、Oxford Keble 05（moving-start guard あり）で、軌跡の md5 は修正前と同じ（`bc231992…`、`2a1c8107…`、`3fe77723…`。`data/deadlock/runs_40b3a06.csv`）。
 - **修正後**：underground-garage の trial-1 は 27.5 秒で終わり、3,610 姿勢を出す。IMU のない最後の 100 フレームは捨てる（50 フレームは読み込み中に、残りの 50 フレームは読み終えた後に。`data/deadlock/garage1_40b3a06_log_excerpt.txt`）。
 - **テスト**：ROS の bag を読む経路なので、単体テストは足していない。確認は `scripts/deadlock_fix_check.sh`。
+
+## 14. 地図の voxel の領域を段階的に確保する（追記、2026-10-18）
+
+rsasaki0109/lidar_slam_ros2 の bench_report 16 章（パイプラインのメモリ）の一部。フロントエンドの分だけをここに書く。
+
+- **原因**：`VoxelHashMap::add_points` は、voxel を作るたびに上限（`max_points_per_voxel`、20 点）分の領域を確保していた。`Eigen::Vector3d` で 480 バイト。ほとんどの voxel は、上限よりずっと少ない点しか持たない。
+- **修正（77072e4）**：領域を 4、8、16、上限（20）と段階的に広げる。voxel の点とその順番は変わらない。
+- **アドレスが動くことの確認**：領域を広げると、voxel の点のアドレスが動く。前の版は、上限分を最初に確保していたので動かなかった。
+  - 点のアドレスを持つのは、ICP の近傍キャッシュ（d209cb4、f4a6547 の `NeighborhoodCache` と、voxel の先頭を返す検索）だけ。どれも 1 回の登録の中で作って捨てる。地図の更新（`LIO::update_maps`）は登録の後なので、追加をまたいでアドレスを持つことはない。
+  - 地図のハッシュ表（`tsl::robin_map`）は、挿入のときに要素ごと移す。そのため、前の版でも、追加をまたいでアドレスを持てる作りではなかった。
+- **出力は変わらない**：軌跡の md5 は、パイプラインの 4 回と、下の ABAB の回で同じ。
+  - exp04 `bc231992…`（パイプライン 4 回、ABAB 3 回）。
+  - MID-360 `2a1c8107…`（パイプライン 4 回）。
+  - Oxford Keble 05（moving-start guard あり）`3fe77723…`（パイプライン 4 回、ABAB 2 回）。
+- **メモリ**：パイプラインの中の offline_node のピーク RSS（MiB、各 1 回。`data/voxel_reserve/frontend_peak_rss.csv`）。
+
+| 系列 | 40b3a06 | 77072e4 | 77072e4 と `async.max_lidar_buffer_size: 10` |
+|---|---:|---:|---:|
+| exp04 | 449 | 358〜368（−81〜−91） | 283 |
+| MID-360 | 111 | 102〜104 | 78 |
+| Oxford Keble 05 | 529 | 444（−85） | 352 |
+
+- **速さ**：フロントエンドだけの ABAB（`data/voxel_reserve/abab_*.csv`、`scripts/voxel_reserve_abab.sh`）。ほぼ変わらない。
+  - exp04（3 組）：中央値 17.83 → 17.58 秒、比 0.986（組ごとに 0.982、0.998、0.986）。
+  - Oxford（2 組）：中央値 169.36 → 168.38 秒、比 0.994（組ごとに 0.985、1.004）。
+  - パイプラインの 1 回ずつの比較（lidar_slam_ros2 の 16.4）で見えた約 1 割の差は、この変更の効果ではない。
+- **`async.max_lidar_buffer_size: 10`（既定 50）**：既定は変えていない。
+  - オフラインでは、読み込みがバッファの 9 割で止まるので、フレームを捨てない。3 系列で md5 は同じ。
+  - ライブでは、登録が 10 フレーム（10 Hz で 1 秒）より遅れると、古いフレームから捨てる。そのため出力が変わりうる。
+- **テスト**：既存の単体テストで済ませ、新しくは足していない。地図の中身は変わらず、変わるのは領域の確保の仕方だけなので。
 
 ## 付録：全ランの表
 
