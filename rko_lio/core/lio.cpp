@@ -201,7 +201,8 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                                      const std::optional<Eigen::Vector3d>& localizability_axis = std::nullopt,
                                      const double localizability_boost = 0.0,
                                      IcpWeightingStats* weighting_stats = nullptr,
-                                     std::vector<VoxelHashMap::NeighborhoodCache>* neighborhoods = nullptr) {
+                                     std::vector<VoxelHashMap::NeighborhoodCache>* neighborhoods = nullptr,
+                                     const bool localizability_normal_only = false) {
   // H, b, chi, weight sum, correspondence count. The weight sum replaces the correspondence
   // count in the H/b normalization; with weighting disabled every weight is exactly 1
   // and the result is bit-identical to the historical count-normalized system.
@@ -234,11 +235,20 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
     J_r.block<3, 3>(0, 3) = -1.0 * Sophus::SO3d::hat(source);
     const Eigen::Vector3d residual = source - target;
     double weight = 1.0;
+    std::optional<Eigen::Vector3d> normal;
     if (weighting_enabled) {
-      weight = localizability_weight(voxel_map.voxel_normal(target), *localizability_axis, localizability_boost);
+      normal = voxel_map.voxel_normal(target);
+      weight = localizability_weight(normal, *localizability_axis, localizability_boost);
       if (weight > 1.0) {
         boosted_counter++;
       }
+    }
+    if (localizability_normal_only && weight > 1.0) {
+      // Only the residual along the map normal is boosted (normal_only_information). The weight
+      // sum counts the mean added information, trace(W) / 3.
+      const Eigen::Matrix3d W = normal_only_information(normal, weight);
+      return WeightedSystem(J_r.transpose() * W * J_r, J_r.transpose() * W * residual, residual.dot(W * residual),
+                            1.0 + (weight - 1.0) / 3.0, 1);
     }
     return WeightedSystem(weight * J_r.transpose() * J_r,      // JTJ
                           weight * J_r.transpose() * residual, // JTr
@@ -430,7 +440,8 @@ IcpResult icp(const Vector3dVector& frame,
       if (!bump_used) {
         geometric = build_icp_linear_system(current_pose, frame, voxel_map, config.max_correspondence_distance,
                                             voxel_search_radius, localizability_axis, localizability_boost,
-                                            &weighting_stats, voxel_search_radius <= 1 ? &neighborhoods : nullptr);
+                                            &weighting_stats, voxel_search_radius <= 1 ? &neighborhoods : nullptr,
+                                            config.localizability_normal_only);
       }
       auto [H_icp, b_icp, chi_icp] = geometric;
       if (photometric != nullptr && weighting_stats.correspondences > 0) {

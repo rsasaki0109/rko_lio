@@ -571,6 +571,11 @@ public:
      *  no trustworthy along-track direction). */
     double localizability_min_step_m = 0.05;
 
+    /** Boost only the residual component along the matched map normal (W = I + (w - 1) n n^T)
+     *  instead of the whole point-to-point residual: the along-surface part, mostly the spacing
+     *  of the map points, keeps its unit weight. */
+    bool localizability_normal_only = false;
+
     /** Correct translation along a confirmed persistent weak direction using scan-to-scan
      *  cross-correlation of a 1D reflectivity/intensity profile built along that axis.
      *  Recovers along-tunnel translation that geometric ICP under-observes in self-similar

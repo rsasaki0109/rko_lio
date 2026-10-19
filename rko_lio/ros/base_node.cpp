@@ -205,6 +205,7 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["localizability_weighting"] = nlohmann_json_t.localizability_weighting;
   nlohmann_json_j["localizability_boost"] = nlohmann_json_t.localizability_boost;
   nlohmann_json_j["localizability_min_step_m"] = nlohmann_json_t.localizability_min_step_m;
+  nlohmann_json_j["localizability_normal_only"] = nlohmann_json_t.localizability_normal_only;
   nlohmann_json_j["kinematic_velocity_gate"] = nlohmann_json_t.kinematic_velocity_gate;
   nlohmann_json_j["kinematic_gate_accel_margin"] = nlohmann_json_t.kinematic_gate_accel_margin;
   nlohmann_json_j["kinematic_gate_min_speed"] = nlohmann_json_t.kinematic_gate_min_speed;
@@ -365,6 +366,7 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
   nlohmann_json_j.at("localizability_weighting").get_to(nlohmann_json_t.localizability_weighting);
   nlohmann_json_j.at("localizability_boost").get_to(nlohmann_json_t.localizability_boost);
   nlohmann_json_j.at("localizability_min_step_m").get_to(nlohmann_json_t.localizability_min_step_m);
+  nlohmann_json_j.at("localizability_normal_only").get_to(nlohmann_json_t.localizability_normal_only);
   nlohmann_json_j.at("kinematic_velocity_gate").get_to(nlohmann_json_t.kinematic_velocity_gate);
   nlohmann_json_j.at("kinematic_gate_accel_margin").get_to(nlohmann_json_t.kinematic_gate_accel_margin);
   nlohmann_json_j.at("kinematic_gate_min_speed").get_to(nlohmann_json_t.kinematic_gate_min_speed);
@@ -760,6 +762,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("localizability_boost", lio_config.localizability_boost);
   lio_config.localizability_min_step_m =
       node->declare_parameter<double>("localizability_min_step_m", lio_config.localizability_min_step_m);
+  lio_config.localizability_normal_only =
+      node->declare_parameter<bool>("localizability_normal_only", lio_config.localizability_normal_only);
 
   // ---- accelerometer-consistency velocity gate (fork addition; default-off) ----
   lio_config.kinematic_velocity_gate =

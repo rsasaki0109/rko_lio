@@ -15,6 +15,7 @@
 namespace {
 
 using rko_lio::core::localizability_weight;
+using rko_lio::core::normal_only_information;
 using rko_lio::core::VoxelHashMap;
 
 TEST(LocalizabilityWeight, NeutralWithoutNormalOrBoostOrAxis) {
@@ -42,6 +43,24 @@ TEST(LocalizabilityWeight, ObliqueNormalScalesWithSquaredCosine) {
   const Eigen::Vector3d axis(1.0, 0.0, 0.0);
   const Eigen::Vector3d oblique = Eigen::Vector3d(1.0, 1.0, 0.0).normalized();
   EXPECT_NEAR(localizability_weight(oblique, axis, 30.0), 1.0 + 30.0 * 0.5, 1.0e-12);
+}
+
+TEST(NormalOnlyInformation, IdentityWithoutNormalOrBoost) {
+  EXPECT_TRUE(normal_only_information(std::nullopt, 31.0).isApprox(Eigen::Matrix3d::Identity()));
+  EXPECT_TRUE(normal_only_information(Eigen::Vector3d(1.0, 0.0, 0.0), 1.0).isApprox(Eigen::Matrix3d::Identity()));
+  EXPECT_TRUE(normal_only_information(Eigen::Vector3d(1.0, 0.0, 0.0), 0.5).isApprox(Eigen::Matrix3d::Identity()));
+}
+
+TEST(NormalOnlyInformation, BoostsOnlyAlongTheNormal) {
+  const Eigen::Vector3d normal = Eigen::Vector3d(1.0, 1.0, 0.0).normalized();
+  const Eigen::Matrix3d W = normal_only_information(normal, 31.0);
+  // Along the normal the residual gets the full weight, along the surface it keeps 1.
+  EXPECT_NEAR(normal.dot(W * normal), 31.0, 1.0e-12);
+  const Eigen::Vector3d along_surface = Eigen::Vector3d(1.0, -1.0, 0.0).normalized();
+  EXPECT_NEAR(along_surface.dot(W * along_surface), 1.0, 1.0e-12);
+  EXPECT_NEAR(Eigen::Vector3d::UnitZ().dot(W * Eigen::Vector3d::UnitZ()), 1.0, 1.0e-12);
+  // The orientation of the normal does not matter.
+  EXPECT_TRUE(normal_only_information(-normal, 31.0).isApprox(W));
 }
 
 TEST(VoxelHashMapNormals, PlanarVoxelYieldsSurfaceNormal) {
