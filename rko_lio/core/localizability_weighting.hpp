@@ -66,4 +66,17 @@ inline double localizability_weight(const std::optional<Eigen::Vector3d>& normal
   return 1.0 + boost * cosine * cosine;
 }
 
+/**
+ * Information matrix of one correspondence when the boost applies only along
+ * the matched map normal: W = I + (weight - 1) n n^T. The residual along the
+ * surface, mostly the spacing of the map points, keeps its unit weight.
+ * Returns the identity without a normal or for a weight that is not above 1.
+ */
+inline Eigen::Matrix3d normal_only_information(const std::optional<Eigen::Vector3d>& normal, const double weight) {
+  if (!normal.has_value() || !(weight > 1.0)) {
+    return Eigen::Matrix3d::Identity();
+  }
+  return Eigen::Matrix3d::Identity() + (weight - 1.0) * (*normal) * normal->transpose();
+}
+
 } // namespace rko_lio::core
