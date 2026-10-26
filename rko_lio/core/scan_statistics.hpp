@@ -56,6 +56,12 @@ struct ScanStatistics {
   double fraction_within_0_5 = 0.0;
   /** Correspondences whose map voxel has a surface normal. */
   int matched_normals = 0;
+  /** Correspondences on horizontal map surfaces (normal within about 25 deg of the vertical) more
+   *  than 0.5 m above the sensor (a ceiling) and more than 0.5 m below it (a floor, the ground). */
+  int ceiling_correspondences = 0;
+  int floor_correspondences = 0;
+  /** Median distance of the keypoints from the sensor (m). */
+  double median_keypoint_range = std::numeric_limits<double>::quiet_NaN();
   /** Eigenvalues of the mean n n^T over the matched surface normals, ascending. */
   std::array<double, 3> normal_eigenvalues{};
   /** axis^T N axis / max eigenvalue of N for the unit motion axis of the scan; NaN when the scan

@@ -294,6 +294,13 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["scan_statistics"] = nlohmann_json_t.scan_statistics;
   nlohmann_json_j["scan_statistics_search_distance"] = nlohmann_json_t.scan_statistics_search_distance;
   nlohmann_json_j["icp_robust_kernel_scale_factor"] = nlohmann_json_t.icp_robust_kernel_scale_factor;
+  nlohmann_json_j["close_scene_max_median_range"] = nlohmann_json_t.close_scene_max_median_range;
+  nlohmann_json_j["close_scene_max_correspondence_distance"] = nlohmann_json_t.close_scene_max_correspondence_distance;
+  nlohmann_json_j["close_scene_localizability_boost"] = nlohmann_json_t.close_scene_localizability_boost;
+  nlohmann_json_j["close_scene_localizability_normal_only"] = nlohmann_json_t.close_scene_localizability_normal_only;
+  nlohmann_json_j["close_scene_icp_robust_kernel_scale_factor"] =
+      nlohmann_json_t.close_scene_icp_robust_kernel_scale_factor;
+  nlohmann_json_j["close_scene_min_inlier_fraction"] = nlohmann_json_t.close_scene_min_inlier_fraction;
 }
 template <typename BasicJsonType,
          nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0>
@@ -467,6 +474,18 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
       nlohmann_json_j.value("scan_statistics_search_distance", nlohmann_json_t.scan_statistics_search_distance);
   nlohmann_json_t.icp_robust_kernel_scale_factor =
       nlohmann_json_j.value("icp_robust_kernel_scale_factor", nlohmann_json_t.icp_robust_kernel_scale_factor);
+  nlohmann_json_t.close_scene_max_median_range =
+      nlohmann_json_j.value("close_scene_max_median_range", nlohmann_json_t.close_scene_max_median_range);
+  nlohmann_json_t.close_scene_max_correspondence_distance = nlohmann_json_j.value(
+      "close_scene_max_correspondence_distance", nlohmann_json_t.close_scene_max_correspondence_distance);
+  nlohmann_json_t.close_scene_localizability_boost =
+      nlohmann_json_j.value("close_scene_localizability_boost", nlohmann_json_t.close_scene_localizability_boost);
+  nlohmann_json_t.close_scene_localizability_normal_only = nlohmann_json_j.value(
+      "close_scene_localizability_normal_only", nlohmann_json_t.close_scene_localizability_normal_only);
+  nlohmann_json_t.close_scene_icp_robust_kernel_scale_factor = nlohmann_json_j.value(
+      "close_scene_icp_robust_kernel_scale_factor", nlohmann_json_t.close_scene_icp_robust_kernel_scale_factor);
+  nlohmann_json_t.close_scene_min_inlier_fraction =
+      nlohmann_json_j.value("close_scene_min_inlier_fraction", nlohmann_json_t.close_scene_min_inlier_fraction);
 }
 } // namespace rko_lio::core
 
@@ -556,6 +575,18 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("max_correspondence_distance", lio_config.max_correspondence_distance);
   lio_config.icp_robust_kernel_scale_factor =
       node->declare_parameter<double>("icp_robust_kernel_scale_factor", lio_config.icp_robust_kernel_scale_factor);
+  lio_config.close_scene_max_median_range =
+      node->declare_parameter<double>("close_scene_max_median_range", lio_config.close_scene_max_median_range);
+  lio_config.close_scene_max_correspondence_distance = node->declare_parameter<double>(
+      "close_scene_max_correspondence_distance", lio_config.close_scene_max_correspondence_distance);
+  lio_config.close_scene_localizability_boost =
+      node->declare_parameter<double>("close_scene_localizability_boost", lio_config.close_scene_localizability_boost);
+  lio_config.close_scene_localizability_normal_only = node->declare_parameter<bool>(
+      "close_scene_localizability_normal_only", lio_config.close_scene_localizability_normal_only);
+  lio_config.close_scene_icp_robust_kernel_scale_factor = node->declare_parameter<double>(
+      "close_scene_icp_robust_kernel_scale_factor", lio_config.close_scene_icp_robust_kernel_scale_factor);
+  lio_config.close_scene_min_inlier_fraction =
+      node->declare_parameter<double>("close_scene_min_inlier_fraction", lio_config.close_scene_min_inlier_fraction);
   lio_config.max_num_threads =
       static_cast<int>(node->declare_parameter<int>("max_num_threads", lio_config.max_num_threads));
   lio_config.initialization_phase =
@@ -1890,13 +1921,17 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
         }
       }
     }
+    if (lio->config.close_scene_max_median_range > 0.0) {
+      std::cout << "Close-scene settings used on " << lio->close_scene_scan_count << " registered scans ("
+                << lio->close_scene_fallback_count << " registered again with the base settings)\n";
+    }
     // GT-free per-scan registration statistics (scan_statistics.hpp).
     if (lio->config.scan_statistics && !lio->scan_statistics_rows.empty()) {
       const std::filesystem::path statistics_file = output_dir / "scan_statistics.csv";
       if (std::ofstream file(statistics_file); file.is_open()) {
         file << "time_sec,keypoints,correspondences,nn_p10,nn_p25,nn_p50,nn_p75,nn_p90,within_0_25,within_0_5,"
                 "matched_normals,normal_eigenvalue_min,normal_eigenvalue_mid,normal_eigenvalue_max,"
-                "motion_axis_information_ratio\n";
+                "motion_axis_information_ratio,ceiling_correspondences,floor_correspondences,median_keypoint_range\n";
         for (const rko_lio::core::ScanStatistics& row : lio->scan_statistics_rows) {
           file << std::setprecision(17) << row.time_sec << std::setprecision(10) << "," << row.keypoints << ","
                << row.correspondences;
@@ -1907,7 +1942,8 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
           for (const double value : row.normal_eigenvalues) {
             file << "," << value;
           }
-          file << "," << row.motion_axis_information_ratio << "\n";
+          file << "," << row.motion_axis_information_ratio << "," << row.ceiling_correspondences << ","
+               << row.floor_correspondences << "," << row.median_keypoint_range << "\n";
         }
         std::cout << "Scan statistics written to " << statistics_file << "\n";
       }

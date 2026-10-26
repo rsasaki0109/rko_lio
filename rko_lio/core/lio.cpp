@@ -45,6 +45,7 @@
 // stl
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <unordered_map>
 #include <functional>
 #include <iostream>
@@ -695,7 +696,8 @@ LIO::LIO(const Config& config_)
       _photometric_features(config_.photometric_features) {
   // Per-voxel normals are only maintained when the localizability weighting can
   // consume them; the default path pays nothing.
-  map.set_maintain_normals(config.localizability_weighting || config.scan_statistics);
+  map.set_maintain_normals(config.localizability_weighting || config.scan_statistics ||
+                           (config.close_scene_max_median_range > 0.0 && config.close_scene_localizability_boost > 0.0));
   if (config.gait_speed_prior) {
     GaitSpeedEstimator::Config gait_config;
     gait_config.window_sec = config.gait_window_sec;
@@ -1366,12 +1368,39 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // degeneracy_prior_pose slot.
     const std::optional<Sophus::SE3d>& degeneracy_prior_pose =
         radar_prior_pose.has_value() ? radar_prior_pose : intensity_prior_pose;
+    // Close-scene settings (close_scene_max_median_range): the registration of a scan whose
+    // keypoints' median range is below the limit uses the configuration with the close_scene_*
+    // keys applied; every other scan uses the configuration as it is.
+    bool close_scene = false;
+    if (config.close_scene_max_median_range > 0.0 && !preproc_result.keypoints.empty()) {
+      std::vector<double> ranges(preproc_result.keypoints.size());
+      std::transform(preproc_result.keypoints.cbegin(), preproc_result.keypoints.cend(), ranges.begin(),
+                     [](const Eigen::Vector3d& point) { return point.norm(); });
+      const auto middle = ranges.begin() + static_cast<std::ptrdiff_t>(ranges.size() / 2);
+      std::nth_element(ranges.begin(), middle, ranges.end());
+      close_scene = *middle < config.close_scene_max_median_range;
+    }
+    if (close_scene && !_close_scene_config.has_value()) {
+      _close_scene_config = config;
+      if (config.close_scene_max_correspondence_distance > 0.0) {
+        _close_scene_config->max_correspondence_distance = config.close_scene_max_correspondence_distance;
+      }
+      if (config.close_scene_localizability_boost > 0.0) {
+        _close_scene_config->localizability_weighting = true;
+        _close_scene_config->localizability_boost = config.close_scene_localizability_boost;
+        _close_scene_config->localizability_normal_only = config.close_scene_localizability_normal_only;
+      }
+      if (config.close_scene_icp_robust_kernel_scale_factor > 0.0) {
+        _close_scene_config->icp_robust_kernel_scale_factor = config.close_scene_icp_robust_kernel_scale_factor;
+      }
+    }
+    const Config& scan_config = close_scene ? *_close_scene_config : config;
     // Localizability weighting axis: the predicted motion direction for this
     // scan (initial guess vs. previous pose), same convention as the intensity
     // disagreement gate's correlation axis. No Hessian gating on purpose --
     // soft degeneracy is precisely the regime the eigenvalue gates miss.
     std::optional<Eigen::Vector3d> localizability_axis;
-    if (config.localizability_weighting) {
+    if (scan_config.localizability_weighting) {
       localizability_axis = unit_axis_from_step(initial_guess.translation() - lidar_state.pose.translation(),
                                                 config.localizability_min_step_m);
       if (localizability_axis.has_value()) {
@@ -1417,14 +1446,51 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       registration_skipped_this_scan = config.skip_registration_after_gap_sec > 0.0 &&
                                        to_seconds(current_lidar_time - lidar_state.time) >
                                            config.skip_registration_after_gap_sec;
+      if (close_scene && !registration_skipped_this_scan) {
+        ++close_scene_scan_count;
+      }
       IcpResult icp_result =
           registration_skipped_this_scan
               ? IcpResult{initial_guess}
-              : icp(preproc_result.keypoints, map, initial_guess, config, kf_step.info, 1,
+              : icp(preproc_result.keypoints, map, initial_guess, scan_config, kf_step.info, 1,
                     _persistent_weak_direction_tracker.state(),
                     config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,
-                    visual_pose_prior, degeneracy_prior_pose, localizability_axis, config.localizability_boost,
+                    visual_pose_prior, degeneracy_prior_pose, localizability_axis, scan_config.localizability_boost,
                     use_photometric ? &photometric_terms : nullptr, use_bump ? &bump_terms : nullptr);
+      // A close scan that the close-scene settings do not explain well (too few keypoints within
+      // their correspondence cap, e.g. a large initial error the tight cap cannot capture) is
+      // registered again: coarse with the base settings, then fine with the close-scene settings.
+      if (close_scene && !registration_skipped_this_scan && config.close_scene_min_inlier_fraction > 0.0 &&
+          !preproc_result.keypoints.empty()) {
+        const Vector3dVector& keypoints = preproc_result.keypoints;
+        std::vector<std::uint8_t> inlier(keypoints.size(), 0);
+        tbb::parallel_for(tbb::blocked_range<std::size_t>{0, keypoints.size()},
+                          [&](const tbb::blocked_range<std::size_t>& range) {
+                            for (std::size_t i = range.begin(); i != range.end(); ++i) {
+                              const auto [neighbor, distance] = map.get_closest_neighbor(icp_result.pose * keypoints[i]);
+                              inlier[i] = distance < scan_config.max_correspondence_distance ? 1 : 0;
+                            }
+                          });
+        const double fraction = static_cast<double>(std::accumulate(inlier.begin(), inlier.end(), std::size_t{0})) /
+                                static_cast<double>(keypoints.size());
+        if (fraction < config.close_scene_min_inlier_fraction) {
+          // Coarse with the base settings, then fine with the close-scene settings from there.
+          ++close_scene_fallback_count;
+          const IcpResult coarse =
+              icp(preproc_result.keypoints, map, initial_guess, config, kf_step.info, 1,
+                  _persistent_weak_direction_tracker.state(),
+                  config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,
+                  visual_pose_prior, degeneracy_prior_pose,
+                  config.localizability_weighting ? localizability_axis : std::nullopt, config.localizability_boost,
+                  use_photometric ? &photometric_terms : nullptr, use_bump ? &bump_terms : nullptr);
+          icp_result = icp(preproc_result.keypoints, map, coarse.pose, scan_config, kf_step.info, 1,
+                           _persistent_weak_direction_tracker.state(),
+                           config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,
+                           visual_pose_prior, degeneracy_prior_pose, localizability_axis,
+                           scan_config.localizability_boost, use_photometric ? &photometric_terms : nullptr,
+                           use_bump ? &bump_terms : nullptr);
+        }
+      }
       if (use_bump && !registration_skipped_this_scan && config.bump_image_max_rotation_correction_deg > 0.0) {
         const double rotation_deg =
             (icp_result.pose.so3() * initial_guess.so3().inverse()).log().norm() * 180.0 / M_PI;
@@ -1436,11 +1502,11 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                                       config.bump_image_rotation_hard_limit_deg);
         }
         if (_bump_rotation_gate->fall_back(rotation_deg)) {
-          icp_result = icp(preproc_result.keypoints, map, initial_guess, config, kf_step.info, 1,
+          icp_result = icp(preproc_result.keypoints, map, initial_guess, scan_config, kf_step.info, 1,
                            _persistent_weak_direction_tracker.state(),
                            config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,
-                           visual_pose_prior, degeneracy_prior_pose, localizability_axis, config.localizability_boost,
-                           use_photometric ? &photometric_terms : nullptr, nullptr);
+                           visual_pose_prior, degeneracy_prior_pose, localizability_axis,
+                           scan_config.localizability_boost, use_photometric ? &photometric_terms : nullptr, nullptr);
           ++bump_rotation_fallback_count;
         }
       }
@@ -1486,6 +1552,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       const int search_radius = voxel_search_radius_for_distance(map, search_distance);
       std::vector<double> distances(keypoints.size());
       std::vector<Eigen::Vector3d> normals(keypoints.size(), Eigen::Vector3d::Zero());
+      std::vector<double> heights(keypoints.size(), 0.0);
       tbb::parallel_for(tbb::blocked_range<std::size_t>{0, keypoints.size()},
                         [&](const tbb::blocked_range<std::size_t>& range) {
                           for (std::size_t i = range.begin(); i != range.end(); ++i) {
@@ -1494,9 +1561,23 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                             distances[i] = std::min(distance, search_distance);
                             if (distance < config.max_correspondence_distance) {
                               normals[i] = map.voxel_normal(neighbor).value_or(Eigen::Vector3d::Zero());
+                              heights[i] = neighbor.z() - optimized_pose.translation().z();
                             }
                           }
                         });
+      // Horizontal surfaces (normal within about 25 deg of the vertical) more than 0.5 m above
+      // and below the sensor: a ceiling, and a floor or the ground.
+      int ceiling = 0;
+      int floor = 0;
+      for (std::size_t i = 0; i < keypoints.size(); ++i) {
+        if (std::abs(normals[i].z()) >= 0.9) {
+          ceiling += heights[i] > 0.5 ? 1 : 0;
+          floor += heights[i] < -0.5 ? 1 : 0;
+        }
+      }
+      std::vector<double> ranges(keypoints.size());
+      std::transform(keypoints.cbegin(), keypoints.cend(), ranges.begin(),
+                     [](const Eigen::Vector3d& point) { return point.norm(); });
       // Point-to-point ICP has an isotropic translation block; how well the scan pins each
       // direction shows in the normals of the matched map surfaces instead.
       Eigen::Matrix3d normal_information = Eigen::Matrix3d::Zero();
@@ -1516,6 +1597,10 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                                                     config.max_correspondence_distance, normal_information,
                                                     motion_axis));
       scan_statistics_rows.back().matched_normals = normal_count;
+      scan_statistics_rows.back().ceiling_correspondences = ceiling;
+      scan_statistics_rows.back().floor_correspondences = floor;
+      std::sort(ranges.begin(), ranges.end());
+      scan_statistics_rows.back().median_keypoint_range = sorted_quantile(ranges, 0.5);
     }
 
     // Continuous, information-weighted radar/ICP velocity fusion (see Config::

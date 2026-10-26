@@ -750,6 +750,23 @@ public:
     /** Above this correction (deg) a scan falls back at once, whatever the window says
      *  (0 disables). */
     double bump_image_rotation_hard_limit_deg = 0.0;
+
+    /** Close-scene settings. When close_scene_max_median_range is positive, a scan whose
+     *  keypoints lie at a median distance below it (m) from the sensor is registered with the
+     *  close_scene_* keys below in place of the corresponding settings (a key at 0 keeps the
+     *  setting); every other scan uses the configuration as it is. On the development data,
+     *  rooms, garages and corridors lie below 9.1 m and open outdoor scenes above 13 m. */
+    double close_scene_max_median_range = 0.0;
+    double close_scene_max_correspondence_distance = 0.0;
+    /** A positive boost turns the localizability weighting on for close scenes. */
+    double close_scene_localizability_boost = 0.0;
+    bool close_scene_localizability_normal_only = false;
+    double close_scene_icp_robust_kernel_scale_factor = 0.0;
+    /** When positive, a close scan whose registration with the close-scene settings leaves
+     *  fewer than this fraction of its keypoints within their correspondence cap is
+     *  registered again: first with the base settings, then with the close-scene settings
+     *  starting from that result. */
+    double close_scene_min_inlier_fraction = 0.0;
     /** Record per-scan registration statistics that use no ground truth (see
      *  scan_statistics.hpp): keypoint-to-map distances and the translation information of the
      *  final ICP system. Analysis only; the estimate is unchanged. */
@@ -980,6 +997,9 @@ public:
    *  boosted_fraction_sum / weighted_scan_count gives the mean fraction of
    *  correspondences boosted per weighted scan (final ICP iteration). */
   std::size_t localizability_attempt_count = 0;
+  /** Registered scans that used the close-scene settings (close_scene_max_median_range). */
+  std::size_t close_scene_scan_count = 0;
+  std::size_t close_scene_fallback_count = 0;
   std::size_t localizability_weighted_scan_count = 0;
   double localizability_boosted_fraction_sum = 0.0;
 
@@ -1144,5 +1164,7 @@ private:
   /** Sliding window of (scan time, world-frame raw-accelerometer interval mean) samples for
    *  gravity_window_alignment. Entries older than gravity_window_sec are dropped each scan. */
   std::deque<std::pair<Nsec, Eigen::Vector3d>> _gravity_alignment_window;
+  /** The configuration with the close_scene_* keys applied, built on the first close scan. */
+  std::optional<Config> _close_scene_config;
 };
 } // namespace rko_lio::core
