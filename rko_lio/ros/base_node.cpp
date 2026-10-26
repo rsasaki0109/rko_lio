@@ -159,6 +159,7 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["double_downsample"] = nlohmann_json_t.double_downsample;
   nlohmann_json_j["icp_keypoint_voxel_multiplier"] = nlohmann_json_t.icp_keypoint_voxel_multiplier;
   nlohmann_json_j["min_icp_keypoints"] = nlohmann_json_t.min_icp_keypoints;
+  nlohmann_json_j["keypoint_shortfall_voxel_multiplier"] = nlohmann_json_t.keypoint_shortfall_voxel_multiplier;
   nlohmann_json_j["min_beta"] = nlohmann_json_t.min_beta;
   nlohmann_json_j["degeneracy_aware_solve"] = nlohmann_json_t.degeneracy_aware_solve;
   nlohmann_json_j["degeneracy_well_conditioned_ratio"] = nlohmann_json_t.degeneracy_well_conditioned_ratio;
@@ -319,6 +320,8 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
   nlohmann_json_j.at("double_downsample").get_to(nlohmann_json_t.double_downsample);
   nlohmann_json_j.at("icp_keypoint_voxel_multiplier").get_to(nlohmann_json_t.icp_keypoint_voxel_multiplier);
   nlohmann_json_j.at("min_icp_keypoints").get_to(nlohmann_json_t.min_icp_keypoints);
+  nlohmann_json_t.keypoint_shortfall_voxel_multiplier = nlohmann_json_j.value(
+      "keypoint_shortfall_voxel_multiplier", nlohmann_json_t.keypoint_shortfall_voxel_multiplier);
   nlohmann_json_j.at("min_beta").get_to(nlohmann_json_t.min_beta);
   nlohmann_json_j.at("degeneracy_aware_solve").get_to(nlohmann_json_t.degeneracy_aware_solve);
   nlohmann_json_j.at("degeneracy_well_conditioned_ratio").get_to(nlohmann_json_t.degeneracy_well_conditioned_ratio);
@@ -652,6 +655,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("icp_keypoint_voxel_multiplier", lio_config.icp_keypoint_voxel_multiplier);
   lio_config.min_icp_keypoints = static_cast<size_t>(std::max<int64_t>(
       1, node->declare_parameter<int64_t>("min_icp_keypoints", static_cast<int64_t>(lio_config.min_icp_keypoints))));
+  lio_config.keypoint_shortfall_voxel_multiplier = node->declare_parameter<double>(
+      "keypoint_shortfall_voxel_multiplier", lio_config.keypoint_shortfall_voxel_multiplier);
 
   // ---- degeneracy-aware ICP solve (fork addition; default-off) ----
   lio_config.degeneracy_aware_solve =
@@ -1924,6 +1929,9 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
     if (lio->config.close_scene_max_median_range > 0.0) {
       std::cout << "Close-scene settings used on " << lio->close_scene_scan_count << " registered scans ("
                 << lio->close_scene_fallback_count << " registered again with the base settings)\n";
+    }
+    if (lio->config.keypoint_shortfall_voxel_multiplier > 0.0) {
+      std::cout << "Keypoints taken again at the finer voxel on " << lio->keypoint_shortfall_scan_count << " scans\n";
     }
     // GT-free per-scan registration statistics (scan_statistics.hpp).
     if (lio->config.scan_statistics && !lio->scan_statistics_rows.empty()) {

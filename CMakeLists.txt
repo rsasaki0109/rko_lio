@@ -127,6 +127,12 @@ else()
       target_link_libraries(test_scan_statistics rko_lio::core)
     endif()
     ament_add_gtest(
+      test_refine_keypoints
+      test/test_refine_keypoints.cpp)
+    if(TARGET test_refine_keypoints)
+      target_link_libraries(test_refine_keypoints rko_lio::core)
+    endif()
+    ament_add_gtest(
       test_kinematic_velocity_gate
       test/test_kinematic_velocity_gate.cpp)
     if(TARGET test_kinematic_velocity_gate)

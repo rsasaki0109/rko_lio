@@ -1311,6 +1311,15 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       config.deskew ? preprocess_scan(deskew_scan(scan, timestamps, current_lidar_time, relative_pose_at_time), config)
                     : preprocess_scan(scan, config);
 
+  if (config.keypoint_shortfall_voxel_multiplier > 0.0 &&
+      preproc_result.keypoints.size() < std::max<size_t>(1, config.min_icp_keypoints)) {
+    Vector3dVector finer = refine_keypoints(preproc_result, config, config.keypoint_shortfall_voxel_multiplier);
+    if (finer.size() > preproc_result.keypoints.size()) {
+      preproc_result.keypoints = std::move(finer);
+      ++keypoint_shortfall_scan_count;
+    }
+  }
+
   if (preproc_result.keypoints.size() < std::max<size_t>(1, config.min_icp_keypoints)) {
     const std::string error_msg =
         "Keypoints for ICP registration = " + std::to_string(preproc_result.keypoints.size()) +

@@ -237,6 +237,12 @@ public:
      *  can slide along a weakly observed direction and write the error into the map. */
     size_t min_icp_keypoints = 10;
 
+    /** When positive, a scan with fewer than min_icp_keypoints keypoints takes its keypoints
+     *  again at voxel_size times this multiplier (from the map-resolution downsample in
+     *  double-downsample mode) before it is dropped. A small scene, such as a stairwell, can
+     *  leave too few keypoints at the regular keypoint voxel while the scan itself is full. */
+    double keypoint_shortfall_voxel_multiplier = 0.0;
+
     /** Minimum weight for orientation regularization. */
     double min_beta = 200;
 
@@ -1000,6 +1006,8 @@ public:
   /** Registered scans that used the close-scene settings (close_scene_max_median_range). */
   std::size_t close_scene_scan_count = 0;
   std::size_t close_scene_fallback_count = 0;
+  /** Scans whose keypoints were taken again at the finer voxel (keypoint_shortfall_voxel_multiplier). */
+  std::size_t keypoint_shortfall_scan_count = 0;
   std::size_t localizability_weighted_scan_count = 0;
   double localizability_boosted_fraction_sum = 0.0;
 
