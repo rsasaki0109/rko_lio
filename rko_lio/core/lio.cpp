@@ -649,7 +649,7 @@ LIO::LIO(const Config& config_)
       _photometric_features(config_.photometric_features) {
   // Per-voxel normals are only maintained when the localizability weighting can
   // consume them; the default path pays nothing.
-  map.set_maintain_normals(config.localizability_weighting);
+  map.set_maintain_normals(config.localizability_weighting || config.scan_statistics);
   if (config.gait_speed_prior) {
     GaitSpeedEstimator::Config gait_config;
     gait_config.window_sec = config.gait_window_sec;
@@ -1430,6 +1430,46 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                                  "local reset");
       }
       throw;
+    }
+
+    // GT-free registration statistics for analysis (scan_statistics.hpp). They read the map and
+    // the ICP result only, before any later correction of the pose, and change nothing.
+    if (config.scan_statistics && !registration_skipped_this_scan) {
+      const Vector3dVector& keypoints = preproc_result.keypoints;
+      const double search_distance = config.scan_statistics_search_distance;
+      const int search_radius = voxel_search_radius_for_distance(map, search_distance);
+      std::vector<double> distances(keypoints.size());
+      std::vector<Eigen::Vector3d> normals(keypoints.size(), Eigen::Vector3d::Zero());
+      tbb::parallel_for(tbb::blocked_range<std::size_t>{0, keypoints.size()},
+                        [&](const tbb::blocked_range<std::size_t>& range) {
+                          for (std::size_t i = range.begin(); i != range.end(); ++i) {
+                            const auto [neighbor, distance] =
+                                map.get_closest_neighbor(optimized_pose * keypoints[i], search_radius);
+                            distances[i] = std::min(distance, search_distance);
+                            if (distance < config.max_correspondence_distance) {
+                              normals[i] = map.voxel_normal(neighbor).value_or(Eigen::Vector3d::Zero());
+                            }
+                          }
+                        });
+      // Point-to-point ICP has an isotropic translation block; how well the scan pins each
+      // direction shows in the normals of the matched map surfaces instead.
+      Eigen::Matrix3d normal_information = Eigen::Matrix3d::Zero();
+      int normal_count = 0;
+      for (const Eigen::Vector3d& normal : normals) {
+        if (!normal.isZero()) {
+          normal_information += normal * normal.transpose();
+          ++normal_count;
+        }
+      }
+      if (normal_count > 0) {
+        normal_information /= static_cast<double>(normal_count);
+      }
+      const std::optional<Eigen::Vector3d> motion_axis = unit_axis_from_step(
+          optimized_pose.translation() - lidar_state.pose.translation(), config.localizability_min_step_m);
+      scan_statistics_rows.push_back(summarize_scan(to_seconds(current_lidar_time), distances,
+                                                    config.max_correspondence_distance, normal_information,
+                                                    motion_axis));
+      scan_statistics_rows.back().matched_normals = normal_count;
     }
 
     // Continuous, information-weighted radar/ICP velocity fusion (see Config::

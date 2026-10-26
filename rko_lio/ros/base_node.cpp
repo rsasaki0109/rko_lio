@@ -291,6 +291,8 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["relocalization_max_iterations"] = nlohmann_json_t.relocalization_max_iterations;
   nlohmann_json_j["legacy_voxel_downsample"] = nlohmann_json_t.legacy_voxel_downsample;
   nlohmann_json_j["samplewise_gyro_deskew"] = nlohmann_json_t.samplewise_gyro_deskew;
+  nlohmann_json_j["scan_statistics"] = nlohmann_json_t.scan_statistics;
+  nlohmann_json_j["scan_statistics_search_distance"] = nlohmann_json_t.scan_statistics_search_distance;
 }
 template <typename BasicJsonType,
          nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0>
@@ -459,6 +461,9 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
       nlohmann_json_j.value("legacy_voxel_downsample", nlohmann_json_t.legacy_voxel_downsample);
   nlohmann_json_t.samplewise_gyro_deskew =
       nlohmann_json_j.value("samplewise_gyro_deskew", nlohmann_json_t.samplewise_gyro_deskew);
+  nlohmann_json_t.scan_statistics = nlohmann_json_j.value("scan_statistics", nlohmann_json_t.scan_statistics);
+  nlohmann_json_t.scan_statistics_search_distance =
+      nlohmann_json_j.value("scan_statistics_search_distance", nlohmann_json_t.scan_statistics_search_distance);
 }
 } // namespace rko_lio::core
 
@@ -764,6 +769,9 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("localizability_min_step_m", lio_config.localizability_min_step_m);
   lio_config.localizability_normal_only =
       node->declare_parameter<bool>("localizability_normal_only", lio_config.localizability_normal_only);
+  lio_config.scan_statistics = node->declare_parameter<bool>("scan_statistics", lio_config.scan_statistics);
+  lio_config.scan_statistics_search_distance = node->declare_parameter<double>(
+      "scan_statistics_search_distance", lio_config.scan_statistics_search_distance);
 
   // ---- accelerometer-consistency velocity gate (fork addition; default-off) ----
   lio_config.kinematic_velocity_gate =
@@ -1875,6 +1883,28 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
             file << time_sec << "," << rotation_deg << "\n";
           }
         }
+      }
+    }
+    // GT-free per-scan registration statistics (scan_statistics.hpp).
+    if (lio->config.scan_statistics && !lio->scan_statistics_rows.empty()) {
+      const std::filesystem::path statistics_file = output_dir / "scan_statistics.csv";
+      if (std::ofstream file(statistics_file); file.is_open()) {
+        file << "time_sec,keypoints,correspondences,nn_p10,nn_p25,nn_p50,nn_p75,nn_p90,within_0_25,within_0_5,"
+                "matched_normals,normal_eigenvalue_min,normal_eigenvalue_mid,normal_eigenvalue_max,"
+                "motion_axis_information_ratio\n";
+        for (const rko_lio::core::ScanStatistics& row : lio->scan_statistics_rows) {
+          file << std::setprecision(17) << row.time_sec << std::setprecision(10) << "," << row.keypoints << ","
+               << row.correspondences;
+          for (const double value : row.nn_distance_quantiles) {
+            file << "," << value;
+          }
+          file << "," << row.fraction_within_0_25 << "," << row.fraction_within_0_5 << "," << row.matched_normals;
+          for (const double value : row.normal_eigenvalues) {
+            file << "," << value;
+          }
+          file << "," << row.motion_axis_information_ratio << "\n";
+        }
+        std::cout << "Scan statistics written to " << statistics_file << "\n";
       }
     }
     // Sliding-window gravity alignment summary.

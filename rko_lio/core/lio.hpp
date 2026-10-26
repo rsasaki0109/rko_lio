@@ -38,6 +38,7 @@
 #include "photometric_features.hpp"
 #include "photometric_image.hpp"
 #include "persistent_weak_direction.hpp"
+#include "scan_statistics.hpp"
 #include "selective_visual_fusion.hpp"
 #include "stall_guard.hpp"
 #include "voxel_hash_map.hpp"
@@ -741,6 +742,12 @@ public:
     /** Above this correction (deg) a scan falls back at once, whatever the window says
      *  (0 disables). */
     double bump_image_rotation_hard_limit_deg = 0.0;
+    /** Record per-scan registration statistics that use no ground truth (see
+     *  scan_statistics.hpp): keypoint-to-map distances and the translation information of the
+     *  final ICP system. Analysis only; the estimate is unchanged. */
+    bool scan_statistics = false;
+    /** Distance up to which scan_statistics searches a keypoint's nearest map point (m). */
+    double scan_statistics_search_distance = 0.75;
   };
 
   /** Configuration parameters. */
@@ -897,6 +904,8 @@ public:
   void reset_inertial_window_interval() { _window_preintegration = ImuPreintegration{}; }
   /** Per-scan (time [s], bump rotation correction [deg]) while the limit is active. */
   std::vector<std::pair<double, double>> bump_rotation_corrections;
+  /** One row per registered scan while Config::scan_statistics is on. */
+  std::vector<ScanStatistics> scan_statistics_rows;
 
   /** Tracked photometric patches. */
   const PhotometricFeatureManager& photometric_features() const { return _photometric_features; }
