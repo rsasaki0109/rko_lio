@@ -293,6 +293,7 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["samplewise_gyro_deskew"] = nlohmann_json_t.samplewise_gyro_deskew;
   nlohmann_json_j["scan_statistics"] = nlohmann_json_t.scan_statistics;
   nlohmann_json_j["scan_statistics_search_distance"] = nlohmann_json_t.scan_statistics_search_distance;
+  nlohmann_json_j["icp_robust_kernel_scale_factor"] = nlohmann_json_t.icp_robust_kernel_scale_factor;
 }
 template <typename BasicJsonType,
          nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0>
@@ -464,6 +465,8 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
   nlohmann_json_t.scan_statistics = nlohmann_json_j.value("scan_statistics", nlohmann_json_t.scan_statistics);
   nlohmann_json_t.scan_statistics_search_distance =
       nlohmann_json_j.value("scan_statistics_search_distance", nlohmann_json_t.scan_statistics_search_distance);
+  nlohmann_json_t.icp_robust_kernel_scale_factor =
+      nlohmann_json_j.value("icp_robust_kernel_scale_factor", nlohmann_json_t.icp_robust_kernel_scale_factor);
 }
 } // namespace rko_lio::core
 
@@ -551,6 +554,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("convergence_criterion", lio_config.convergence_criterion);
   lio_config.max_correspondence_distance =
       node->declare_parameter<double>("max_correspondence_distance", lio_config.max_correspondence_distance);
+  lio_config.icp_robust_kernel_scale_factor =
+      node->declare_parameter<double>("icp_robust_kernel_scale_factor", lio_config.icp_robust_kernel_scale_factor);
   lio_config.max_num_threads =
       static_cast<int>(node->declare_parameter<int>("max_num_threads", lio_config.max_num_threads));
   lio_config.initialization_phase =

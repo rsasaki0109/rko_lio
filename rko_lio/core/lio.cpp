@@ -202,7 +202,8 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                                      const double localizability_boost = 0.0,
                                      IcpWeightingStats* weighting_stats = nullptr,
                                      std::vector<VoxelHashMap::NeighborhoodCache>* neighborhoods = nullptr,
-                                     const bool localizability_normal_only = false) {
+                                     const bool localizability_normal_only = false,
+                                     const double robust_kernel_scale_factor = 0.0) {
   // H, b, chi, weight sum, correspondence count. The weight sum replaces the correspondence
   // count in the H/b normalization; with weighting disabled every weight is exactly 1
   // and the result is bit-identical to the historical count-normalized system.
@@ -229,6 +230,43 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
   const bool weighting_enabled = localizability_axis.has_value() && localizability_boost > 0.0;
   std::atomic<int> boosted_counter = 0;
 
+  // Robust kernel: search every neighbour first (per index, so the result does not depend on
+  // the threads), take the median correspondence distance as the kernel scale, then build the
+  // system from the stored neighbours. Without the kernel the searches stay inside the reduction.
+  const bool kernel_enabled = robust_kernel_scale_factor > 0.0;
+  std::vector<Eigen::Vector3d> kernel_neighbors;
+  std::vector<double> kernel_distances;
+  double kernel_scale_squared = 0.0;
+  if (kernel_enabled) {
+    kernel_neighbors.resize(frame.size());
+    kernel_distances.resize(frame.size());
+    tbb::parallel_for(tbb::blocked_range<std::size_t>{0, frame.size()},
+                      [&](const tbb::blocked_range<std::size_t>& range) {
+                        for (std::size_t i = range.begin(); i != range.end(); ++i) {
+                          const Eigen::Vector3d transformed_point = current_pose * frame[i];
+                          const auto [neighbor, distance] =
+                              neighborhoods != nullptr
+                                  ? voxel_map.get_closest_neighbor(transformed_point, (*neighborhoods)[i])
+                                  : voxel_map.get_closest_neighbor(transformed_point, voxel_search_radius);
+                          kernel_neighbors[i] = neighbor;
+                          kernel_distances[i] = distance;
+                        }
+                      });
+    std::vector<double> inlier_distances;
+    inlier_distances.reserve(frame.size());
+    for (const double distance : kernel_distances) {
+      if (distance < max_correspondence_distance) {
+        inlier_distances.push_back(distance);
+      }
+    }
+    if (!inlier_distances.empty()) {
+      const auto middle = inlier_distances.begin() + static_cast<std::ptrdiff_t>(inlier_distances.size() / 2);
+      std::nth_element(inlier_distances.begin(), middle, inlier_distances.end());
+      const double scale = std::max(1e-3, robust_kernel_scale_factor * *middle);
+      kernel_scale_squared = scale * scale;
+    }
+  }
+
   auto linear_system_for_one_point = [&](const Eigen::Vector3d& source, const Eigen::Vector3d& target) {
     Eigen::Matrix3_6d J_r;
     J_r.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
@@ -243,13 +281,18 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
         boosted_counter++;
       }
     }
+    double kernel_weight = 1.0;
+    if (kernel_enabled) {
+      kernel_weight = square(kernel_scale_squared / (kernel_scale_squared + residual.squaredNorm()));
+    }
     if (localizability_normal_only && weight > 1.0) {
       // Only the residual along the map normal is boosted (normal_only_information). The weight
       // sum counts the mean added information, trace(W) / 3.
-      const Eigen::Matrix3d W = normal_only_information(normal, weight);
+      const Eigen::Matrix3d W = kernel_weight * normal_only_information(normal, weight);
       return WeightedSystem(J_r.transpose() * W * J_r, J_r.transpose() * W * residual, residual.dot(W * residual),
-                            1.0 + (weight - 1.0) / 3.0, 1);
+                            kernel_weight * (1.0 + (weight - 1.0) / 3.0), 1);
     }
+    weight *= kernel_weight;
     return WeightedSystem(weight * J_r.transpose() * J_r,      // JTJ
                           weight * J_r.transpose() * residual, // JTr
                           weight * residual.squaredNorm(),     // chi
@@ -271,10 +314,12 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
   auto add_point_system = [&](const Eigen::Vector3d& point, SystemSum& sum) {
     // Compute data association and linear system
     const Eigen::Vector3d transformed_point = current_pose * point;
+    const std::size_t index = static_cast<std::size_t>(&point - frame.data());
     // neighborhoods holds one cache per point of frame, indexed like frame.
     const auto& [closest_neighbor, distance] =
-        neighborhoods != nullptr
-            ? voxel_map.get_closest_neighbor(transformed_point, (*neighborhoods)[&point - frame.data()])
+        kernel_enabled ? std::tuple<Eigen::Vector3d, double>(kernel_neighbors[index], kernel_distances[index])
+        : neighborhoods != nullptr
+            ? voxel_map.get_closest_neighbor(transformed_point, (*neighborhoods)[index])
             : voxel_map.get_closest_neighbor(transformed_point, voxel_search_radius);
     if (distance < max_correspondence_distance) {
       const auto& [H, b, chi, weight, correspondences] =
@@ -441,7 +486,8 @@ IcpResult icp(const Vector3dVector& frame,
         geometric = build_icp_linear_system(current_pose, frame, voxel_map, config.max_correspondence_distance,
                                             voxel_search_radius, localizability_axis, localizability_boost,
                                             &weighting_stats, voxel_search_radius <= 1 ? &neighborhoods : nullptr,
-                                            config.localizability_normal_only);
+                                            config.localizability_normal_only,
+                                            config.icp_robust_kernel_scale_factor);
       }
       auto [H_icp, b_icp, chi_icp] = geometric;
       if (photometric != nullptr && weighting_stats.correspondences > 0) {

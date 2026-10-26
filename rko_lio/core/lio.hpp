@@ -202,6 +202,14 @@ public:
     /** Max distance for correspondences (m). */
     double max_correspondence_distance = 0.5;
 
+    /** When positive, every correspondence of an ICP iteration is weighted with the
+     *  Geman-McClure kernel (s^2 / (s^2 + r^2))^2, whose scale s is this factor times the
+     *  median correspondence distance of that iteration (at least 1 mm), so that a few far
+     *  correspondences no longer dominate the least-squares system. With 2.0 it roughly halved
+     *  the error of the indoor MapsHD humanoid trials but made the outdoor ones (MapsHD
+     *  outdoor-urk, Oxford Spires) worse. 0 disables it (plain least squares). */
+    double icp_robust_kernel_scale_factor = 0.0;
+
     /** Thread count for data association (0 = automatic). */
     int max_num_threads = 0;
 
