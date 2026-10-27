@@ -756,8 +756,8 @@ public:
      *  in the same place), while the keypoints keep the far structure that holds the translation. */
     double bump_image_point_to_point_weight = 0.0;
     /** With point-to-point terms (weight above 0), take the vertical translation from them
-     *  alone: the bump system's row and column of the world z translation are dropped before
-     *  the two are added. On stairs and slopes the bump images pull the height (Oxford Keble 05:
+     *  alone: the world z translation is marginalised out of the bump system (Schur complement)
+     *  before the two are added. On stairs and slopes the bump images pull the height (Oxford Keble 05:
      *  0.10 m off while climbing 4 m, against 0.02 m point-to-point), while they hold the
      *  horizontal and the attitude better. */
     bool bump_image_vertical_from_point_to_point = false;

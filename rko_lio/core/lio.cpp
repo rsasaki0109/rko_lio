@@ -512,11 +512,14 @@ IcpResult icp(const Vector3dVector& frame,
                 config.icp_robust_kernel_scale_factor, config.icp_tangential_weight);
             if (point_to_point_stats.correspondences > 0) {
               auto& [H_geo, b_geo, chi_geo] = geometric;
-              if (bump->vertical_from_point_to_point) {
-                // [t_world; r_world]: index 2 is the world z translation.
-                H_geo.row(2).setZero();
-                H_geo.col(2).setZero();
-                b_geo(2) = 0.0;
+              if (bump->vertical_from_point_to_point && H_geo(2, 2) > 0.0) {
+                // [t_world; r_world]: index 2 is the world z translation. It is marginalised out
+                // (Schur complement), not just zeroed: a zeroed row leaves the height residuals of
+                // the ground to the attitude, which then tilts (Oxford diverged within 10 s).
+                const Eigen::Vector6d h = H_geo.col(2);
+                const double s = H_geo(2, 2);
+                H_geo -= h * h.transpose() / s;
+                b_geo -= h * (b_geo(2) / s);
               }
               H_geo += bump->point_to_point_weight * H_p2p;
               b_geo += bump->point_to_point_weight * b_p2p;
