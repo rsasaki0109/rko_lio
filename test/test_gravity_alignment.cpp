@@ -6,11 +6,14 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <vector>
 
 namespace {
 
 using rko_lio::core::compute_gravity_alignment_correction;
+using rko_lio::core::estimate_world_up_while_moving;
 using rko_lio::core::limit_tilt_correction;
+using rko_lio::core::WorldSpecificForceInterval;
 
 constexpr double kGravity = 9.8107;
 
@@ -101,6 +104,47 @@ TEST(TiltCorrectionLimit, TiltIsCappedAndYawKept) {
   EXPECT_NEAR(applied.z(), correction.z(), 1e-9);
   // The capped tilt keeps the direction of the registration's pull.
   EXPECT_NEAR(applied.head<2>().normalized().dot(correction.head<2>().normalized()), 1.0, 1e-9);
+}
+
+// A walk that speeds up from 0.2 to 0.8 m/s with a 2-Hz gait sway (world frame).
+Eigen::Vector3d walk_velocity(const double t) {
+  const double w = 2.0 * M_PI * 2.0;
+  return {0.2 + 0.1 * t + 0.08 * std::cos(w * t), 0.05 * std::cos(1.7 * w * t), 0.04 * std::cos(w * t)};
+}
+
+Eigen::Vector3d walk_position(const double t) {
+  const double w = 2.0 * M_PI * 2.0;
+  return {0.2 * t + 0.05 * t * t + 0.08 / w * std::sin(w * t), 0.05 / (1.7 * w) * std::sin(1.7 * w * t),
+          0.04 / w * std::sin(w * t)};
+}
+
+TEST(GravityAlignment, WalkingStartRemovesTheVelocityChange) {
+  // World frame tilted 17 deg from level, as a walking start's initialization can leave it.
+  const Eigen::Vector3d up = Sophus::SO3d::exp(Eigen::Vector3d(0.2, -0.22, 0.0)) * Eigen::Vector3d::UnitZ();
+  std::vector<WorldSpecificForceInterval> intervals;
+  for (int i = 0; i < 80; ++i) {
+    const double t = 0.1 * i;
+    // the interval's mean acceleration is its velocity change over its length
+    const Eigen::Vector3d mean_acceleration = (walk_velocity(t + 0.1) - walk_velocity(t)) / 0.1;
+    intervals.push_back({t + 0.05, 0.1, mean_acceleration + kGravity * up});
+  }
+  const auto estimate = estimate_world_up_while_moving(intervals, walk_position, 1.0, 6.0, 0.5);
+  ASSERT_TRUE(estimate.has_value());
+  EXPECT_LT(std::acos(std::min(1.0, estimate->normalized().dot(up))), 0.05 * M_PI / 180.0);
+  EXPECT_NEAR(estimate->norm(), kGravity, 0.01);
+
+  // The plain mean of the specific force keeps the walk's speed-up (0.1 m/s^2, about 0.6 deg).
+  Eigen::Vector3d mean = Eigen::Vector3d::Zero();
+  for (const auto& interval : intervals) mean += interval.specific_force / static_cast<double>(intervals.size());
+  EXPECT_GT(std::acos(std::min(1.0, mean.normalized().dot(up))), 0.3 * M_PI / 180.0);
+}
+
+TEST(GravityAlignment, WalkingStartNeedsIntervalsCoveringTheWindow) {
+  std::vector<WorldSpecificForceInterval> intervals;
+  for (int i = 0; i < 60; ++i) intervals.push_back({0.1 * i + 0.05, 0.1, kGravity * Eigen::Vector3d::UnitZ()});
+  // The intervals end at 6 s: a window ending at 6 s needs them up to 6.5 s.
+  EXPECT_FALSE(estimate_world_up_while_moving(intervals, walk_position, 1.0, 6.0, 0.5).has_value());
+  EXPECT_TRUE(estimate_world_up_while_moving(intervals, walk_position, 1.0, 5.5, 0.5).has_value());
 }
 
 } // namespace

@@ -49,6 +49,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
+#include <vector>
 
 namespace rko_lio::core {
 
@@ -103,6 +105,47 @@ inline GravityAlignmentCorrection compute_gravity_alignment_correction(const Eig
   result.correction = Sophus::SO3d::exp((axis / sin_tilt) * correction_angle);
   result.valid = true;
   return result;
+}
+
+/** One IMU interval between two registered scans: midpoint time (s), length (s), and the mean raw
+ *  (gravity-inclusive) accelerometer sample rotated into the world frame. */
+struct WorldSpecificForceInterval {
+  double mid_time = 0.0;
+  double duration = 0.0;
+  Eigen::Vector3d specific_force = Eigen::Vector3d::Zero();
+};
+
+/** World-frame up vector times |g| (m/s^2) from the specific force measured while moving between
+ *  `begin` and `end` (s), with the motion's velocity change removed. The velocity at each end is the
+ *  mean over end +- half_span from the registered positions (`position_at(t)`); the specific force is
+ *  weighted by the matching ramp (rising over begin +- half_span, falling over end +- half_span), so
+ *     sum(w f dt) = up |g| (end - begin) + V(end) - V(begin)
+ *  holds for any motion, up to the discretization of the intervals. A start while walking leaves
+ *  the 0.1-s initialization average far from gravity; this needs no standstill. Returns nullopt
+ *  when the intervals do not cover [begin - half_span, end + half_span]. */
+template <typename PositionAt>
+std::optional<Eigen::Vector3d> estimate_world_up_while_moving(const std::vector<WorldSpecificForceInterval>& intervals,
+                                                              const PositionAt& position_at,
+                                                              const double begin,
+                                                              const double end,
+                                                              const double half_span) {
+  if (!(end - begin >= 2.0 * half_span) || !(half_span > 0.0) || intervals.empty()) return std::nullopt;
+  const double first = intervals.front().mid_time - 0.5 * intervals.front().duration;
+  const double last = intervals.back().mid_time + 0.5 * intervals.back().duration;
+  if (first > begin - half_span || last < end + half_span) return std::nullopt;
+  Eigen::Vector3d weighted_force = Eigen::Vector3d::Zero();
+  double weight_sum = 0.0;
+  for (const auto& interval : intervals) {
+    const double t = interval.mid_time;
+    const double w = std::clamp(std::min(t - (begin - half_span), (end + half_span) - t) / (2.0 * half_span), 0.0, 1.0);
+    weighted_force += w * interval.duration * interval.specific_force;
+    weight_sum += w * interval.duration;
+  }
+  if (!(weight_sum > 0.0)) return std::nullopt;
+  const Eigen::Vector3d velocity_begin =
+      (position_at(begin + half_span) - position_at(begin - half_span)) / (2.0 * half_span);
+  const Eigen::Vector3d velocity_end = (position_at(end + half_span) - position_at(end - half_span)) / (2.0 * half_span);
+  return Eigen::Vector3d((weighted_force - (velocity_end - velocity_begin)) / weight_sum);
 }
 
 /** Registered attitude with its roll/pitch correction of the predicted attitude limited to

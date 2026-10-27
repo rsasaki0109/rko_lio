@@ -35,6 +35,7 @@
 #include "bump_rotation_gate.hpp"
 #include "inertial_window.hpp"
 #include "gait_speed.hpp"
+#include "gravity_alignment.hpp"
 #include "photometric_features.hpp"
 #include "photometric_image.hpp"
 #include "persistent_weak_direction.hpp"
@@ -406,6 +407,14 @@ public:
     /** Treat the start as moving, and leave the IMU biases at zero, when the mean gyro rate
      *  of the initialization interval exceeds this (rad/s; 0: always static). */
     double initialization_max_gyro_rad_s = 0.0;
+    /** After a moving start (initialization_max_gyro_rad_s), estimate the world-frame gravity
+     *  again from this many seconds of motion (0: off), starting 1 s after the initialization:
+     *  the specific force rotated into the world frame, less the velocity change measured by the
+     *  registered positions (estimate_world_up_while_moving). The 0.1-s initialization average of a
+     *  walking start contains the gait's acceleration (GrandTour ARC-5: the world frame came out
+     *  16 deg from level). The frame and the map are kept, so the trajectory stays continuous;
+     *  only the gravity vector the filter, the propagation and the regularization use changes. */
+    double moving_start_gravity_window_sec = 0.0;
 
     /** Hold a vehicle's speed while its registration stalls (see stall_guard.hpp). */
     bool vehicle_stall_guard = false;
@@ -1034,6 +1043,9 @@ public:
   std::size_t gravity_alignment_applied_count = 0;
   double gravity_alignment_last_tilt_rad = 0.0;
   double gravity_alignment_correction_rad_sum = 0.0;
+  /** Angle (deg) between the re-estimated gravity and the initial world z
+   *  (moving_start_gravity_window_sec); 0 until it is estimated. */
+  double moving_start_gravity_tilt_deg = 0.0;
 
   /** Diagnostic-only counters for the intensity-vs-ICP velocity disagreement gate: how many
    *  scans had a stored previous profile to correlate against, how many of those produced a
@@ -1241,6 +1253,14 @@ private:
   bool _standstill_this_scan = false;
   /** bump_image_point_to_point_start_distance has been reached (latched). */
   bool _bump_point_to_point_started = false;
+  /** World-frame gravity (m/s^2): gravity() unless moving_start_gravity_window_sec re-estimated it. */
+  Eigen::Vector3d _gravity_world = gravity();
+  /** Initialization time (s) of a moving start while its gravity window is being collected. */
+  std::optional<double> _moving_start_time;
+  std::vector<WorldSpecificForceInterval> _moving_start_intervals;
+  /** Collect the interval ending at current_lidar_time for moving_start_gravity_window_sec and,
+   *  once the registered poses cover the window, re-estimate _gravity_world. */
+  void update_moving_start_gravity(const Nsec& current_lidar_time, const Sophus::SO3d& current_rotation);
   std::optional<Nsec> _first_scan_time;
 };
 } // namespace rko_lio::core
