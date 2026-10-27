@@ -749,6 +749,12 @@ public:
     double bump_image_source_voxel_size = 0.1;
     int bump_image_informed_voxels = 300;
     double bump_image_huber_delta = 0.1;
+    /** Add the point-to-point system of the ICP keypoints to the bump system with this weight,
+     *  each averaged over its own residuals (0 keeps the bump terms alone). The informed voxels
+     *  are the map voxels with the most relief; in an open scene they lie mostly on the ground
+     *  near the sensor, and the registration slips along it (GrandTour ARC-3 at 307 s, BIEVR-LIO
+     *  in the same place), while the keypoints keep the far structure that holds the translation. */
+    double bump_image_point_to_point_weight = 0.0;
     /** Register a scan again without the bump terms when they turn the pose more than
      *  this (deg) away from the IMU prediction (0 disables). In a circular tunnel the roll
      *  about the axis is unobservable and the bump images slip around it by degrees per

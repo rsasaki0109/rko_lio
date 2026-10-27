@@ -30,6 +30,7 @@
 #include <cstdint>
 #include <random>
 #include <stdexcept>
+#include <utility>
 
 using rko_lio::core::GRAVITY_MAG;
 using rko_lio::core::ImuControl;
@@ -439,5 +440,31 @@ TEST_CASE("samplewise_gyro_deskew only matters when the rate changes within an i
     const auto mean_rate = deskewed_second_scan(false, 0.0, 1.0);
     REQUIRE_FALSE(samplewise.empty());
     REQUIRE(max_point_difference(samplewise, mean_rate) > 1e-3);
+  }
+}
+
+TEST_CASE("Bump images alone and with the point-to-point terms both recover a translation", "[register_scan]") {
+  auto run = [](const double point_to_point_weight) {
+    LIO::Config config;
+    config.bump_image_registration = true;
+    config.bump_image_point_to_point_weight = point_to_point_weight;
+    LIO lio(config);
+    const auto cloud = make_hollow_cube(0.1);
+    lio.register_scan(cloud, linspace_timestamps(cloud.size(), 0.0, FIRST_SCAN_END));
+    const Eigen::Vector3d t(0.5, 0.3, 0.0);
+    const Eigen::Vector3d imu_accel = 2.0 * t / (DT * DT) + Eigen::Vector3d{0.0, 0.0, GRAVITY_MAG};
+    feed_imu(lio, FIRST_SCAN_END + 0.05, SECOND_SCAN_END - 0.05, 10, imu_accel, Eigen::Vector3d::Zero());
+    Vector3dVector cloud2;
+    cloud2.reserve(cloud.size());
+    for (const auto& p : cloud) {
+      cloud2.emplace_back(p - t);
+    }
+    lio.register_scan(cloud2, instant_timestamps(cloud2.size(), SECOND_SCAN_END));
+    return std::pair{lio.lidar_state.pose, t};
+  };
+  for (const double weight : {0.0, 1.0}) {
+    const auto [pose, t] = run(weight);
+    REQUIRE(approx_equal(pose.translation(), t, 1e-2));
+    REQUIRE(pose.so3().log().norm() < 1e-2);
   }
 }

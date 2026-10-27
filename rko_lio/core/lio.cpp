@@ -430,6 +430,8 @@ struct BumpTerms {
   const BumpImageMap* map = nullptr;
   const Vector3dVector* points = nullptr;
   double huber_delta = 0.1;
+  /** Weight of the point-to-point system added to the bump system (0: bump terms alone). */
+  double point_to_point_weight = 0.0;
 };
 
 // Photometric terms added to every ICP iteration (see photometric_features.hpp).
@@ -496,6 +498,23 @@ IcpResult icp(const Vector3dVector& frame,
           geometric = {system.H / n, system.b / n, system.chi / n};
           weighting_stats = IcpWeightingStats{system.residuals, 0};
           bump_used = true;
+          if (bump->point_to_point_weight > 0.0) {
+            // The keypoints' point-to-point system (averaged over its correspondences) added
+            // with this weight; its statistics stay apart, so the photometric weighting below
+            // still counts the bump residuals.
+            IcpWeightingStats point_to_point_stats;
+            const auto [H_p2p, b_p2p, chi_p2p] = build_icp_linear_system(
+                current_pose, frame, voxel_map, config.max_correspondence_distance, voxel_search_radius,
+                localizability_axis, localizability_boost, &point_to_point_stats,
+                voxel_search_radius <= 1 ? &neighborhoods : nullptr, config.localizability_normal_only,
+                config.icp_robust_kernel_scale_factor, config.icp_tangential_weight);
+            if (point_to_point_stats.correspondences > 0) {
+              auto& [H_geo, b_geo, chi_geo] = geometric;
+              H_geo += bump->point_to_point_weight * H_p2p;
+              b_geo += bump->point_to_point_weight * b_p2p;
+              chi_geo += bump->point_to_point_weight * chi_p2p;
+            }
+          }
         }
       }
       if (!bump_used) {
@@ -1496,7 +1515,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         bump_points = sample_informed_points(
             bump_map, voxel_down_sample(preproc_result.filtered_frame, config.bump_image_source_voxel_size),
             initial_guess, static_cast<std::size_t>(std::max(0, config.bump_image_informed_voxels)));
-        bump_terms = BumpTerms{&bump_map, &bump_points, config.bump_image_huber_delta};
+        bump_terms = BumpTerms{&bump_map, &bump_points, config.bump_image_huber_delta,
+                               config.bump_image_point_to_point_weight};
       }
       registration_skipped_this_scan = (config.skip_registration_after_gap_sec > 0.0 &&
                                         to_seconds(current_lidar_time - lidar_state.time) >
