@@ -474,3 +474,32 @@ TEST_CASE("Bump images alone and with the point-to-point terms recover a transla
     REQUIRE(pose.so3().log().norm() < 1e-2);
   }
 }
+
+TEST_CASE("Point-to-point terms wait for the start distance", "[register_scan]") {
+  // The second scan is 0.58 m from the first: with a start distance beyond that, the point-to-point
+  // terms are not added and the result is the bump terms' alone, to the bit.
+  auto run = [](const double point_to_point_weight, const double start_distance) {
+    LIO::Config config;
+    config.bump_image_registration = true;
+    config.voxel_size = 0.1;
+    config.bump_image_point_to_point_weight = point_to_point_weight;
+    config.bump_image_point_to_point_start_distance = start_distance;
+    LIO lio(config);
+    const auto cloud = make_hollow_cube(0.1);
+    lio.register_scan(cloud, linspace_timestamps(cloud.size(), 0.0, FIRST_SCAN_END));
+    const Eigen::Vector3d t(0.5, 0.3, 0.0);
+    const Eigen::Vector3d imu_accel = 2.0 * t / (DT * DT) + Eigen::Vector3d{0.0, 0.0, GRAVITY_MAG};
+    feed_imu(lio, FIRST_SCAN_END + 0.05, SECOND_SCAN_END - 0.05, 10, imu_accel, Eigen::Vector3d::Zero());
+    Vector3dVector cloud2;
+    cloud2.reserve(cloud.size());
+    for (const auto& p : cloud) {
+      cloud2.emplace_back(p - t);
+    }
+    lio.register_scan(cloud2, instant_timestamps(cloud2.size(), SECOND_SCAN_END));
+    return lio.lidar_state.pose;
+  };
+  const auto bump_alone = run(0.0, 0.0);
+  const auto waiting = run(1.0, 100.0);
+  REQUIRE(waiting.translation() == bump_alone.translation());
+  REQUIRE(waiting.so3().unit_quaternion().coeffs() == bump_alone.so3().unit_quaternion().coeffs());
+}

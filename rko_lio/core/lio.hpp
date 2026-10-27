@@ -761,6 +761,12 @@ public:
      *  0.10 m off while climbing 4 m, against 0.02 m point-to-point), while they hold the
      *  horizontal and the attitude better. */
     bool bump_image_vertical_from_point_to_point = false;
+    /** Add the point-to-point terms only once the registered pose has been this far (m) from the
+     *  first pose (0: from the first scan). While a legged robot stands at the start on an open
+     *  field, the people walking around it are most of what the keypoints see, and the
+     *  point-to-point terms follow them (GrandTour SNOW-3: 0.089 m with them from the start,
+     *  0.027 m with the bump terms alone); the bump terms keep the ground's relief. */
+    double bump_image_point_to_point_start_distance = 0.0;
     /** Register a scan again without the bump terms when they turn the pose more than
      *  this (deg) away from the IMU prediction (0 disables). In a circular tunnel the roll
      *  about the axis is unobservable and the bump images slip around it by degrees per
@@ -1233,6 +1239,8 @@ private:
   bool _left_start = false;
   /** This scan interval stood still near the start (start_standstill_radius). */
   bool _standstill_this_scan = false;
+  /** bump_image_point_to_point_start_distance has been reached (latched). */
+  bool _bump_point_to_point_started = false;
   std::optional<Nsec> _first_scan_time;
 };
 } // namespace rko_lio::core

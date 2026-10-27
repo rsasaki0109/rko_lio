@@ -1526,8 +1526,17 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         bump_points = sample_informed_points(
             bump_map, voxel_down_sample(preproc_result.filtered_frame, config.bump_image_source_voxel_size),
             initial_guess, static_cast<std::size_t>(std::max(0, config.bump_image_informed_voxels)));
-        bump_terms = BumpTerms{&bump_map, &bump_points, config.bump_image_huber_delta,
-                               config.bump_image_point_to_point_weight,
+        double point_to_point_weight = config.bump_image_point_to_point_weight;
+        if (config.bump_image_point_to_point_start_distance > 0.0 && !_bump_point_to_point_started) {
+          if (!poses_with_timestamps.empty() &&
+              (lidar_state.pose.translation() - poses_with_timestamps.front().second.translation()).norm() >=
+                  config.bump_image_point_to_point_start_distance) {
+            _bump_point_to_point_started = true;
+          } else {
+            point_to_point_weight = 0.0;
+          }
+        }
+        bump_terms = BumpTerms{&bump_map, &bump_points, config.bump_image_huber_delta, point_to_point_weight,
                                config.bump_image_vertical_from_point_to_point};
       }
       registration_skipped_this_scan = (config.skip_registration_after_gap_sec > 0.0 &&
