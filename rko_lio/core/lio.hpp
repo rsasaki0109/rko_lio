@@ -418,7 +418,9 @@ public:
     double moving_start_gravity_window_sec = 0.0;
     /** Filter the output positions (published odometry, dumped trajectory) with the IMU between
      *  scans: registered position noise in m (0: off; see output_position_filter.hpp). The
-     *  registration chain and the map are unchanged. */
+     *  registration chain and the map are unchanged. Its prediction needs the gravity direction:
+     *  after a moving start the output stays unfiltered until moving_start_gravity_window_sec has
+     *  estimated the gravity again, and for the whole run without it. */
     double output_filter_position_sigma = 0.0;
     /** White acceleration noise of the output filter's motion model (m^2/s^3). */
     double output_filter_acceleration_noise = 0.001;
@@ -1271,6 +1273,10 @@ private:
   std::optional<double> _moving_start_time;
   std::vector<WorldSpecificForceInterval> _moving_start_intervals;
   OutputPositionFilter _output_filter;
+  /** The output filter waits for the gravity of a moving start (output_filter_position_sigma). */
+  bool _output_filter_held = false;
+  /** The gravity has just been estimated again: the filter starts at the next recorded pose. */
+  bool _output_filter_resume = false;
   /** Append the pose just recorded in poses_with_timestamps to output_poses_with_timestamps:
    *  filtered after a registration, otherwise the filter starts again at it. */
   void record_output_pose(bool registered);

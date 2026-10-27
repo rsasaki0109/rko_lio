@@ -816,6 +816,7 @@ void LIO::initialize(const Nsec lidar_time) {
     imu_bias.accelerometer.setZero();
     imu_bias.gyroscope.setZero();
     std::cout << "[INFO] Moving start (gyro " << avg_gyro.norm() << " rad/s): IMU biases left at zero.\n";
+    _output_filter_held = true;
     if (config.moving_start_gravity_window_sec > 0.0) {
       _moving_start_time = to_seconds(lidar_time);
     }
@@ -904,13 +905,18 @@ void LIO::relevel_local_frame(const Sophus::SO3d& correction, const Eigen::Vecto
 void LIO::record_output_pose(const bool registered) {
   if (!(config.output_filter_position_sigma > 0.0)) return;
   const auto& [time, pose] = poses_with_timestamps.back();
-  if (registered && _output_filter.initialized()) {
+  if (registered && _output_filter.initialized() && !_output_filter_held) {
     const Eigen::Vector3d position = _output_filter.update(to_seconds(time), pose.translation());
     output_poses_with_timestamps.emplace_back(time, Sophus::SE3d(pose.so3(), position));
     return;
   }
   _output_filter.reset(to_seconds(time), pose.translation(), pose.so3() * lidar_state.velocity);
   output_poses_with_timestamps.push_back(poses_with_timestamps.back());
+  if (_output_filter_resume) {
+    // the filter starts here, propagated from now on with the gravity just estimated
+    _output_filter_held = false;
+    _output_filter_resume = false;
+  }
 }
 
 void LIO::update_moving_start_gravity(const Nsec& current_lidar_time, const Sophus::SO3d& current_rotation) {
@@ -954,6 +960,7 @@ void LIO::update_moving_start_gravity(const Nsec& current_lidar_time, const Soph
     return;
   }
   _gravity_world = -GRAVITY_MAG * up->normalized();
+  _output_filter_resume = true;
   moving_start_gravity_tilt_deg = std::acos(std::clamp(up->normalized().z(), -1.0, 1.0)) * 180.0 / M_PI;
   std::cout << "[INFO] Moving start: gravity estimated again from " << config.moving_start_gravity_window_sec
             << " s of motion, " << moving_start_gravity_tilt_deg << " deg from the initial world z.\n";
