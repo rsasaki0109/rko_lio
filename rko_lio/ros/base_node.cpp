@@ -828,6 +828,12 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("initialization_max_gyro_rad_s", lio_config.initialization_max_gyro_rad_s);
   lio_config.moving_start_gravity_window_sec = node->declare_parameter<double>(
       "moving_start_gravity_window_sec", lio_config.moving_start_gravity_window_sec);
+  lio_config.output_filter_position_sigma =
+      node->declare_parameter<double>("output_filter_position_sigma", lio_config.output_filter_position_sigma);
+  lio_config.output_filter_acceleration_noise = node->declare_parameter<double>(
+      "output_filter_acceleration_noise", lio_config.output_filter_acceleration_noise);
+  lio_config.output_filter_bias_noise =
+      node->declare_parameter<double>("output_filter_bias_noise", lio_config.output_filter_bias_noise);
   lio_config.gravity_window_alignment =
       node->declare_parameter<bool>("gravity_window_alignment", lio_config.gravity_window_alignment);
   lio_config.gravity_window_sec = node->declare_parameter<double>("gravity_window_sec", lio_config.gravity_window_sec);
@@ -1356,7 +1362,14 @@ void BaseNode::publish_lidar_outputs(const core::Vector3dVector& deskewed_frame)
                                        : deskewed_frame,
         header));
   }
-  publish_odometry(lio->lidar_state, odom_publisher);
+  if (lio->output_poses_with_timestamps.empty()) {
+    publish_odometry(lio->lidar_state, odom_publisher);
+  } else {
+    // output_filter_position_sigma: the filtered position with the registered attitude
+    core::State output_state = lio->lidar_state;
+    output_state.pose = lio->output_poses_with_timestamps.back().second;
+    publish_odometry(output_state, odom_publisher);
+  }
   if (publish_lidar_acceleration) {
     publish_lidar_accel(lio->lidar_state);
   }
@@ -1839,7 +1852,10 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
     const std::filesystem::path output_file = output_dir / (run_name + "_tum_" + std::to_string(index) + ".txt");
     // dump poses
     if (std::ofstream file(output_file); file.is_open()) {
-      for (const auto& [timestamp, pose] : lio->poses_with_timestamps) {
+      // the filtered output when output_filter_position_sigma is set
+      const auto& poses = lio->output_poses_with_timestamps.empty() ? lio->poses_with_timestamps
+                                                                     : lio->output_poses_with_timestamps;
+      for (const auto& [timestamp, pose] : poses) {
         const Eigen::Vector3d& translation = pose.translation();
         const Eigen::Quaterniond& quaternion = pose.so3().unit_quaternion();
         file << std::fixed << std::setprecision(6) << core::to_seconds(timestamp) << " " << translation.x() << " "

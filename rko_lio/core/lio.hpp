@@ -36,6 +36,7 @@
 #include "inertial_window.hpp"
 #include "gait_speed.hpp"
 #include "gravity_alignment.hpp"
+#include "output_position_filter.hpp"
 #include "photometric_features.hpp"
 #include "photometric_image.hpp"
 #include "persistent_weak_direction.hpp"
@@ -415,6 +416,14 @@ public:
      *  16 deg from level). The frame and the map are kept, so the trajectory stays continuous;
      *  only the gravity vector the filter, the propagation and the regularization use changes. */
     double moving_start_gravity_window_sec = 0.0;
+    /** Filter the output positions (published odometry, dumped trajectory) with the IMU between
+     *  scans: registered position noise in m (0: off; see output_position_filter.hpp). The
+     *  registration chain and the map are unchanged. */
+    double output_filter_position_sigma = 0.0;
+    /** White acceleration noise of the output filter's motion model (m^2/s^3). */
+    double output_filter_acceleration_noise = 0.001;
+    /** Random walk of the output filter's acceleration bias (m^2/s^5). */
+    double output_filter_bias_noise = 1.0e-4;
 
     /** Hold a vehicle's speed while its registration stalls (see stall_guard.hpp). */
     bool vehicle_stall_guard = false;
@@ -946,6 +955,9 @@ public:
 
   /** Sequence of registered scan poses with corresponding timestamps. */
   std::vector<std::pair<Nsec, Sophus::SE3d>> poses_with_timestamps;
+  /** The output trajectory when output_filter_position_sigma is set (the registered attitude and
+   *  the filtered position, one entry per entry of poses_with_timestamps); empty otherwise. */
+  std::vector<std::pair<Nsec, Sophus::SE3d>> output_poses_with_timestamps;
 
   /** Base-frame state propagated from IMU measurements. Runs ahead of `lidar_state` between scans; reset to the
    *  optimized lidar pose after each successful registration. Used for gravity compensation and for publishing
@@ -1258,6 +1270,10 @@ private:
   /** Initialization time (s) of a moving start while its gravity window is being collected. */
   std::optional<double> _moving_start_time;
   std::vector<WorldSpecificForceInterval> _moving_start_intervals;
+  OutputPositionFilter _output_filter;
+  /** Append the pose just recorded in poses_with_timestamps to output_poses_with_timestamps:
+   *  filtered after a registration, otherwise the filter starts again at it. */
+  void record_output_pose(bool registered);
   /** Collect the interval ending at current_lidar_time for moving_start_gravity_window_sec and,
    *  once the registered poses cover the window, re-estimate _gravity_world. */
   void update_moving_start_gravity(const Nsec& current_lidar_time, const Sophus::SO3d& current_rotation);

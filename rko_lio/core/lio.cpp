@@ -745,6 +745,8 @@ LIO::LIO(const Config& config_)
       bump_map(config_.bump_image_map),
       relocalization_map(config_.voxel_size, config_.max_range, config_.max_points_per_voxel),
       _photometric_features(config_.photometric_features) {
+  _output_filter = OutputPositionFilter({config.output_filter_position_sigma, config.output_filter_acceleration_noise,
+                                         config.output_filter_bias_noise});
   // Per-voxel normals are only maintained when the localizability weighting can
   // consume them; the default path pays nothing.
   map.set_maintain_normals(config.localizability_weighting || config.scan_statistics ||
@@ -786,6 +788,7 @@ void LIO::initialize(const Nsec lidar_time) {
     std::cerr << "[WARNING] Cannot initialize. No imu measurements received.\n";
     // lidar_state.time has the time from the previous lidar, which we didn't log if init_phase was on
     poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+    record_output_pose(false);
     _initialized = true;
     return;
   }
@@ -799,6 +802,7 @@ void LIO::initialize(const Nsec lidar_time) {
 
   // lidar_state.time has the time from the previous lidar, which we didn't log if init_phase was on
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  record_output_pose(false);
 
   // the pose for the current time gets logged at the end of register_scan in the typical fashion
   lidar_state.time = lidar_time;
@@ -837,6 +841,7 @@ Vector3dVector LIO::bootstrap_first_scan(const Vector3dVector& scan, const Nsec 
   update_maps(config.double_downsample ? preproc.map_frame : preproc.keypoints, lidar_state.pose,
               &preproc.filtered_frame);
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  record_output_pose(false);
   std::cout << "[INFO] Odometry map frame initialized with first lidar scan.\n";
   return std::move(preproc.filtered_frame);
 }
@@ -894,6 +899,18 @@ void LIO::relevel_local_frame(const Sophus::SO3d& correction, const Eigen::Vecto
   for (auto& [_, world_accel] : _gravity_alignment_window) {
     world_accel = correction * world_accel;
   }
+}
+
+void LIO::record_output_pose(const bool registered) {
+  if (!(config.output_filter_position_sigma > 0.0)) return;
+  const auto& [time, pose] = poses_with_timestamps.back();
+  if (registered && _output_filter.initialized()) {
+    const Eigen::Vector3d position = _output_filter.update(to_seconds(time), pose.translation());
+    output_poses_with_timestamps.emplace_back(time, Sophus::SE3d(pose.so3(), position));
+    return;
+  }
+  _output_filter.reset(to_seconds(time), pose.translation(), pose.so3() * lidar_state.velocity);
+  output_poses_with_timestamps.push_back(poses_with_timestamps.back());
 }
 
 void LIO::update_moving_start_gravity(const Nsec& current_lidar_time, const Sophus::SO3d& current_rotation) {
@@ -973,6 +990,7 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
   gyro_deskew_history.clear();
   update_maps(map_update_frame, lidar_state.pose, &filtered_frame);
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  record_output_pose(false);
   _consecutive_registration_failures = 0;
   std::cout << "[INFO] Kidnap recovery accepted scan at " << to_seconds(current_lidar_time) << "s via " << reason
             << ".\n";
@@ -1102,6 +1120,9 @@ void LIO::add_imu_measurement(const ImuControl& base_imu) {
 
   const Eigen::Vector3d local_gravity = imu_state.pose.so3().inverse() * _gravity_world;
   const Eigen::Vector3d compensated_accel = unbiased_accel + local_gravity;
+  if (_output_filter.initialized()) {
+    _output_filter.propagate(to_seconds(base_imu.time), imu_state.pose.so3() * compensated_accel);
+  }
 
   gyro_deskew_history.add(imu_state.time, base_imu.time, unbiased_ang_vel);
 
@@ -2792,6 +2813,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   }
 
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  record_output_pose(true);
   _consecutive_registration_failures = 0;
 
   return preproc_result.filtered_frame;
