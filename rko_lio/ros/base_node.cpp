@@ -1012,6 +1012,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("bump_image_huber_delta", lio_config.bump_image_huber_delta);
   lio_config.bump_image_point_to_point_weight = node->declare_parameter<double>(
       "bump_image_point_to_point_weight", lio_config.bump_image_point_to_point_weight);
+  lio_config.bump_image_vertical_from_point_to_point = node->declare_parameter<bool>(
+      "bump_image_vertical_from_point_to_point", lio_config.bump_image_vertical_from_point_to_point);
   lio_config.bump_image_max_rotation_correction_deg = node->declare_parameter<double>(
       "bump_image_max_rotation_correction_deg", lio_config.bump_image_max_rotation_correction_deg);
   lio_config.bump_image_rotation_fallback_window = node->declare_parameter<int>(

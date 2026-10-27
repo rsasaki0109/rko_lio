@@ -432,6 +432,8 @@ struct BumpTerms {
   double huber_delta = 0.1;
   /** Weight of the point-to-point system added to the bump system (0: bump terms alone). */
   double point_to_point_weight = 0.0;
+  /** Drop the bump system's world z translation before adding the point-to-point system. */
+  bool vertical_from_point_to_point = false;
 };
 
 // Photometric terms added to every ICP iteration (see photometric_features.hpp).
@@ -510,6 +512,12 @@ IcpResult icp(const Vector3dVector& frame,
                 config.icp_robust_kernel_scale_factor, config.icp_tangential_weight);
             if (point_to_point_stats.correspondences > 0) {
               auto& [H_geo, b_geo, chi_geo] = geometric;
+              if (bump->vertical_from_point_to_point) {
+                // [t_world; r_world]: index 2 is the world z translation.
+                H_geo.row(2).setZero();
+                H_geo.col(2).setZero();
+                b_geo(2) = 0.0;
+              }
               H_geo += bump->point_to_point_weight * H_p2p;
               b_geo += bump->point_to_point_weight * b_p2p;
               chi_geo += bump->point_to_point_weight * chi_p2p;
@@ -1516,7 +1524,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
             bump_map, voxel_down_sample(preproc_result.filtered_frame, config.bump_image_source_voxel_size),
             initial_guess, static_cast<std::size_t>(std::max(0, config.bump_image_informed_voxels)));
         bump_terms = BumpTerms{&bump_map, &bump_points, config.bump_image_huber_delta,
-                               config.bump_image_point_to_point_weight};
+                               config.bump_image_point_to_point_weight,
+                               config.bump_image_vertical_from_point_to_point};
       }
       registration_skipped_this_scan = (config.skip_registration_after_gap_sec > 0.0 &&
                                         to_seconds(current_lidar_time - lidar_state.time) >

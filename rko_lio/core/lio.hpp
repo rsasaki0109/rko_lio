@@ -755,6 +755,12 @@ public:
      *  near the sensor, and the registration slips along it (GrandTour ARC-3 at 307 s, BIEVR-LIO
      *  in the same place), while the keypoints keep the far structure that holds the translation. */
     double bump_image_point_to_point_weight = 0.0;
+    /** With point-to-point terms (weight above 0), take the vertical translation from them
+     *  alone: the bump system's row and column of the world z translation are dropped before
+     *  the two are added. On stairs and slopes the bump images pull the height (Oxford Keble 05:
+     *  0.10 m off while climbing 4 m, against 0.02 m point-to-point), while they hold the
+     *  horizontal and the attitude better. */
+    bool bump_image_vertical_from_point_to_point = false;
     /** Register a scan again without the bump terms when they turn the pose more than
      *  this (deg) away from the IMU prediction (0 disables). In a circular tunnel the roll
      *  about the axis is unobservable and the bump images slip around it by degrees per

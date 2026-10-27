@@ -443,11 +443,12 @@ TEST_CASE("samplewise_gyro_deskew only matters when the rate changes within an i
   }
 }
 
-TEST_CASE("Bump images alone and with the point-to-point terms both recover a translation", "[register_scan]") {
-  auto run = [](const double point_to_point_weight) {
+TEST_CASE("Bump images alone and with the point-to-point terms recover a translation", "[register_scan]") {
+  auto run = [](const double point_to_point_weight, const bool vertical_from_point_to_point = false) {
     LIO::Config config;
     config.bump_image_registration = true;
     config.bump_image_point_to_point_weight = point_to_point_weight;
+    config.bump_image_vertical_from_point_to_point = vertical_from_point_to_point;
     // A map voxel as fine as the cloud, so that the point-to-point terms are not biased by the
     // sampling (at the default 1 m voxel they alone would settle 9 cm off).
     config.voxel_size = 0.1;
@@ -465,10 +466,10 @@ TEST_CASE("Bump images alone and with the point-to-point terms both recover a tr
     lio.register_scan(cloud2, instant_timestamps(cloud2.size(), SECOND_SCAN_END));
     return std::pair{lio.lidar_state.pose, t};
   };
-  for (const double weight : {0.0, 1.0}) {
-    const auto [pose, t] = run(weight);
-    INFO("weight " << weight << " translation " << pose.translation().transpose() << " rotation "
-                   << pose.so3().log().norm());
+  for (const auto& [weight, vertical] : {std::pair{0.0, false}, std::pair{1.0, false}, std::pair{1.0, true}}) {
+    const auto [pose, t] = run(weight, vertical);
+    INFO("weight " << weight << " vertical from point-to-point " << vertical << " translation "
+                   << pose.translation().transpose() << " rotation " << pose.so3().log().norm());
     REQUIRE(approx_equal(pose.translation(), t, 1e-2));
     REQUIRE(pose.so3().log().norm() < 1e-2);
   }
