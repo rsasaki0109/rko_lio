@@ -25,6 +25,7 @@
 #include "base_node.hpp"
 #include "rko_lio/core/imu_acceleration_unit.hpp"
 #include "rko_lio/core/process_timestamps.hpp"
+#include "rko_lio/core/voxel_down_sample.hpp"
 #include "rko_lio/ros/utils/utils.hpp"
 // other
 #include <algorithm>
@@ -573,6 +574,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   if (publish_deskewed_scan) {
     deskewed_scan_topic = node->declare_parameter<std::string>("deskewed_scan_topic", deskewed_scan_topic);
     frame_publisher = node->create_publisher<sensor_msgs::msg::PointCloud2>(deskewed_scan_topic, publisher_qos);
+    deskewed_scan_voxel_size =
+        node->declare_parameter<double>("deskewed_scan_voxel_size", deskewed_scan_voxel_size);
   }
 
   publish_local_map = node->declare_parameter<bool>("publish_local_map", publish_local_map);
@@ -1344,7 +1347,10 @@ void BaseNode::publish_lidar_outputs(const core::Vector3dVector& deskewed_frame)
     std_msgs::msg::Header header;
     header.frame_id = lidar_frame;
     header.stamp = utils::to_ros_time(lio->lidar_state.time);
-    frame_publisher->publish(utils::eigen_to_point_cloud2(deskewed_frame, header));
+    frame_publisher->publish(utils::eigen_to_point_cloud2(
+        deskewed_scan_voxel_size > 0.0 ? core::voxel_down_sample(deskewed_frame, deskewed_scan_voxel_size)
+                                       : deskewed_frame,
+        header));
   }
   publish_odometry(lio->lidar_state, odom_publisher);
   if (publish_lidar_acceleration) {
