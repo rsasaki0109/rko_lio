@@ -448,6 +448,9 @@ TEST_CASE("Bump images alone and with the point-to-point terms both recover a tr
     LIO::Config config;
     config.bump_image_registration = true;
     config.bump_image_point_to_point_weight = point_to_point_weight;
+    // A map voxel as fine as the cloud, so that the point-to-point terms are not biased by the
+    // sampling (at the default 1 m voxel they alone would settle 9 cm off).
+    config.voxel_size = 0.1;
     LIO lio(config);
     const auto cloud = make_hollow_cube(0.1);
     lio.register_scan(cloud, linspace_timestamps(cloud.size(), 0.0, FIRST_SCAN_END));
@@ -464,6 +467,8 @@ TEST_CASE("Bump images alone and with the point-to-point terms both recover a tr
   };
   for (const double weight : {0.0, 1.0}) {
     const auto [pose, t] = run(weight);
+    INFO("weight " << weight << " translation " << pose.translation().transpose() << " rotation "
+                   << pose.so3().log().norm());
     REQUIRE(approx_equal(pose.translation(), t, 1e-2));
     REQUIRE(pose.so3().log().norm() < 1e-2);
   }
