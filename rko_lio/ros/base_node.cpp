@@ -295,6 +295,14 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["scan_statistics"] = nlohmann_json_t.scan_statistics;
   nlohmann_json_j["scan_statistics_search_distance"] = nlohmann_json_t.scan_statistics_search_distance;
   nlohmann_json_j["icp_robust_kernel_scale_factor"] = nlohmann_json_t.icp_robust_kernel_scale_factor;
+  nlohmann_json_j["icp_tangential_weight"] = nlohmann_json_t.icp_tangential_weight;
+  nlohmann_json_j["close_scene_icp_tangential_weight"] = nlohmann_json_t.close_scene_icp_tangential_weight;
+  nlohmann_json_j["map_update_min_translation"] = nlohmann_json_t.map_update_min_translation;
+  nlohmann_json_j["start_standstill_radius"] = nlohmann_json_t.start_standstill_radius;
+  nlohmann_json_j["start_standstill_max_accel_std"] = nlohmann_json_t.start_standstill_max_accel_std;
+  nlohmann_json_j["start_standstill_hold"] = nlohmann_json_t.start_standstill_hold;
+  nlohmann_json_j["start_standstill_max_gyro_rad_s"] = nlohmann_json_t.start_standstill_max_gyro_rad_s;
+  nlohmann_json_j["start_standstill_max_sec"] = nlohmann_json_t.start_standstill_max_sec;
   nlohmann_json_j["close_scene_max_median_range"] = nlohmann_json_t.close_scene_max_median_range;
   nlohmann_json_j["close_scene_max_correspondence_distance"] = nlohmann_json_t.close_scene_max_correspondence_distance;
   nlohmann_json_j["close_scene_localizability_boost"] = nlohmann_json_t.close_scene_localizability_boost;
@@ -477,6 +485,22 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
       nlohmann_json_j.value("scan_statistics_search_distance", nlohmann_json_t.scan_statistics_search_distance);
   nlohmann_json_t.icp_robust_kernel_scale_factor =
       nlohmann_json_j.value("icp_robust_kernel_scale_factor", nlohmann_json_t.icp_robust_kernel_scale_factor);
+  nlohmann_json_t.icp_tangential_weight =
+      nlohmann_json_j.value("icp_tangential_weight", nlohmann_json_t.icp_tangential_weight);
+  nlohmann_json_t.close_scene_icp_tangential_weight =
+      nlohmann_json_j.value("close_scene_icp_tangential_weight", nlohmann_json_t.close_scene_icp_tangential_weight);
+  nlohmann_json_t.map_update_min_translation =
+      nlohmann_json_j.value("map_update_min_translation", nlohmann_json_t.map_update_min_translation);
+  nlohmann_json_t.start_standstill_radius =
+      nlohmann_json_j.value("start_standstill_radius", nlohmann_json_t.start_standstill_radius);
+  nlohmann_json_t.start_standstill_max_accel_std =
+      nlohmann_json_j.value("start_standstill_max_accel_std", nlohmann_json_t.start_standstill_max_accel_std);
+  nlohmann_json_t.start_standstill_hold =
+      nlohmann_json_j.value("start_standstill_hold", nlohmann_json_t.start_standstill_hold);
+  nlohmann_json_t.start_standstill_max_gyro_rad_s =
+      nlohmann_json_j.value("start_standstill_max_gyro_rad_s", nlohmann_json_t.start_standstill_max_gyro_rad_s);
+  nlohmann_json_t.start_standstill_max_sec =
+      nlohmann_json_j.value("start_standstill_max_sec", nlohmann_json_t.start_standstill_max_sec);
   nlohmann_json_t.close_scene_max_median_range =
       nlohmann_json_j.value("close_scene_max_median_range", nlohmann_json_t.close_scene_max_median_range);
   nlohmann_json_t.close_scene_max_correspondence_distance = nlohmann_json_j.value(
@@ -578,6 +602,22 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("max_correspondence_distance", lio_config.max_correspondence_distance);
   lio_config.icp_robust_kernel_scale_factor =
       node->declare_parameter<double>("icp_robust_kernel_scale_factor", lio_config.icp_robust_kernel_scale_factor);
+  lio_config.icp_tangential_weight =
+      node->declare_parameter<double>("icp_tangential_weight", lio_config.icp_tangential_weight);
+  lio_config.close_scene_icp_tangential_weight = node->declare_parameter<double>(
+      "close_scene_icp_tangential_weight", lio_config.close_scene_icp_tangential_weight);
+  lio_config.map_update_min_translation =
+      node->declare_parameter<double>("map_update_min_translation", lio_config.map_update_min_translation);
+  lio_config.start_standstill_radius =
+      node->declare_parameter<double>("start_standstill_radius", lio_config.start_standstill_radius);
+  lio_config.start_standstill_max_accel_std =
+      node->declare_parameter<double>("start_standstill_max_accel_std", lio_config.start_standstill_max_accel_std);
+  lio_config.start_standstill_hold =
+      node->declare_parameter<bool>("start_standstill_hold", lio_config.start_standstill_hold);
+  lio_config.start_standstill_max_gyro_rad_s = node->declare_parameter<double>(
+      "start_standstill_max_gyro_rad_s", lio_config.start_standstill_max_gyro_rad_s);
+  lio_config.start_standstill_max_sec =
+      node->declare_parameter<double>("start_standstill_max_sec", lio_config.start_standstill_max_sec);
   lio_config.close_scene_max_median_range =
       node->declare_parameter<double>("close_scene_max_median_range", lio_config.close_scene_max_median_range);
   lio_config.close_scene_max_correspondence_distance = node->declare_parameter<double>(
@@ -1929,6 +1969,13 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
     if (lio->config.close_scene_max_median_range > 0.0) {
       std::cout << "Close-scene settings used on " << lio->close_scene_scan_count << " registered scans ("
                 << lio->close_scene_fallback_count << " registered again with the base settings)\n";
+    }
+    if (lio->config.start_standstill_radius > 0.0) {
+      std::cout << "Standing still near the start on " << lio->start_standstill_count << " scan intervals\n";
+    }
+    if (lio->config.map_update_min_translation > 0.0) {
+      std::cout << "Map not updated on " << lio->map_update_skipped_count
+                << " registered scans (sensor moved less than map_update_min_translation)\n";
     }
     if (lio->config.keypoint_shortfall_voxel_multiplier > 0.0) {
       std::cout << "Keypoints taken again at the finer voxel on " << lio->keypoint_shortfall_scan_count << " scans\n";

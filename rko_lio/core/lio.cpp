@@ -204,7 +204,8 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
                                      IcpWeightingStats* weighting_stats = nullptr,
                                      std::vector<VoxelHashMap::NeighborhoodCache>* neighborhoods = nullptr,
                                      const bool localizability_normal_only = false,
-                                     const double robust_kernel_scale_factor = 0.0) {
+                                     const double robust_kernel_scale_factor = 0.0,
+                                     const double tangential_weight = 1.0) {
   // H, b, chi, weight sum, correspondence count. The weight sum replaces the correspondence
   // count in the H/b normalization; with weighting disabled every weight is exactly 1
   // and the result is bit-identical to the historical count-normalized system.
@@ -229,6 +230,7 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
   };
 
   const bool weighting_enabled = localizability_axis.has_value() && localizability_boost > 0.0;
+  const bool planar = tangential_weight < 1.0;
   std::atomic<int> boosted_counter = 0;
 
   // Robust kernel: search every neighbour first (per index, so the result does not depend on
@@ -275,8 +277,10 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
     const Eigen::Vector3d residual = source - target;
     double weight = 1.0;
     std::optional<Eigen::Vector3d> normal;
-    if (weighting_enabled) {
+    if (weighting_enabled || planar) {
       normal = voxel_map.voxel_normal(target);
+    }
+    if (weighting_enabled) {
       weight = localizability_weight(normal, *localizability_axis, localizability_boost);
       if (weight > 1.0) {
         boosted_counter++;
@@ -285,6 +289,17 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
     double kernel_weight = 1.0;
     if (kernel_enabled) {
       kernel_weight = square(kernel_scale_squared / (kernel_scale_squared + residual.squaredNorm()));
+    }
+    if (planar && normal.has_value()) {
+      // The along-surface residual is down-weighted (planar_information); a localizability
+      // weight applies along the normal only with localizability_normal_only, otherwise to all
+      // of W. The weight sum counts the mean information, trace(W) / 3.
+      const Eigen::Matrix3d W =
+          localizability_normal_only
+              ? Eigen::Matrix3d(kernel_weight * planar_information(normal, weight, tangential_weight))
+              : Eigen::Matrix3d(kernel_weight * weight * planar_information(normal, 1.0, tangential_weight));
+      return WeightedSystem(J_r.transpose() * W * J_r, J_r.transpose() * W * residual, residual.dot(W * residual),
+                            W.trace() / 3.0, 1);
     }
     if (localizability_normal_only && weight > 1.0) {
       // Only the residual along the map normal is boosted (normal_only_information). The weight
@@ -488,7 +503,7 @@ IcpResult icp(const Vector3dVector& frame,
                                             voxel_search_radius, localizability_axis, localizability_boost,
                                             &weighting_stats, voxel_search_radius <= 1 ? &neighborhoods : nullptr,
                                             config.localizability_normal_only,
-                                            config.icp_robust_kernel_scale_factor);
+                                            config.icp_robust_kernel_scale_factor, config.icp_tangential_weight);
       }
       auto [H_icp, b_icp, chi_icp] = geometric;
       if (photometric != nullptr && weighting_stats.correspondences > 0) {
@@ -810,6 +825,7 @@ void LIO::update_maps(const Vector3dVector& map_update_frame,
                       const Sophus::SE3d& pose,
                       const Vector3dVector* full_frame) {
   map.update(map_update_frame, pose);
+  _last_map_update_position = pose.translation();
   if (config.bump_image_registration && full_frame != nullptr) {
     Vector3dVector world_points(full_frame->size());
     std::vector<double> ranges(full_frame->size());
@@ -1131,7 +1147,34 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                                 " seconds exceeds max_scan_delta_sec; re-anchoring at the new timestamp.");
   }
 
+  const bool initializing = config.initialization_phase && !_initialized;
   const auto [avg_body_accel, avg_ang_vel] = motion_priors_from_imu(current_lidar_time);
+  _standstill_this_scan = false;
+  if (!_first_scan_time.has_value()) {
+    _first_scan_time = current_lidar_time;
+  }
+  if (config.start_standstill_radius > 0.0 && !initializing && !_left_start && interval_stats.imu_count > 1) {
+    if (lidar_state.pose.translation().norm() > config.start_standstill_radius ||
+        to_seconds(current_lidar_time - *_first_scan_time) > config.start_standstill_max_sec) {
+      _left_start = true;
+    } else {
+      // The interval statistics are bias-corrected; add the current biases back.
+      const double n = static_cast<double>(interval_stats.imu_count);
+      const Eigen::Vector3d mean_gyro = interval_stats.angular_velocity_sum / n + imu_bias.gyroscope;
+      const double accel_std = std::sqrt(interval_stats.welford_sum_of_squares / (n - 1.0));
+      const double max_gyro = config.start_standstill_max_gyro_rad_s > 0.0 ? config.start_standstill_max_gyro_rad_s
+                                                                            : config.initialization_max_gyro_rad_s;
+      if (mean_gyro.norm() < max_gyro &&
+          accel_std < config.start_standstill_max_accel_std) {
+        const Eigen::Vector3d mean_accel = interval_stats.imu_acceleration_sum / n + imu_bias.accelerometer;
+        imu_bias.gyroscope = mean_gyro;
+        imu_bias.accelerometer = mean_accel + lidar_state.pose.so3().inverse() * gravity();
+        lidar_state.velocity.setZero();
+        _standstill_this_scan = true;
+        ++start_standstill_count;
+      }
+    }
+  }
 
   const Nsec earliest = std::min(lidar_state.time, *std::min_element(timestamps.begin(), timestamps.end()));
   const bool samplewise_rotation = config.samplewise_gyro_deskew &&
@@ -1402,6 +1445,9 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       if (config.close_scene_icp_robust_kernel_scale_factor > 0.0) {
         _close_scene_config->icp_robust_kernel_scale_factor = config.close_scene_icp_robust_kernel_scale_factor;
       }
+      if (config.close_scene_icp_tangential_weight >= 0.0) {
+        _close_scene_config->icp_tangential_weight = config.close_scene_icp_tangential_weight;
+      }
     }
     const Config& scan_config = close_scene ? *_close_scene_config : config;
     // Localizability weighting axis: the predicted motion direction for this
@@ -1452,9 +1498,10 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
             initial_guess, static_cast<std::size_t>(std::max(0, config.bump_image_informed_voxels)));
         bump_terms = BumpTerms{&bump_map, &bump_points, config.bump_image_huber_delta};
       }
-      registration_skipped_this_scan = config.skip_registration_after_gap_sec > 0.0 &&
-                                       to_seconds(current_lidar_time - lidar_state.time) >
-                                           config.skip_registration_after_gap_sec;
+      registration_skipped_this_scan = (config.skip_registration_after_gap_sec > 0.0 &&
+                                        to_seconds(current_lidar_time - lidar_state.time) >
+                                            config.skip_registration_after_gap_sec) ||
+                                       (config.start_standstill_hold && _standstill_this_scan);
       if (close_scene && !registration_skipped_this_scan) {
         ++close_scene_scan_count;
       }
@@ -2615,8 +2662,15 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
 
   // Gate-corrected scans stay out of the map (see Config::kinematic_gate_skip_map_update):
   // inserting a glided scan would let the next ICP anchor to its own correction.
+  // A sensor that has not moved since the last map update adds nothing new (map_update_min_translation).
+  const bool standing_still = config.map_update_min_translation > 0.0 && _last_map_update_position.has_value() &&
+                              (lidar_state.pose.translation() - *_last_map_update_position).norm() <
+                                  config.map_update_min_translation;
+  if (standing_still && !registration_skipped_this_scan) {
+    ++map_update_skipped_count;
+  }
   if (!(kinematic_gate_corrected_this_scan && config.kinematic_gate_skip_map_update) &&
-      !kinematic_blend_suppress_map_update_this_scan && !registration_skipped_this_scan) {
+      !kinematic_blend_suppress_map_update_this_scan && !registration_skipped_this_scan && !standing_still) {
     if (kinematic_blend_map_update_fraction_this_scan >= 1.0) {
       update_maps(map_input, lidar_state.pose, &preproc_result.filtered_frame);
     } else {

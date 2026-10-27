@@ -38,6 +38,8 @@
 
 #include <Eigen/Core>
 
+#include <algorithm>
+
 #include <optional>
 
 namespace rko_lio::core {
@@ -77,6 +79,22 @@ inline Eigen::Matrix3d normal_only_information(const std::optional<Eigen::Vector
     return Eigen::Matrix3d::Identity();
   }
   return Eigen::Matrix3d::Identity() + (weight - 1.0) * (*normal) * normal->transpose();
+}
+
+/**
+ * Information matrix of one correspondence on a surface whose along-surface residual is
+ * down-weighted: W = tangential (I - n n^T) + weight n n^T. The along-surface part of a
+ * point-to-point residual is mostly the spacing of the map points (the rings a spinning LiDAR
+ * leaves on the ground); tangential = 0 leaves only the point-to-plane residual. Returns the
+ * identity without a normal; a weight below 1 counts as 1.
+ */
+inline Eigen::Matrix3d
+planar_information(const std::optional<Eigen::Vector3d>& normal, const double weight, const double tangential) {
+  if (!normal.has_value()) {
+    return Eigen::Matrix3d::Identity();
+  }
+  const Eigen::Matrix3d nn = (*normal) * normal->transpose();
+  return tangential * (Eigen::Matrix3d::Identity() - nn) + std::max(weight, 1.0) * nn;
 }
 
 } // namespace rko_lio::core

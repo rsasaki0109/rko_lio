@@ -210,6 +210,13 @@ public:
      *  outdoor-urk, Oxford Spires) worse. 0 disables it (plain least squares). */
     double icp_robust_kernel_scale_factor = 0.0;
 
+    /** Weight of the along-surface residual of every correspondence whose map voxel has a
+     *  normal: W = t (I - n n^T) + w n n^T (w the localizability weight, at least 1). 1 keeps
+     *  the point-to-point ICP (the normals are not even looked up); 0 is point-to-plane. The
+     *  rings a spinning LiDAR leaves on the ground pull a point-to-point registration along the
+     *  ground while the map is young. */
+    double icp_tangential_weight = 1.0;
+
     /** Thread count for data association (0 = automatic). */
     int max_num_threads = 0;
 
@@ -768,6 +775,35 @@ public:
     double close_scene_localizability_boost = 0.0;
     bool close_scene_localizability_normal_only = false;
     double close_scene_icp_robust_kernel_scale_factor = 0.0;
+    /** icp_tangential_weight for close scenes; a negative value keeps icp_tangential_weight. */
+    double close_scene_icp_tangential_weight = -1.0;
+
+    /** When positive, a registered scan is added to the map only if the sensor has moved at
+     *  least this far (m) since the last scan that was added. A sensor standing still adds the
+     *  same sampling pattern again and again: the voxels fill up (max_points_per_voxel) with the
+     *  rings of a spinning LiDAR, and the scans after the start of motion, which sample between
+     *  those rings, can no longer add points there. 0 adds every scan. */
+    double map_update_min_translation = 0.0;
+
+    /** When positive, every scan interval while the sensor is still within this distance (m)
+     *  of where it started, and whose IMU shows no rotation (mean gyro below
+     *  initialization_max_gyro_rad_s) and no shaking (standard deviation of the acceleration
+     *  magnitude below start_standstill_max_accel_std), re-estimates the IMU biases from that
+     *  interval and holds the velocity at zero. A legged robot often settles for a moment and
+     *  then stands still before it walks off: the initialization interval sees the settling,
+     *  leaves the biases at zero, and in a scene that does not constrain the horizontal (a
+     *  flat snow field seen by a narrow-FOV LiDAR) the IMU then drifts while it stands. 0 off. */
+    double start_standstill_radius = 0.0;
+    double start_standstill_max_accel_std = 0.5;
+    /** With start_standstill_radius: a standing-still interval also keeps the pose (the scan
+     *  is not registered: around a robot standing in an open field, people walking past can be
+     *  the only things that constrain the horizontal, and the registration follows them). */
+    bool start_standstill_hold = false;
+    /** Mean gyro rate (rad/s) below which an interval counts as standing still (0: use
+     *  initialization_max_gyro_rad_s). */
+    double start_standstill_max_gyro_rad_s = 0.0;
+    /** The standstill handling ends this long (s) after the first scan, whatever the IMU says. */
+    double start_standstill_max_sec = 60.0;
     /** When positive, a close scan whose registration with the close-scene settings leaves
      *  fewer than this fraction of its keypoints within their correspondence cap is
      *  registered again: first with the base settings, then with the close-scene settings
@@ -1006,6 +1042,11 @@ public:
   /** Registered scans that used the close-scene settings (close_scene_max_median_range). */
   std::size_t close_scene_scan_count = 0;
   std::size_t close_scene_fallback_count = 0;
+  /** Registered scans not added to the map because the sensor had not moved enough
+   *  (map_update_min_translation). */
+  std::size_t map_update_skipped_count = 0;
+  /** Scan intervals treated as standing still near the start (start_standstill_radius). */
+  std::size_t start_standstill_count = 0;
   /** Scans whose keypoints were taken again at the finer voxel (keypoint_shortfall_voxel_multiplier). */
   std::size_t keypoint_shortfall_scan_count = 0;
   std::size_t localizability_weighted_scan_count = 0;
@@ -1174,5 +1215,12 @@ private:
   std::deque<std::pair<Nsec, Eigen::Vector3d>> _gravity_alignment_window;
   /** The configuration with the close_scene_* keys applied, built on the first close scan. */
   std::optional<Config> _close_scene_config;
+  /** Sensor position of the last scan added to the map (map_update_min_translation). */
+  std::optional<Eigen::Vector3d> _last_map_update_position;
+  /** The sensor has left the start_standstill_radius around its start. */
+  bool _left_start = false;
+  /** This scan interval stood still near the start (start_standstill_radius). */
+  bool _standstill_this_scan = false;
+  std::optional<Nsec> _first_scan_time;
 };
 } // namespace rko_lio::core
