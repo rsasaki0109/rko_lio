@@ -1674,16 +1674,20 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         bump_terms = BumpTerms{&bump_map, &bump_points, config.bump_image_huber_delta, point_to_point_weight,
                                config.bump_image_vertical_from_point_to_point};
       }
+      const bool standstill_held = config.start_standstill_hold && _standstill_this_scan;
       registration_skipped_this_scan = (config.skip_registration_after_gap_sec > 0.0 &&
                                         to_seconds(current_lidar_time - lidar_state.time) >
                                             config.skip_registration_after_gap_sec) ||
-                                       (config.start_standstill_hold && _standstill_this_scan);
+                                       standstill_held;
       if (close_scene && !registration_skipped_this_scan) {
         ++close_scene_scan_count;
       }
+      // A held scan keeps the position (the robot stands; with a frame still tilted by a moving
+      // start the IMU-predicted translation would carry the tilt's gravity), and turns with the gyro.
       IcpResult icp_result =
           registration_skipped_this_scan
-              ? IcpResult{initial_guess}
+              ? IcpResult{standstill_held ? Sophus::SE3d(initial_guess.so3(), lidar_state.pose.translation())
+                                          : initial_guess}
               : icp(preproc_result.keypoints, map, initial_guess, scan_config, kf_step.info, 1,
                     _persistent_weak_direction_tracker.state(),
                     config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,

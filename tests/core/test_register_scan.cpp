@@ -577,3 +577,29 @@ TEST_CASE("Standing intervals set the gyro bias per interval, as their average, 
   REQUIRE(std::abs(run("average")) < 0.0006);              // nine intervals: +4, -4, ..., -4 mrad/s
   REQUIRE_THAT(run("none"), WithinAbs(0.0, 1e-9));         // the static start's bias stays
 }
+
+TEST_CASE("A held standing scan keeps its position in a tilted frame", "[register_scan]") {
+  // A walking start leaves the frame tilted by about 11 deg; the biases stay at zero, so the
+  // IMU prediction of a standing robot carries 2 m/s^2 of misplaced gravity. The hold must not.
+  LIO::Config config;
+  config.initialization_phase = true;
+  config.initialization_max_gyro_rad_s = 0.02;
+  config.start_standstill_radius = 1.0;
+  config.start_standstill_hold = true;
+  config.start_standstill_bias = "none";
+  LIO lio(config);
+  const auto cloud = make_hollow_cube();
+  const Sophus::SO3d true_attitude = Sophus::SO3d::exp(Eigen::Vector3d(10.0 * M_PI / 180.0, 0.0, 0.0));
+  const Eigen::Vector3d standing_force = true_attitude.inverse() * Eigen::Vector3d(0.0, 0.0, GRAVITY_MAG);
+  lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
+  feed_imu(lio, 0.11, 0.2, 10, standing_force + Eigen::Vector3d(2.0, 0.0, 0.0), {0.0, 0.0, 0.1});
+  lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.2));
+  const Eigen::Vector3d start = lio.lidar_state.pose.translation();
+  for (int k = 3; k <= 12; ++k) {
+    const double t = 0.1 * k;
+    feed_imu(lio, t - 0.09, t, 10, standing_force, Eigen::Vector3d::Zero());
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
+  }
+  REQUIRE(lio.start_standstill_count == 10);
+  REQUIRE((lio.lidar_state.pose.translation() - start).norm() < 1e-9);
+}

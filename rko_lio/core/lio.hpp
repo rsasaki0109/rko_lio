@@ -833,9 +833,10 @@ public:
      *  flat snow field seen by a narrow-FOV LiDAR) the IMU then drifts while it stands. 0 off. */
     double start_standstill_radius = 0.0;
     double start_standstill_max_accel_std = 0.5;
-    /** With start_standstill_radius: a standing-still interval also keeps the pose (the scan
+    /** With start_standstill_radius: a standing-still interval also keeps the position (the scan
      *  is not registered: around a robot standing in an open field, people walking past can be
-     *  the only things that constrain the horizontal, and the registration follows them). */
+     *  the only things that constrain the horizontal, and the registration follows them); the
+     *  attitude follows the gyro. */
     bool start_standstill_hold = false;
     /** Mean gyro rate (rad/s) below which an interval counts as standing still (0: use
      *  initialization_max_gyro_rad_s). */
