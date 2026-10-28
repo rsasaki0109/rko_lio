@@ -811,3 +811,44 @@ TEST_CASE("The start standstill handling can be kept to moving starts", "[regist
     REQUIRE(poses[i].second.translation() == poses_off[i].second.translation());
   }
 }
+
+TEST_CASE("A registration is kept within the innovation limits of its prediction", "[register_scan]") {
+  using rko_lio::core::clamp_innovation;
+  const Eigen::Vector3d predicted(1.0, 2.0, 3.0);
+  // within the limits: unchanged
+  REQUIRE(approx_equal(clamp_innovation(predicted + Eigen::Vector3d(0.03, 0.0, -0.04), predicted, 0.1, 0.05),
+                       predicted + Eigen::Vector3d(0.03, 0.0, -0.04), 1e-12));
+  // a vertical jump is cut to the vertical limit, the horizontal part kept
+  REQUIRE(approx_equal(clamp_innovation(predicted + Eigen::Vector3d(0.03, 0.0, 0.6), predicted, 0.1, 0.05),
+                       predicted + Eigen::Vector3d(0.03, 0.0, 0.05), 1e-12));
+  // a horizontal jump is cut along its direction
+  REQUIRE(approx_equal(clamp_innovation(predicted + Eigen::Vector3d(0.3, 0.4, 0.0), predicted, 0.1, 0.05),
+                       predicted + Eigen::Vector3d(0.06, 0.08, 0.0), 1e-12));
+  // 0 leaves that part unbounded
+  REQUIRE(approx_equal(clamp_innovation(predicted + Eigen::Vector3d(0.3, 0.4, 0.6), predicted, 0.0, 0.0),
+                       predicted + Eigen::Vector3d(0.3, 0.4, 0.6), 1e-12));
+}
+
+TEST_CASE("The innovation limits leave a registration that follows its prediction alone", "[register_scan]") {
+  // A static sensor in a static cube: the registration agrees with the prediction, the limits
+  // change nothing.
+  const auto run = [](const double limit) {
+    LIO::Config config;
+    config.initialization_phase = true;
+    config.registration_innovation_limit_xy = limit;
+    config.registration_innovation_limit_z = limit;
+    LIO lio(config);
+    const auto cloud = make_hollow_cube();
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
+    for (int k = 2; k <= 10; ++k) {
+      const double t = 0.1 * k;
+      feed_static_imu(lio, t - 0.09, t, 10);
+      lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
+    }
+    return std::make_pair(lio.innovation_clamped_scan_count, lio.lidar_state.pose.translation());
+  };
+  const auto [count_off, position_off] = run(0.0);
+  const auto [count_on, position_on] = run(0.05);
+  REQUIRE(count_on == 0);
+  REQUIRE(position_on == position_off);
+}

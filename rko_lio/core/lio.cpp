@@ -1604,6 +1604,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   bool kinematic_gate_corrected_this_scan = false;
   bool kinematic_blend_suppress_map_update_this_scan = false;
   bool registration_skipped_this_scan = false;
+  bool innovation_clamped_this_scan = false;
   bool standstill_clamped_this_scan = false;
   bool inertial_window_added = false;
   double kinematic_blend_map_update_fraction_this_scan = 1.0;
@@ -2560,6 +2561,20 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       }
     }
 
+    // A registration far from the IMU prediction has slipped (registration_innovation_limit_*):
+    // keep the scan within the limits around the prediction and out of the map.
+    if ((config.registration_innovation_limit_xy > 0.0 || config.registration_innovation_limit_z > 0.0) &&
+        !registration_skipped_this_scan) {
+      const Eigen::Vector3d bounded =
+          clamp_innovation(optimized_pose.translation(), initial_guess.translation(),
+                           config.registration_innovation_limit_xy, config.registration_innovation_limit_z);
+      if (bounded != optimized_pose.translation()) {
+        optimized_pose.translation() = bounded;
+        innovation_clamped_this_scan = true;
+        ++innovation_clamped_scan_count;
+      }
+    }
+
     // Sliding-window absolute gravity alignment (see gravity_alignment.hpp for why the
     // min_beta regularization above cannot correct slow pitch/roll drift on its own). The
     // window collects each scan interval's raw (gravity-inclusive) accelerometer mean rotated
@@ -2901,7 +2916,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   }
   if (!(kinematic_gate_corrected_this_scan && config.kinematic_gate_skip_map_update) &&
       !kinematic_blend_suppress_map_update_this_scan && !registration_skipped_this_scan && !standing_still &&
-      !standstill_clamped_this_scan) {
+      !standstill_clamped_this_scan && !innovation_clamped_this_scan) {
     if (kinematic_blend_map_update_fraction_this_scan >= 1.0) {
       update_maps(map_input, lidar_state.pose, &preproc_result.filtered_frame);
     } else {

@@ -871,6 +871,10 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   lio_config.output_filter_bias_noise =
       node->declare_parameter<double>("output_filter_bias_noise", lio_config.output_filter_bias_noise);
   lio_config.output_filter_log = node->declare_parameter<bool>("output_filter_log", lio_config.output_filter_log);
+  lio_config.registration_innovation_limit_xy =
+      node->declare_parameter<double>("registration_innovation_limit_xy", lio_config.registration_innovation_limit_xy);
+  lio_config.registration_innovation_limit_z =
+      node->declare_parameter<double>("registration_innovation_limit_z", lio_config.registration_innovation_limit_z);
   lio_config.output_filter_measurement_noise = node->declare_parameter<std::string>(
       "output_filter_measurement_noise", lio_config.output_filter_measurement_noise);
   lio_config.output_filter_noise_exponent =
@@ -2068,6 +2072,10 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
     }
     if (lio->config.start_standstill_radius > 0.0) {
       std::cout << "Standing still near the start on " << lio->start_standstill_count << " scan intervals\n";
+    }
+    if (lio->config.registration_innovation_limit_xy > 0.0 || lio->config.registration_innovation_limit_z > 0.0) {
+      std::cout << "Registration kept within the innovation limits on " << lio->innovation_clamped_scan_count
+                << " scans\n";
     }
     if (lio->config.map_update_min_translation > 0.0) {
       std::cout << "Map not updated on " << lio->map_update_skipped_count

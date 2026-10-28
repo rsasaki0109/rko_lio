@@ -57,6 +57,20 @@
 /** Core namespace containing LIO data structures and state definitions. */
 namespace rko_lio::core {
 
+/** `registered` moved back toward `predicted` so that the horizontal distance is at most
+ *  `limit_xy` and the vertical one at most `limit_z` (0: that part unbounded)
+ *  (registration_innovation_limit_xy / _z). */
+inline Eigen::Vector3d clamp_innovation(const Eigen::Vector3d& registered,
+                                        const Eigen::Vector3d& predicted,
+                                        const double limit_xy,
+                                        const double limit_z) {
+  Eigen::Vector3d d = registered - predicted;
+  const double dxy = d.head<2>().norm();
+  if (limit_xy > 0.0 && dxy > limit_xy) d.head<2>() *= limit_xy / dxy;
+  if (limit_z > 0.0 && std::abs(d.z()) > limit_z) d.z() = std::copysign(limit_z, d.z());
+  return predicted + d;
+}
+
 /** `position` moved back onto the sphere of `radius` around `anchor` if it lies outside
  *  (start_standstill_hold_radius). */
 inline Eigen::Vector3d clamp_to_radius(const Eigen::Vector3d& position,
@@ -851,6 +865,13 @@ public:
      *  rings of a spinning LiDAR, and the scans after the start of motion, which sample between
      *  those rings, can no longer add points there. 0 adds every scan. */
     double map_update_min_translation = 0.0;
+    /** Bound how far a scan's registration may move it from its IMU prediction (the initial
+     *  guess): horizontally (m) and vertically (m), 0 leaving that part unbounded. A walking
+     *  robot's prediction over one scan is good to centimetres; a registration that jumps by
+     *  tenths of a metre between scans has slipped (a GrandTour HS run rose 0.63 m in 0.6 s on
+     *  stairs). A clamped scan is not added to the map, so the slip does not become the map. */
+    double registration_innovation_limit_xy = 0.0;
+    double registration_innovation_limit_z = 0.0;
 
     /** When positive, every scan interval while the sensor is still within this distance (m)
      *  of where it started, and whose IMU shows no rotation (mean gyro below
@@ -1181,6 +1202,8 @@ public:
    *  correction_m_sum / corrected_scan_count gives the mean applied correction (m). */
   std::size_t kinematic_gate_attempt_count = 0;
   std::size_t kinematic_gate_corrected_scan_count = 0;
+  /** Scans whose registration was bounded by registration_innovation_limit_xy / _z. */
+  std::size_t innovation_clamped_scan_count = 0;
   double kinematic_gate_correction_m_sum = 0.0;
 
   /** Soft kinematic velocity blend diagnostics. */
