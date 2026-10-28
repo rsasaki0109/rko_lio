@@ -937,11 +937,15 @@ void LIO::record_output_pose(const bool registered) {
   if (!(config.output_filter_position_sigma > 0.0)) return;
   const auto& [time, pose] = poses_with_timestamps.back();
   if (registered && _output_filter.initialized() && !_output_filter_held) {
+    if (config.output_filter_log) output_filter_events.push_back({'U', to_seconds(time), pose.translation()});
     const Eigen::Vector3d position = _output_filter.update(to_seconds(time), pose.translation());
     output_poses_with_timestamps.emplace_back(time, Sophus::SE3d(pose.so3(), position));
     return;
   }
   _output_filter.reset(to_seconds(time), pose.translation(), pose.so3() * lidar_state.velocity);
+  if (config.output_filter_log) {
+    output_filter_events.push_back({'R', to_seconds(time), pose.translation(), pose.so3() * lidar_state.velocity});
+  }
   output_poses_with_timestamps.push_back(poses_with_timestamps.back());
   if (_output_filter_resume) {
     // the filter starts here, propagated from now on with the gravity just estimated
@@ -1164,8 +1168,12 @@ void LIO::add_imu_measurement(const ImuControl& base_imu) {
   const Eigen::Vector3d local_gravity = imu_state.pose.so3().inverse() * _gravity_world;
   const Eigen::Vector3d compensated_accel = unbiased_accel + local_gravity;
   if (_output_filter.initialized()) {
-    _output_filter.propagate(to_seconds(base_imu.time),
-                             imu_state.pose.so3() * compensated_accel + _output_filter_gravity_correction);
+    const Eigen::Vector3d world_acceleration =
+        imu_state.pose.so3() * compensated_accel + _output_filter_gravity_correction;
+    if (config.output_filter_log) {
+      output_filter_events.push_back({'P', to_seconds(base_imu.time), world_acceleration});
+    }
+    _output_filter.propagate(to_seconds(base_imu.time), world_acceleration);
   }
 
   gyro_deskew_history.add(imu_state.time, base_imu.time, unbiased_ang_vel);

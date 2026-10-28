@@ -728,3 +728,49 @@ TEST_CASE("A moving start's gravity can go to the output filter alone", "[regist
   // the filtered output stays with the standing sensor
   REQUIRE((output_only.back().second.translation() - poses_only.back().second.translation()).norm() < 0.01);
 }
+
+TEST_CASE("The output filter's logged inputs replay its output", "[register_scan]") {
+  // A static start, then a sensor moving at constant velocity: the log changes no output, and an
+  // OutputPositionFilter fed with the logged events gives the filtered positions exactly.
+  const auto run = [](const bool log) {
+    LIO::Config config;
+    config.initialization_phase = true;
+    config.output_filter_position_sigma = 0.02;
+    config.output_filter_log = log;
+    LIO lio(config);
+    const auto cloud = make_hollow_cube();
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
+    for (int k = 2; k <= 20; ++k) {
+      const double t = 0.1 * k;
+      feed_static_imu(lio, t - 0.09, t, 10);
+      lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
+    }
+    return lio;
+  };
+  const LIO plain = run(false);
+  const LIO logged = run(true);
+  REQUIRE(plain.output_filter_events.empty());
+  REQUIRE(!logged.output_filter_events.empty());
+  REQUIRE(logged.output_poses_with_timestamps.size() == plain.output_poses_with_timestamps.size());
+  for (size_t i = 0; i < plain.output_poses_with_timestamps.size(); ++i) {
+    REQUIRE(logged.output_poses_with_timestamps[i].second.translation() ==
+            plain.output_poses_with_timestamps[i].second.translation());
+  }
+  rko_lio::core::OutputPositionFilter filter({0.02, logged.config.output_filter_acceleration_noise,
+                                               logged.config.output_filter_bias_noise});
+  std::vector<Eigen::Vector3d> replayed;
+  for (const auto& event : logged.output_filter_events) {
+    if (event.kind == 'P') {
+      filter.propagate(event.time, event.a);
+    } else if (event.kind == 'U') {
+      replayed.push_back(filter.update(event.time, event.a));
+    } else {
+      filter.reset(event.time, event.a, event.b);
+      replayed.push_back(event.a);
+    }
+  }
+  REQUIRE(replayed.size() == logged.output_poses_with_timestamps.size());
+  for (size_t i = 0; i < replayed.size(); ++i) {
+    REQUIRE(replayed[i] == logged.output_poses_with_timestamps[i].second.translation());
+  }
+}

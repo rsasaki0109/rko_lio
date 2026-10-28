@@ -865,6 +865,7 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "output_filter_acceleration_noise", lio_config.output_filter_acceleration_noise);
   lio_config.output_filter_bias_noise =
       node->declare_parameter<double>("output_filter_bias_noise", lio_config.output_filter_bias_noise);
+  lio_config.output_filter_log = node->declare_parameter<bool>("output_filter_log", lio_config.output_filter_log);
   lio_config.gravity_window_alignment =
       node->declare_parameter<bool>("gravity_window_alignment", lio_config.gravity_window_alignment);
   lio_config.gravity_window_sec = node->declare_parameter<double>("gravity_window_sec", lio_config.gravity_window_sec);
@@ -1894,6 +1895,17 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
              << quaternion.z() << " " << quaternion.w() << "\n";
       }
       std::cout << "Poses written to " << std::filesystem::absolute(output_file) << "\n";
+    }
+    if (lio->config.output_filter_log) {
+      // the output filter's inputs, for replaying it offline (output_filter_log)
+      if (std::ofstream file(output_dir / "output_filter_events.txt"); file.is_open()) {
+        file << std::setprecision(17);
+        for (const auto& event : lio->output_filter_events) {
+          file << event.kind << " " << event.time << " " << event.a.x() << " " << event.a.y() << " " << event.a.z();
+          if (event.kind == 'R') file << " " << event.b.x() << " " << event.b.y() << " " << event.b.z();
+          file << "\n";
+        }
+      }
     }
     // dump config
     const nlohmann::json json_config = {{"config", lio->config}};

@@ -443,6 +443,10 @@ public:
     double output_filter_acceleration_noise = 0.001;
     /** Random walk of the output filter's acceleration bias (m^2/s^5). */
     double output_filter_bias_noise = 1.0e-4;
+    /** Record the output filter's inputs in output_filter_events (IMU world accelerations,
+     *  registered positions, restarts), so the filter can be replayed offline with other settings.
+     *  Changes no output. */
+    bool output_filter_log = false;
 
     /** Hold a vehicle's speed while its registration stalls (see stall_guard.hpp). */
     bool vehicle_stall_guard = false;
@@ -1010,6 +1014,16 @@ public:
   /** The output trajectory when output_filter_position_sigma is set (the registered attitude and
    *  the filtered position, one entry per entry of poses_with_timestamps); empty otherwise. */
   std::vector<std::pair<Nsec, Sophus::SE3d>> output_poses_with_timestamps;
+  /** One input of the output filter (output_filter_log): 'P' propagate to `time` with world
+   *  acceleration `a`; 'U' update with the registered position `a`; 'R' restart at position `a`
+   *  with velocity `b`. */
+  struct OutputFilterEvent {
+    char kind = 'P';
+    double time = 0.0;
+    Eigen::Vector3d a = Eigen::Vector3d::Zero();
+    Eigen::Vector3d b = Eigen::Vector3d::Zero();
+  };
+  std::vector<OutputFilterEvent> output_filter_events;
 
   /** Base-frame state propagated from IMU measurements. Runs ahead of `lidar_state` between scans; reset to the
    *  optimized lidar pose after each successful registration. Used for gravity compensation and for publishing
