@@ -1018,13 +1018,15 @@ public:
    *  the filtered position, one entry per entry of poses_with_timestamps); empty otherwise. */
   std::vector<std::pair<Nsec, Sophus::SE3d>> output_poses_with_timestamps;
   /** One input of the output filter (output_filter_log): 'P' propagate to `time` with world
-   *  acceleration `a`; 'U' update with the registered position `a`; 'R' restart at position `a`
-   *  with velocity `b`. */
+   *  acceleration `a`; 'U' update with the registered position `a` (and `H`, the registration's
+   *  final Gauss-Newton Hessian, zero when the scan was not registered by ICP); 'R' restart at
+   *  position `a` with velocity `b`. */
   struct OutputFilterEvent {
     char kind = 'P';
     double time = 0.0;
     Eigen::Vector3d a = Eigen::Vector3d::Zero();
     Eigen::Vector3d b = Eigen::Vector3d::Zero();
+    Eigen::Matrix6d H = Eigen::Matrix6d::Zero();
   };
   std::vector<OutputFilterEvent> output_filter_events;
 

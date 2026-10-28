@@ -937,7 +937,11 @@ void LIO::record_output_pose(const bool registered) {
   if (!(config.output_filter_position_sigma > 0.0)) return;
   const auto& [time, pose] = poses_with_timestamps.back();
   if (registered && _output_filter.initialized() && !_output_filter_held) {
-    if (config.output_filter_log) output_filter_events.push_back({'U', to_seconds(time), pose.translation()});
+    if (config.output_filter_log) {
+      output_filter_events.push_back({'U', to_seconds(time), pose.translation(), Eigen::Vector3d::Zero(),
+                                      lidar_state.icp_diagnostics.has_value() ? lidar_state.icp_diagnostics->H
+                                                                              : Eigen::Matrix6d::Zero()});
+    }
     const Eigen::Vector3d position = _output_filter.update(to_seconds(time), pose.translation());
     output_poses_with_timestamps.emplace_back(time, Sophus::SE3d(pose.so3(), position));
     return;

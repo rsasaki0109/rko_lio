@@ -1908,6 +1908,11 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
         for (const auto& event : lio->output_filter_events) {
           file << event.kind << " " << event.time << " " << event.a.x() << " " << event.a.y() << " " << event.a.z();
           if (event.kind == 'R') file << " " << event.b.x() << " " << event.b.y() << " " << event.b.z();
+          if (event.kind == 'U') {
+            for (int i = 0; i < 6; ++i) {
+              for (int j = 0; j < 6; ++j) file << " " << event.H(i, j);
+            }
+          }
           file << "\n";
         }
       }
