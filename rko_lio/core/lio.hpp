@@ -443,6 +443,14 @@ public:
     double output_filter_acceleration_noise = 0.001;
     /** Random walk of the output filter's acceleration bias (m^2/s^5). */
     double output_filter_bias_noise = 1.0e-4;
+    /** Measurement noise of the output filter (MeasurementNoiseModel in output_position_filter.hpp):
+     *  "fixed" (output_filter_position_sigma in every direction), or "scalar", "shape" or
+     *  "marginal" from each scan's registration Hessian, with the exponent and the factor limits
+     *  below. */
+    std::string output_filter_measurement_noise = "fixed";
+    double output_filter_noise_exponent = 1.0;
+    double output_filter_noise_min_factor = 0.25;
+    double output_filter_noise_max_factor = 4.0;
     /** Record the output filter's inputs in output_filter_events (IMU world accelerations,
      *  registered positions, restarts), so the filter can be replayed offline with other settings.
      *  Changes no output. */
@@ -1347,6 +1355,7 @@ private:
   std::optional<double> _moving_start_time;
   std::vector<WorldSpecificForceInterval> _moving_start_intervals;
   OutputPositionFilter _output_filter;
+  MeasurementNoiseModel _output_noise_model;
   /** The output filter waits for the gravity of a moving start (output_filter_position_sigma). */
   bool _output_filter_held = false;
   /** The gravity has just been estimated again: the filter starts at the next recorded pose. */

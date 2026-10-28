@@ -871,6 +871,18 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   lio_config.output_filter_bias_noise =
       node->declare_parameter<double>("output_filter_bias_noise", lio_config.output_filter_bias_noise);
   lio_config.output_filter_log = node->declare_parameter<bool>("output_filter_log", lio_config.output_filter_log);
+  lio_config.output_filter_measurement_noise = node->declare_parameter<std::string>(
+      "output_filter_measurement_noise", lio_config.output_filter_measurement_noise);
+  lio_config.output_filter_noise_exponent =
+      node->declare_parameter<double>("output_filter_noise_exponent", lio_config.output_filter_noise_exponent);
+  lio_config.output_filter_noise_min_factor =
+      node->declare_parameter<double>("output_filter_noise_min_factor", lio_config.output_filter_noise_min_factor);
+  lio_config.output_filter_noise_max_factor =
+      node->declare_parameter<double>("output_filter_noise_max_factor", lio_config.output_filter_noise_max_factor);
+  if (lio_config.output_filter_measurement_noise != "fixed" && lio_config.output_filter_measurement_noise != "scalar" &&
+      lio_config.output_filter_measurement_noise != "shape" && lio_config.output_filter_measurement_noise != "marginal") {
+    throw std::invalid_argument("output_filter_measurement_noise must be fixed, scalar, shape or marginal");
+  }
   lio_config.gravity_window_alignment =
       node->declare_parameter<bool>("gravity_window_alignment", lio_config.gravity_window_alignment);
   lio_config.gravity_window_sec = node->declare_parameter<double>("gravity_window_sec", lio_config.gravity_window_sec);

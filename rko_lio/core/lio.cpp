@@ -747,6 +747,10 @@ LIO::LIO(const Config& config_)
       _photometric_features(config_.photometric_features) {
   _output_filter = OutputPositionFilter({config.output_filter_position_sigma, config.output_filter_acceleration_noise,
                                          config.output_filter_bias_noise});
+  _output_noise_model = MeasurementNoiseModel(config.output_filter_measurement_noise, config.output_filter_position_sigma,
+                                              config.output_filter_noise_exponent,
+                                              config.output_filter_noise_min_factor,
+                                              config.output_filter_noise_max_factor);
   // Per-voxel normals are only maintained when the localizability weighting can
   // consume them; the default path pays nothing.
   map.set_maintain_normals(config.localizability_weighting || config.scan_statistics ||
@@ -942,7 +946,13 @@ void LIO::record_output_pose(const bool registered) {
                                       lidar_state.icp_diagnostics.has_value() ? lidar_state.icp_diagnostics->H
                                                                               : Eigen::Matrix6d::Zero()});
     }
-    const Eigen::Vector3d position = _output_filter.update(to_seconds(time), pose.translation());
+    const Eigen::Vector3d position =
+        config.output_filter_measurement_noise == "fixed"
+            ? _output_filter.update(to_seconds(time), pose.translation())
+            : _output_filter.update(to_seconds(time), pose.translation(),
+                                    _output_noise_model.covariance(lidar_state.icp_diagnostics.has_value()
+                                                                       ? lidar_state.icp_diagnostics->H
+                                                                       : Eigen::Matrix6d::Zero()));
     output_poses_with_timestamps.emplace_back(time, Sophus::SE3d(pose.so3(), position));
     return;
   }
