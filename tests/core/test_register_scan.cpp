@@ -774,3 +774,40 @@ TEST_CASE("The output filter's logged inputs replay its output", "[register_scan
     REQUIRE(replayed[i] == logged.output_poses_with_timestamps[i].second.translation());
   }
 }
+
+TEST_CASE("The start standstill handling can be kept to moving starts", "[register_scan]") {
+  // The same standing robot after a static and after a walking start: with
+  // start_standstill_moving_start_only only the walking start counts standing intervals, and the
+  // static start runs as without start_standstill_radius.
+  const auto run = [](const bool moving_start, const double radius) {
+    LIO::Config config;
+    config.initialization_phase = true;
+    config.initialization_max_gyro_rad_s = 0.02;
+    config.start_standstill_radius = radius;
+    config.start_standstill_hold = true;
+    config.start_standstill_moving_start_only = true;
+    LIO lio(config);
+    const auto cloud = make_hollow_cube();
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
+    if (moving_start) {
+      feed_imu(lio, 0.11, 0.2, 10, {1.0, 0.0, GRAVITY_MAG}, {0.0, 0.0, 0.1});
+    } else {
+      feed_static_imu(lio, 0.11, 0.2, 10);
+    }
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.2));
+    for (int k = 3; k <= 8; ++k) {
+      const double t = 0.1 * k;
+      feed_imu(lio, t - 0.09, t, 10, {0.0, 0.0, GRAVITY_MAG}, {0.0, 0.0, 0.003});
+      lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
+    }
+    return std::make_pair(lio.start_standstill_count, lio.poses_with_timestamps);
+  };
+  REQUIRE(run(true, 1.0).first == 6);
+  const auto [count, poses] = run(false, 1.0);
+  REQUIRE(count == 0);
+  const auto [count_off, poses_off] = run(false, 0.0);
+  REQUIRE(poses.size() == poses_off.size());
+  for (size_t i = 0; i < poses.size(); ++i) {
+    REQUIRE(poses[i].second.translation() == poses_off[i].second.translation());
+  }
+}

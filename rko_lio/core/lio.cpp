@@ -1311,7 +1311,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   if (!_first_scan_time.has_value()) {
     _first_scan_time = current_lidar_time;
   }
-  if (config.start_standstill_radius > 0.0 && !initializing && !_left_start && interval_stats.imu_count > 1) {
+  if (config.start_standstill_radius > 0.0 && !initializing && !_left_start && interval_stats.imu_count > 1 &&
+      (_moving_start || !config.start_standstill_moving_start_only)) {
     if (lidar_state.pose.translation().norm() > config.start_standstill_radius ||
         to_seconds(current_lidar_time - *_first_scan_time) > config.start_standstill_max_sec) {
       _left_start = true;

@@ -853,6 +853,9 @@ public:
      *  leaves the biases at zero, and in a scene that does not constrain the horizontal (a
      *  flat snow field seen by a narrow-FOV LiDAR) the IMU then drifts while it stands. 0 off. */
     double start_standstill_radius = 0.0;
+    /** Apply start_standstill_radius (and all its handling) only after a moving start; a static
+     *  start then runs as without it. */
+    bool start_standstill_moving_start_only = false;
     double start_standstill_max_accel_std = 0.5;
     /** With start_standstill_radius: a standing-still interval also keeps the position (the scan
      *  is not registered: around a robot standing in an open field, people walking past can be
