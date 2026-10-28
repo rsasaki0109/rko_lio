@@ -59,16 +59,18 @@ namespace rko_lio::core {
 
 /** `registered` moved back toward `predicted` so that the horizontal distance is at most
  *  `limit_xy` and the vertical one at most `limit_z` (0: that part unbounded)
- *  (registration_innovation_limit_xy / _z). */
+ *  (registration_innovation_limit_xy / _z). A part within its limit is returned bit for bit
+ *  (predicted + (registered - predicted) can round off it). */
 inline Eigen::Vector3d clamp_innovation(const Eigen::Vector3d& registered,
                                         const Eigen::Vector3d& predicted,
                                         const double limit_xy,
                                         const double limit_z) {
-  Eigen::Vector3d d = registered - predicted;
+  const Eigen::Vector3d d = registered - predicted;
   const double dxy = d.head<2>().norm();
-  if (limit_xy > 0.0 && dxy > limit_xy) d.head<2>() *= limit_xy / dxy;
-  if (limit_z > 0.0 && std::abs(d.z()) > limit_z) d.z() = std::copysign(limit_z, d.z());
-  return predicted + d;
+  Eigen::Vector3d bounded = registered;
+  if (limit_xy > 0.0 && dxy > limit_xy) bounded.head<2>() = predicted.head<2>() + d.head<2>() * (limit_xy / dxy);
+  if (limit_z > 0.0 && std::abs(d.z()) > limit_z) bounded.z() = predicted.z() + std::copysign(limit_z, d.z());
+  return bounded;
 }
 
 /** `position` moved back onto the sphere of `radius` around `anchor` if it lies outside

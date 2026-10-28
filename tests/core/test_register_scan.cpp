@@ -818,6 +818,14 @@ TEST_CASE("A registration is kept within the innovation limits of its prediction
   // within the limits: unchanged
   REQUIRE(approx_equal(clamp_innovation(predicted + Eigen::Vector3d(0.03, 0.0, -0.04), predicted, 0.1, 0.05),
                        predicted + Eigen::Vector3d(0.03, 0.0, -0.04), 1e-12));
+  // bit for bit, also where going through the prediction would round (near the origin)
+  const Eigen::Vector3d near_origin(0.0047, 0.0013, -0.0022);
+  REQUIRE(clamp_innovation(near_origin, Eigen::Vector3d(0.0012, -0.0031, 0.0005), 0.1, 0.05) == near_origin);
+  // a part within its limit stays bit for bit while the other is cut
+  const Eigen::Vector3d high =
+      clamp_innovation(Eigen::Vector3d(0.0047, 0.0013, 0.6), Eigen::Vector3d(0.0012, -0.0031, 0.0005), 0.1, 0.05);
+  REQUIRE(high.head<2>() == Eigen::Vector2d(0.0047, 0.0013));
+  REQUIRE_THAT(high.z(), Catch::Matchers::WithinAbs(0.0505, 1e-12));
   // a vertical jump is cut to the vertical limit, the horizontal part kept
   REQUIRE(approx_equal(clamp_innovation(predicted + Eigen::Vector3d(0.03, 0.0, 0.6), predicted, 0.1, 0.05),
                        predicted + Eigen::Vector3d(0.03, 0.0, 0.05), 1e-12));
