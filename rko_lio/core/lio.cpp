@@ -1310,14 +1310,25 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       if (mean_gyro.norm() < max_gyro &&
           accel_std < config.start_standstill_max_accel_std) {
         const Eigen::Vector3d mean_accel = interval_stats.imu_acceleration_sum / n + imu_bias.accelerometer;
-        imu_bias.gyroscope = mean_gyro;
+        const double interval = to_seconds(current_lidar_time - lidar_state.time);
+        const bool update_bias = config.start_standstill_bias != "none";
+        if (config.start_standstill_bias == "average") {
+          _standstill_duration += interval;
+          _standstill_gyro_sum += interval * mean_gyro;
+          imu_bias.gyroscope = _standstill_gyro_sum / _standstill_duration;
+        } else if (update_bias) {
+          imu_bias.gyroscope = mean_gyro;
+        }
         if (_start_level_pending) {
           // Standing after a moving start: the mean specific force is gravity, seen in the
           // (tilted) frame; collect it instead of taking the tilt for an accelerometer bias.
-          const double duration = to_seconds(current_lidar_time - lidar_state.time);
-          _start_level_force_sum += duration * (lidar_state.pose.so3() * mean_accel);
-          _start_level_duration += duration;
-        } else {
+          _start_level_force_sum += interval * (lidar_state.pose.so3() * mean_accel);
+          _start_level_duration += interval;
+        } else if (config.start_standstill_bias == "average") {
+          _standstill_accel_duration += interval;
+          _standstill_accel_bias_sum += interval * (mean_accel + lidar_state.pose.so3().inverse() * _gravity_world);
+          imu_bias.accelerometer = _standstill_accel_bias_sum / _standstill_accel_duration;
+        } else if (update_bias) {
           imu_bias.accelerometer = mean_accel + lidar_state.pose.so3().inverse() * _gravity_world;
         }
         lidar_state.velocity.setZero();

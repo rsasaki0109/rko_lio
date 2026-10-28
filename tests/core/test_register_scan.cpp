@@ -550,3 +550,30 @@ TEST_CASE("A static start is not levelled again", "[register_scan]") {
   }
   REQUIRE(lio.start_level_tilt_deg == 0.0);
 }
+
+TEST_CASE("Standing intervals set the gyro bias per interval, as their average, or not at all", "[register_scan]") {
+  // A static start, then a robot that sways while it stands: the intervals' mean rates
+  // alternate between +4 and -4 mrad/s about z (a tactical-grade gyro's bias is far smaller).
+  const auto run = [](const std::string& mode) {
+    LIO::Config config;
+    config.initialization_phase = true;
+    config.initialization_max_gyro_rad_s = 0.02;
+    config.start_standstill_radius = 1.0;
+    config.start_standstill_bias = mode;
+    LIO lio(config);
+    const auto cloud = make_hollow_cube();
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
+    feed_static_imu(lio, 0.11, 0.2, 10);
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.2));
+    for (int k = 3; k <= 11; ++k) {
+      const double t = 0.1 * k;
+      const double rate = (k % 2 == 0 ? 1.0 : -1.0) * 0.004;
+      feed_imu(lio, t - 0.09, t, 10, {0.0, 0.0, GRAVITY_MAG}, {0.0, 0.0, rate});
+      lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
+    }
+    return lio.imu_bias.gyroscope.z();
+  };
+  REQUIRE_THAT(run("interval"), WithinAbs(-0.004, 1e-6)); // the last interval's mean
+  REQUIRE(std::abs(run("average")) < 0.0006);              // nine intervals: +4, -4, ..., -4 mrad/s
+  REQUIRE_THAT(run("none"), WithinAbs(0.0, 1e-9));         // the static start's bias stays
+}

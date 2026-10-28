@@ -851,6 +851,12 @@ public:
      *  tilt). The sensor has not moved, so the trajectory stays continuous; the output filter
      *  (output_filter_position_sigma) starts once the frame is level. */
     double start_standstill_level_sec = 0.0;
+    /** How a standing interval near the start sets the IMU biases: "interval" (each interval
+     *  replaces them with its own means; the default), "average" (the mean over every standing
+     *  interval so far: a legged robot sways while it stands, and one 0.1-s interval takes the
+     *  sway for a gyro bias of several mrad/s, far above a tactical-grade IMU's), or "none"
+     *  (the biases are left as they are; the velocity is still held at zero). */
+    std::string start_standstill_bias = "interval";
     /** When positive, a close scan whose registration with the close-scene settings leaves
      *  fewer than this fraction of its keypoints within their correspondence cap is
      *  registered again: first with the base settings, then with the close-scene settings
@@ -1290,6 +1296,11 @@ private:
   bool _output_filter_resume = false;
   /** start_standstill_level_sec: a moving start waits for its standing intervals. */
   bool _start_level_pending = false;
+  /** start_standstill_bias "average": sums over the standing intervals near the start. */
+  Eigen::Vector3d _standstill_gyro_sum = Eigen::Vector3d::Zero();
+  Eigen::Vector3d _standstill_accel_bias_sum = Eigen::Vector3d::Zero();
+  double _standstill_duration = 0.0;
+  double _standstill_accel_duration = 0.0;
   Eigen::Vector3d _start_level_force_sum = Eigen::Vector3d::Zero();
   double _start_level_duration = 0.0;
   /** Level the world frame with the standing intervals' mean specific force and start the maps
