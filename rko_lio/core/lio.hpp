@@ -1026,8 +1026,9 @@ public:
    *  the filtered position, one entry per entry of poses_with_timestamps); empty otherwise. */
   std::vector<std::pair<Nsec, Sophus::SE3d>> output_poses_with_timestamps;
   /** One input of the output filter (output_filter_log): 'P' propagate to `time` with world
-   *  acceleration `a`; 'U' update with the registered position `a` (and `H`, the registration's
-   *  final Gauss-Newton Hessian, zero when the scan was not registered by ICP); 'R' restart at
+   *  acceleration `a`; 'U' update with the registered position `a` (with `b` the position the
+   *  scan's registration started from, the IMU prediction, and `H` the registration's final
+   *  Gauss-Newton Hessian, zero when the scan was not registered by ICP); 'R' restart at
    *  position `a` with velocity `b`. */
   struct OutputFilterEvent {
     char kind = 'P';
@@ -1291,6 +1292,8 @@ private:
    *  registered (set by the extrinsic overload of register_scan). */
   PhotometricFeatureManager _photometric_features;
   Sophus::SE3d _photometric_base_from_cloud;
+  /** The current scan's initial guess (the IMU prediction), for output_filter_log. */
+  Eigen::Vector3d _scan_predicted_position = Eigen::Vector3d::Zero();
 
   /** Same idea as _previous_intensity_profile but for the Hessian-gate-free intensity
    *  velocity-disagreement gate: anchored to the axis/origin chosen from the *previous*

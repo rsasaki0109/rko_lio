@@ -942,7 +942,7 @@ void LIO::record_output_pose(const bool registered) {
   const auto& [time, pose] = poses_with_timestamps.back();
   if (registered && _output_filter.initialized() && !_output_filter_held) {
     if (config.output_filter_log) {
-      output_filter_events.push_back({'U', to_seconds(time), pose.translation(), Eigen::Vector3d::Zero(),
+      output_filter_events.push_back({'U', to_seconds(time), pose.translation(), _scan_predicted_position,
                                       lidar_state.icp_diagnostics.has_value() ? lidar_state.icp_diagnostics->H
                                                                               : Eigen::Matrix6d::Zero()});
     }
@@ -1398,6 +1398,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   };
 
   const Sophus::SE3d initial_guess = predict_pose_at(current_lidar_time);
+  _scan_predicted_position = initial_guess.translation();
 
   // Photometric frame: the organized scan as a filtered intensity image, with the deskew
   // transform of every point so a deskewed point maps back to the pixel it was captured at.
