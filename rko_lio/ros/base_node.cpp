@@ -857,6 +857,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("initialization_max_gyro_rad_s", lio_config.initialization_max_gyro_rad_s);
   lio_config.moving_start_gravity_window_sec = node->declare_parameter<double>(
       "moving_start_gravity_window_sec", lio_config.moving_start_gravity_window_sec);
+  lio_config.moving_start_gravity_output_only = node->declare_parameter<bool>(
+      "moving_start_gravity_output_only", lio_config.moving_start_gravity_output_only);
   lio_config.output_filter_position_sigma =
       node->declare_parameter<double>("output_filter_position_sigma", lio_config.output_filter_position_sigma);
   lio_config.output_filter_acceleration_noise = node->declare_parameter<double>(

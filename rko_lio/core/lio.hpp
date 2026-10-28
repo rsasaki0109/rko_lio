@@ -428,6 +428,11 @@ public:
      *  16 deg from level). The frame and the map are kept, so the trajectory stays continuous;
      *  only the gravity vector the filter, the propagation and the regularization use changes. */
     double moving_start_gravity_window_sec = 0.0;
+    /** Give the gravity of moving_start_gravity_window_sec to the output filter only: the
+     *  registration, the propagation and the regularization keep the initial gravity (and so give
+     *  the same trajectory as without the window), and the filter's IMU acceleration takes the
+     *  estimate, so that the output is filtered after a moving start as well. */
+    bool moving_start_gravity_output_only = false;
     /** Filter the output positions (published odometry, dumped trajectory) with the IMU between
      *  scans: registered position noise in m (0: off; see output_position_filter.hpp). The
      *  registration chain and the map are unchanged. Its prediction needs the gravity direction:
@@ -1316,6 +1321,9 @@ private:
   bool _bump_point_to_point_started = false;
   /** World-frame gravity (m/s^2): gravity() unless moving_start_gravity_window_sec re-estimated it. */
   Eigen::Vector3d _gravity_world = gravity();
+  /** Added to the output filter's world acceleration: the estimated gravity less _gravity_world
+   *  (moving_start_gravity_output_only), zero otherwise. */
+  Eigen::Vector3d _output_filter_gravity_correction = Eigen::Vector3d::Zero();
   /** Initialization time (s) of a moving start while its gravity window is being collected. */
   std::optional<double> _moving_start_time;
   std::vector<WorldSpecificForceInterval> _moving_start_intervals;

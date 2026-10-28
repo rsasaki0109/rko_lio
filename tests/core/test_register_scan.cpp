@@ -680,3 +680,51 @@ TEST_CASE("Standing intervals can set the gyro bias alone", "[register_scan]") {
   REQUIRE_THAT(gyro_without, WithinAbs(0.003, 1e-9));
   REQUIRE(approx_equal(accel_without, initial_without, 1e-12));
 }
+
+TEST_CASE("A moving start's gravity can go to the output filter alone", "[register_scan]") {
+  // The sensor stands tilted by 10 deg of roll after a walking first interval, so the initial
+  // gravity is off. With moving_start_gravity_output_only the window's estimate reaches only the
+  // output filter: the registered poses are those of a run without the window.
+  const auto run = [](const double window_sec, const bool output_only) {
+    LIO::Config config;
+    config.initialization_phase = true;
+    config.initialization_max_gyro_rad_s = 0.02;
+    config.moving_start_gravity_window_sec = window_sec;
+    config.moving_start_gravity_output_only = output_only;
+    config.output_filter_position_sigma = 0.02;
+    LIO lio(config);
+    const auto cloud = make_hollow_cube();
+    const Sophus::SO3d true_attitude = Sophus::SO3d::exp(Eigen::Vector3d(10.0 * M_PI / 180.0, 0.0, 0.0));
+    const Eigen::Vector3d standing_force = true_attitude.inverse() * Eigen::Vector3d(0.0, 0.0, GRAVITY_MAG);
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
+    feed_imu(lio, 0.11, 0.2, 10, standing_force + Eigen::Vector3d(2.0, 0.0, 0.0), {0.0, 0.0, 0.1});
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.2));
+    for (int k = 3; k <= 35; ++k) {
+      const double t = 0.1 * k;
+      feed_imu(lio, t - 0.09, t, 10, standing_force, Eigen::Vector3d::Zero());
+      lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
+    }
+    return std::make_tuple(lio.poses_with_timestamps, lio.output_poses_with_timestamps, lio.moving_start_gravity_tilt_deg);
+  };
+  const auto [poses_off, output_off, tilt_off] = run(0.0, false);
+  const auto [poses_only, output_only, tilt_only] = run(1.0, true);
+  REQUIRE(tilt_off == 0.0);
+  REQUIRE(tilt_only > 5.0); // estimated
+  REQUIRE(poses_only.size() == poses_off.size());
+  for (size_t i = 0; i < poses_off.size(); ++i) {
+    REQUIRE(poses_only[i].second.translation() == poses_off[i].second.translation());
+  }
+  // without the window the output after a moving start is the registration's; with it, the
+  // filter runs once the gravity is estimated
+  for (size_t i = 0; i < poses_off.size(); ++i) {
+    REQUIRE(output_off[i].second.translation() == poses_off[i].second.translation());
+  }
+  REQUIRE(output_only.size() == poses_only.size());
+  bool filtered = false;
+  for (size_t i = 0; i < poses_only.size(); ++i) {
+    filtered = filtered || output_only[i].second.translation() != poses_only[i].second.translation();
+  }
+  REQUIRE(filtered);
+  // the filtered output stays with the standing sensor
+  REQUIRE((output_only.back().second.translation() - poses_only.back().second.translation()).norm() < 0.01);
+}

@@ -990,7 +990,12 @@ void LIO::update_moving_start_gravity(const Nsec& current_lidar_time, const Soph
               << "; the initial gravity is kept.\n";
     return;
   }
-  _gravity_world = -GRAVITY_MAG * up->normalized();
+  const Eigen::Vector3d gravity_estimate = -GRAVITY_MAG * up->normalized();
+  if (config.moving_start_gravity_output_only) {
+    _output_filter_gravity_correction = gravity_estimate - _gravity_world;
+  } else {
+    _gravity_world = gravity_estimate;
+  }
   _output_filter_resume = true;
   moving_start_gravity_tilt_deg = std::acos(std::clamp(up->normalized().z(), -1.0, 1.0)) * 180.0 / M_PI;
   std::cout << "[INFO] Moving start: gravity estimated again from " << config.moving_start_gravity_window_sec
@@ -1159,7 +1164,8 @@ void LIO::add_imu_measurement(const ImuControl& base_imu) {
   const Eigen::Vector3d local_gravity = imu_state.pose.so3().inverse() * _gravity_world;
   const Eigen::Vector3d compensated_accel = unbiased_accel + local_gravity;
   if (_output_filter.initialized()) {
-    _output_filter.propagate(to_seconds(base_imu.time), imu_state.pose.so3() * compensated_accel);
+    _output_filter.propagate(to_seconds(base_imu.time),
+                             imu_state.pose.so3() * compensated_accel + _output_filter_gravity_correction);
   }
 
   gyro_deskew_history.add(imu_state.time, base_imu.time, unbiased_ang_vel);
