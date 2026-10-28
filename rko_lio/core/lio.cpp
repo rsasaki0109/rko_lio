@@ -817,6 +817,7 @@ void LIO::initialize(const Nsec lidar_time) {
     imu_bias.gyroscope.setZero();
     std::cout << "[INFO] Moving start (gyro " << avg_gyro.norm() << " rad/s): IMU biases left at zero.\n";
     _output_filter_held = true;
+    _moving_start = true;
     if (config.start_standstill_level_sec > 0.0) {
       _start_level_pending = true;
     }
@@ -1311,8 +1312,9 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           accel_std < config.start_standstill_max_accel_std) {
         const Eigen::Vector3d mean_accel = interval_stats.imu_acceleration_sum / n + imu_bias.accelerometer;
         const double interval = to_seconds(current_lidar_time - lidar_state.time);
-        const bool update_bias = config.start_standstill_bias != "none";
-        if (config.start_standstill_bias == "average") {
+        const bool update_bias = config.start_standstill_bias != "none" &&
+                                 !(config.start_standstill_bias_static_only && _moving_start);
+        if (config.start_standstill_bias == "average" && update_bias) {
           _standstill_duration += interval;
           _standstill_gyro_sum += interval * mean_gyro;
           imu_bias.gyroscope = _standstill_gyro_sum / _standstill_duration;
@@ -1324,7 +1326,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           // (tilted) frame; collect it instead of taking the tilt for an accelerometer bias.
           _start_level_force_sum += interval * (lidar_state.pose.so3() * mean_accel);
           _start_level_duration += interval;
-        } else if (config.start_standstill_bias == "average") {
+        } else if (config.start_standstill_bias == "average" && update_bias) {
           _standstill_accel_duration += interval;
           _standstill_accel_bias_sum += interval * (mean_accel + lidar_state.pose.so3().inverse() * _gravity_world);
           imu_bias.accelerometer = _standstill_accel_bias_sum / _standstill_accel_duration;

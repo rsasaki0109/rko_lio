@@ -876,6 +876,11 @@ public:
      *  sway for a gyro bias of several mrad/s, far above a tactical-grade IMU's), or "none"
      *  (the biases are left as they are; the velocity is still held at zero). */
     std::string start_standstill_bias = "interval";
+    /** Apply start_standstill_bias only after a static start; after a moving start the standing
+     *  intervals leave the biases as they are (its frame is tilted by the walking initialization,
+     *  and the bias update would take that tilt for an accelerometer bias in the body frame, wrong
+     *  once the robot turns). */
+    bool start_standstill_bias_static_only = false;
     /** When positive, a close scan whose registration with the close-scene settings leaves
      *  fewer than this fraction of its keypoints within their correspondence cap is
      *  registered again: first with the base settings, then with the close-scene settings
@@ -1313,6 +1318,8 @@ private:
   bool _output_filter_held = false;
   /** The gravity has just been estimated again: the filter starts at the next recorded pose. */
   bool _output_filter_resume = false;
+  /** The initialization interval was a moving start (initialization_max_gyro_rad_s). */
+  bool _moving_start = false;
   /** start_standstill_level_sec: a moving start waits for its standing intervals. */
   bool _start_level_pending = false;
   /** Where the robot started standing (start_standstill_hold_radius); reset when it moves. */

@@ -615,3 +615,34 @@ TEST_CASE("A standing position is clamped to the hold radius", "[register_scan]"
   // radius 0 keeps the anchor
   REQUIRE(approx_equal(clamp_to_radius(anchor + Eigen::Vector3d(0.3, 0.4, 0.0), anchor, 0.0), anchor, 1e-12));
 }
+
+TEST_CASE("Standing intervals after a moving start can leave the biases alone", "[register_scan]") {
+  // The same standing robot, after a static and after a walking start: with
+  // start_standstill_bias_static_only only the static start's biases follow the standing intervals.
+  const auto gyro_bias = [](const bool moving_start) {
+    LIO::Config config;
+    config.initialization_phase = true;
+    config.initialization_max_gyro_rad_s = 0.02;
+    config.start_standstill_radius = 1.0;
+    config.start_standstill_bias = "average";
+    config.start_standstill_bias_static_only = true;
+    LIO lio(config);
+    const auto cloud = make_hollow_cube();
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
+    if (moving_start) {
+      feed_imu(lio, 0.11, 0.2, 10, {1.0, 0.0, GRAVITY_MAG}, {0.0, 0.0, 0.1});
+    } else {
+      feed_static_imu(lio, 0.11, 0.2, 10);
+    }
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.2));
+    for (int k = 3; k <= 8; ++k) {
+      const double t = 0.1 * k;
+      feed_imu(lio, t - 0.09, t, 10, {0.0, 0.0, GRAVITY_MAG}, {0.0, 0.0, 0.003});
+      lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
+    }
+    REQUIRE(lio.start_standstill_count == 6);
+    return lio.imu_bias.gyroscope.z();
+  };
+  REQUIRE_THAT(gyro_bias(false), WithinAbs(0.003, 1e-9)); // the average of the standing intervals
+  REQUIRE_THAT(gyro_bias(true), WithinAbs(0.0, 1e-12));   // a moving start leaves them at zero
+}
