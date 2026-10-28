@@ -1334,9 +1334,14 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         lidar_state.velocity.setZero();
         _standstill_this_scan = true;
         ++start_standstill_count;
+        if (!_standstill_anchor.has_value()) {
+          _standstill_anchor = lidar_state.pose.translation();
+        }
         if (_start_level_pending && _start_level_duration >= config.start_standstill_level_sec) {
           level_start_frame();
         }
+      } else {
+        _standstill_anchor.reset();
       }
     }
   }
@@ -1565,6 +1570,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   bool kinematic_gate_corrected_this_scan = false;
   bool kinematic_blend_suppress_map_update_this_scan = false;
   bool registration_skipped_this_scan = false;
+  bool standstill_clamped_this_scan = false;
   bool inertial_window_added = false;
   double kinematic_blend_map_update_fraction_this_scan = 1.0;
 
@@ -1674,7 +1680,10 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         bump_terms = BumpTerms{&bump_map, &bump_points, config.bump_image_huber_delta, point_to_point_weight,
                                config.bump_image_vertical_from_point_to_point};
       }
-      const bool standstill_held = config.start_standstill_hold && _standstill_this_scan;
+      const bool standstill_held =
+          config.start_standstill_hold && _standstill_this_scan && !(config.start_standstill_hold_radius > 0.0);
+      standstill_clamped_this_scan =
+          config.start_standstill_hold && _standstill_this_scan && config.start_standstill_hold_radius > 0.0;
       registration_skipped_this_scan = (config.skip_registration_after_gap_sec > 0.0 &&
                                         to_seconds(current_lidar_time - lidar_state.time) >
                                             config.skip_registration_after_gap_sec) ||
@@ -1753,6 +1762,10 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                                                std::max(1, icp_result.weighting_stats.correspondences);
       }
       optimized_pose = icp_result.pose;
+      if (standstill_clamped_this_scan && _standstill_anchor.has_value()) {
+        optimized_pose.translation() =
+            clamp_to_radius(optimized_pose.translation(), *_standstill_anchor, config.start_standstill_hold_radius);
+      }
       icp_H = icp_result.H;
       icp_b = icp_result.b;
       degeneracy_intervention_count = icp_result.degeneracy_intervention_count;
@@ -2853,7 +2866,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     ++map_update_skipped_count;
   }
   if (!(kinematic_gate_corrected_this_scan && config.kinematic_gate_skip_map_update) &&
-      !kinematic_blend_suppress_map_update_this_scan && !registration_skipped_this_scan && !standing_still) {
+      !kinematic_blend_suppress_map_update_this_scan && !registration_skipped_this_scan && !standing_still &&
+      !standstill_clamped_this_scan) {
     if (kinematic_blend_map_update_fraction_this_scan >= 1.0) {
       update_maps(map_input, lidar_state.pose, &preproc_result.filtered_frame);
     } else {

@@ -45,6 +45,7 @@
 #include "stall_guard.hpp"
 #include "voxel_hash_map.hpp"
 #include "util.hpp"
+#include <algorithm>
 #include <array>
 #include <deque>
 #include <tuple>
@@ -55,6 +56,17 @@
 
 /** Core namespace containing LIO data structures and state definitions. */
 namespace rko_lio::core {
+
+/** `position` moved back onto the sphere of `radius` around `anchor` if it lies outside
+ *  (start_standstill_hold_radius). */
+inline Eigen::Vector3d clamp_to_radius(const Eigen::Vector3d& position,
+                                       const Eigen::Vector3d& anchor,
+                                       const double radius) {
+  const Eigen::Vector3d offset = position - anchor;
+  const double distance = offset.norm();
+  if (distance <= radius) return position;
+  return anchor + offset * (std::max(radius, 0.0) / distance);
+}
 
 struct VisualPosePrior {
   Nsec time{0};
@@ -838,6 +850,12 @@ public:
      *  the only things that constrain the horizontal, and the registration follows them); the
      *  attitude follows the gyro. */
     bool start_standstill_hold = false;
+    /** With start_standstill_hold: 0 keeps the position of a standing interval; a positive radius
+     *  (m) registers the scan and keeps the position within this distance of where the robot
+     *  started standing (a legged robot shifts by a few centimetres while it stands, which a
+     *  well-constrained registration follows; people walking past pull it further). Standing scans
+     *  are not added to the map either way. */
+    double start_standstill_hold_radius = 0.0;
     /** Mean gyro rate (rad/s) below which an interval counts as standing still (0: use
      *  initialization_max_gyro_rad_s). */
     double start_standstill_max_gyro_rad_s = 0.0;
@@ -1297,6 +1315,8 @@ private:
   bool _output_filter_resume = false;
   /** start_standstill_level_sec: a moving start waits for its standing intervals. */
   bool _start_level_pending = false;
+  /** Where the robot started standing (start_standstill_hold_radius); reset when it moves. */
+  std::optional<Eigen::Vector3d> _standstill_anchor;
   /** start_standstill_bias "average": sums over the standing intervals near the start. */
   Eigen::Vector3d _standstill_gyro_sum = Eigen::Vector3d::Zero();
   Eigen::Vector3d _standstill_accel_bias_sum = Eigen::Vector3d::Zero();

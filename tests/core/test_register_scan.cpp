@@ -603,3 +603,15 @@ TEST_CASE("A held standing scan keeps its position in a tilted frame", "[registe
   REQUIRE(lio.start_standstill_count == 10);
   REQUIRE((lio.lidar_state.pose.translation() - start).norm() < 1e-9);
 }
+
+TEST_CASE("A standing position is clamped to the hold radius", "[register_scan]") {
+  using rko_lio::core::clamp_to_radius;
+  const Eigen::Vector3d anchor(1.0, 2.0, 3.0);
+  // inside: unchanged; outside: pulled back onto the sphere along the same direction
+  REQUIRE(approx_equal(clamp_to_radius(anchor + Eigen::Vector3d(0.02, 0.0, 0.0), anchor, 0.05),
+                       anchor + Eigen::Vector3d(0.02, 0.0, 0.0), 1e-12));
+  REQUIRE(approx_equal(clamp_to_radius(anchor + Eigen::Vector3d(0.3, 0.4, 0.0), anchor, 0.05),
+                       anchor + Eigen::Vector3d(0.03, 0.04, 0.0), 1e-12));
+  // radius 0 keeps the anchor
+  REQUIRE(approx_equal(clamp_to_radius(anchor + Eigen::Vector3d(0.3, 0.4, 0.0), anchor, 0.0), anchor, 1e-12));
+}
