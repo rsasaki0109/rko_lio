@@ -842,6 +842,15 @@ public:
     double start_standstill_max_gyro_rad_s = 0.0;
     /** The standstill handling ends this long (s) after the first scan, whatever the IMU says. */
     double start_standstill_max_sec = 60.0;
+    /** After a moving start (initialization_max_gyro_rad_s), once the standing-still intervals
+     *  near the start (start_standstill_radius) add up to this long (s), level the world frame
+     *  with their mean specific force and start the maps again where the sensor stands (0: off).
+     *  The first interval of a walking start holds the gait's acceleration and leaves the frame
+     *  tilted (a GrandTour mission: 16 deg); a standing robot measures gravity alone. Until then
+     *  the standing intervals do not re-estimate the accelerometer bias (it would absorb the
+     *  tilt). The sensor has not moved, so the trajectory stays continuous; the output filter
+     *  (output_filter_position_sigma) starts once the frame is level. */
+    double start_standstill_level_sec = 0.0;
     /** When positive, a close scan whose registration with the close-scene settings leaves
      *  fewer than this fraction of its keypoints within their correspondence cap is
      *  registered again: first with the base settings, then with the close-scene settings
@@ -1060,6 +1069,8 @@ public:
   /** Angle (deg) between the re-estimated gravity and the initial world z
    *  (moving_start_gravity_window_sec); 0 until it is estimated. */
   double moving_start_gravity_tilt_deg = 0.0;
+  /** Tilt (deg) removed by start_standstill_level_sec; 0 until the frame is levelled. */
+  double start_level_tilt_deg = 0.0;
 
   /** Diagnostic-only counters for the intensity-vs-ICP velocity disagreement gate: how many
    *  scans had a stored previous profile to correlate against, how many of those produced a
@@ -1277,6 +1288,13 @@ private:
   bool _output_filter_held = false;
   /** The gravity has just been estimated again: the filter starts at the next recorded pose. */
   bool _output_filter_resume = false;
+  /** start_standstill_level_sec: a moving start waits for its standing intervals. */
+  bool _start_level_pending = false;
+  Eigen::Vector3d _start_level_force_sum = Eigen::Vector3d::Zero();
+  double _start_level_duration = 0.0;
+  /** Level the world frame with the standing intervals' mean specific force and start the maps
+   *  again at the current pose (start_standstill_level_sec). */
+  void level_start_frame();
   /** Append the pose just recorded in poses_with_timestamps to output_poses_with_timestamps:
    *  filtered after a registration, otherwise the filter starts again at it. */
   void record_output_pose(bool registered);

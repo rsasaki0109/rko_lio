@@ -817,6 +817,9 @@ void LIO::initialize(const Nsec lidar_time) {
     imu_bias.gyroscope.setZero();
     std::cout << "[INFO] Moving start (gyro " << avg_gyro.norm() << " rad/s): IMU biases left at zero.\n";
     _output_filter_held = true;
+    if (config.start_standstill_level_sec > 0.0) {
+      _start_level_pending = true;
+    }
     if (config.moving_start_gravity_window_sec > 0.0) {
       _moving_start_time = to_seconds(lidar_time);
     }
@@ -900,6 +903,33 @@ void LIO::relevel_local_frame(const Sophus::SO3d& correction, const Eigen::Vecto
   for (auto& [_, world_accel] : _gravity_alignment_window) {
     world_accel = correction * world_accel;
   }
+}
+
+void LIO::level_start_frame() {
+  _start_level_pending = false;
+  const Eigen::Vector3d mean_force = _start_level_force_sum / _start_level_duration;
+  const GravityAlignmentCorrection alignment =
+      compute_gravity_alignment_correction(mean_force, GRAVITY_MAG, 0.05, 1.0, M_PI, M_PI);
+  if (!alignment.valid) {
+    std::cout << "[WARNING] Standing start: mean specific force " << mean_force.norm()
+              << " m/s2 is not gravity; the frame is kept.\n";
+    return;
+  }
+  // Rotate the state about where the sensor stands, so the trajectory stays continuous, and
+  // start the maps again in the level frame (the next scan is added without registration).
+  const Eigen::Vector3d pivot = lidar_state.pose.translation();
+  const Sophus::SE3d transform(alignment.correction, pivot - alignment.correction * pivot);
+  lidar_state.pose = transform * lidar_state.pose;
+  imu_state.pose = transform * imu_state.pose;
+  map.clear();
+  bump_map.clear();
+  _inertial_window.reset();
+  _gravity_alignment_window.clear();
+  _last_map_update_position.reset();
+  start_level_tilt_deg = alignment.tilt_rad * 180.0 / M_PI;
+  _output_filter_resume = true;
+  std::cout << "[INFO] Standing start: world frame levelled by " << start_level_tilt_deg << " deg after "
+            << _start_level_duration << " s standing; maps started again.\n";
 }
 
 void LIO::record_output_pose(const bool registered) {
@@ -1281,10 +1311,21 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           accel_std < config.start_standstill_max_accel_std) {
         const Eigen::Vector3d mean_accel = interval_stats.imu_acceleration_sum / n + imu_bias.accelerometer;
         imu_bias.gyroscope = mean_gyro;
-        imu_bias.accelerometer = mean_accel + lidar_state.pose.so3().inverse() * _gravity_world;
+        if (_start_level_pending) {
+          // Standing after a moving start: the mean specific force is gravity, seen in the
+          // (tilted) frame; collect it instead of taking the tilt for an accelerometer bias.
+          const double duration = to_seconds(current_lidar_time - lidar_state.time);
+          _start_level_force_sum += duration * (lidar_state.pose.so3() * mean_accel);
+          _start_level_duration += duration;
+        } else {
+          imu_bias.accelerometer = mean_accel + lidar_state.pose.so3().inverse() * _gravity_world;
+        }
         lidar_state.velocity.setZero();
         _standstill_this_scan = true;
         ++start_standstill_count;
+        if (_start_level_pending && _start_level_duration >= config.start_standstill_level_sec) {
+          level_start_frame();
+        }
       }
     }
   }

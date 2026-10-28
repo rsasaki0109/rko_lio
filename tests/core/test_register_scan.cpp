@@ -503,3 +503,50 @@ TEST_CASE("Point-to-point terms wait for the start distance", "[register_scan]")
   REQUIRE(waiting.translation() == bump_alone.translation());
   REQUIRE(waiting.so3().unit_quaternion().coeffs() == bump_alone.so3().unit_quaternion().coeffs());
 }
+
+TEST_CASE("A walking start is levelled once the robot stands", "[register_scan]") {
+  // The sensor is tilted by 10 deg of roll. The first interval holds the gait's acceleration
+  // and some rotation (a moving start), so the initial attitude is off; then the robot stands.
+  LIO::Config config;
+  config.initialization_phase = true;
+  config.initialization_max_gyro_rad_s = 0.02;
+  config.start_standstill_radius = 1.0;
+  config.start_standstill_level_sec = 0.5;
+  LIO lio(config);
+  const auto cloud = make_hollow_cube();
+  const Sophus::SO3d true_attitude = Sophus::SO3d::exp(Eigen::Vector3d(10.0 * M_PI / 180.0, 0.0, 0.0));
+  const Eigen::Vector3d standing_force = true_attitude.inverse() * Eigen::Vector3d(0.0, 0.0, GRAVITY_MAG);
+  lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
+  feed_imu(lio, 0.11, 0.2, 10, standing_force + Eigen::Vector3d(2.0, 0.0, 0.0), {0.0, 0.0, 0.1});
+  lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.2));
+  const auto tilt_deg = [&] {
+    const Eigen::Vector3d up = (lio.lidar_state.pose.so3() * standing_force).normalized();
+    return std::acos(std::min(1.0, up.z())) * 180.0 / M_PI;
+  };
+  REQUIRE(tilt_deg() > 5.0); // the walking start left the frame tilted
+  for (int k = 3; k <= 10; ++k) {
+    const double t = 0.1 * k;
+    feed_imu(lio, t - 0.09, t, 10, standing_force, Eigen::Vector3d::Zero());
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
+  }
+  REQUIRE(lio.start_level_tilt_deg > 5.0);
+  REQUIRE(tilt_deg() < 0.1);
+  REQUIRE(lio.lidar_state.pose.translation().norm() < 0.05);
+}
+
+TEST_CASE("A static start is not levelled again", "[register_scan]") {
+  LIO::Config config;
+  config.initialization_phase = true;
+  config.initialization_max_gyro_rad_s = 0.02;
+  config.start_standstill_radius = 1.0;
+  config.start_standstill_level_sec = 0.5;
+  LIO lio(config);
+  const auto cloud = make_hollow_cube();
+  lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
+  for (int k = 2; k <= 10; ++k) {
+    const double t = 0.1 * k;
+    feed_static_imu(lio, t - 0.09, t, 10);
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
+  }
+  REQUIRE(lio.start_level_tilt_deg == 0.0);
+}
