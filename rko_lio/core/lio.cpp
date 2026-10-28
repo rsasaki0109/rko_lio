@@ -1326,6 +1326,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           // (tilted) frame; collect it instead of taking the tilt for an accelerometer bias.
           _start_level_force_sum += interval * (lidar_state.pose.so3() * mean_accel);
           _start_level_duration += interval;
+        } else if (!config.start_standstill_accel_bias) {
+          // only the gyro bias is set by the standing intervals
         } else if (config.start_standstill_bias == "average" && update_bias) {
           _standstill_accel_duration += interval;
           _standstill_accel_bias_sum += interval * (mean_accel + lidar_state.pose.so3().inverse() * _gravity_world);

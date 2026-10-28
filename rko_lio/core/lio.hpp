@@ -881,6 +881,12 @@ public:
      *  and the bias update would take that tilt for an accelerometer bias in the body frame, wrong
      *  once the robot turns). */
     bool start_standstill_bias_static_only = false;
+    /** Let start_standstill_bias set the accelerometer bias too. When false the standing intervals
+     *  set only the gyro bias, and the accelerometer bias stays as the initialization left it
+     *  (along gravity): a standing interval's specific force against gravity in the registered
+     *  attitude takes the attitude's error (0.1 deg: 0.017 m/s^2) for a horizontal bias in the
+     *  body frame, which turns with the robot. */
+    bool start_standstill_accel_bias = true;
     /** When positive, a close scan whose registration with the close-scene settings leaves
      *  fewer than this fraction of its keypoints within their correspondence cap is
      *  registered again: first with the base settings, then with the close-scene settings

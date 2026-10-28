@@ -308,6 +308,7 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["start_standstill_bias"] = nlohmann_json_t.start_standstill_bias;
   nlohmann_json_j["start_standstill_hold_radius"] = nlohmann_json_t.start_standstill_hold_radius;
   nlohmann_json_j["start_standstill_bias_static_only"] = nlohmann_json_t.start_standstill_bias_static_only;
+  nlohmann_json_j["start_standstill_accel_bias"] = nlohmann_json_t.start_standstill_accel_bias;
   nlohmann_json_j["close_scene_max_median_range"] = nlohmann_json_t.close_scene_max_median_range;
   nlohmann_json_j["close_scene_max_correspondence_distance"] = nlohmann_json_t.close_scene_max_correspondence_distance;
   nlohmann_json_j["close_scene_localizability_boost"] = nlohmann_json_t.close_scene_localizability_boost;
@@ -514,6 +515,8 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
       nlohmann_json_j.value("start_standstill_hold_radius", nlohmann_json_t.start_standstill_hold_radius);
   nlohmann_json_t.start_standstill_bias_static_only = nlohmann_json_j.value(
       "start_standstill_bias_static_only", nlohmann_json_t.start_standstill_bias_static_only);
+  nlohmann_json_t.start_standstill_accel_bias =
+      nlohmann_json_j.value("start_standstill_accel_bias", nlohmann_json_t.start_standstill_accel_bias);
   nlohmann_json_t.close_scene_max_median_range =
       nlohmann_json_j.value("close_scene_max_median_range", nlohmann_json_t.close_scene_max_median_range);
   nlohmann_json_t.close_scene_max_correspondence_distance = nlohmann_json_j.value(
@@ -641,6 +644,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("start_standstill_hold_radius", lio_config.start_standstill_hold_radius);
   lio_config.start_standstill_bias_static_only = node->declare_parameter<bool>(
       "start_standstill_bias_static_only", lio_config.start_standstill_bias_static_only);
+  lio_config.start_standstill_accel_bias =
+      node->declare_parameter<bool>("start_standstill_accel_bias", lio_config.start_standstill_accel_bias);
   if (lio_config.start_standstill_bias != "interval" && lio_config.start_standstill_bias != "average" &&
       lio_config.start_standstill_bias != "none") {
     throw std::invalid_argument("start_standstill_bias must be interval, average or none");
