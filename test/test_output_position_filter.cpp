@@ -10,7 +10,6 @@
 
 namespace {
 
-using rko_lio::core::MeasurementNoiseModel;
 using rko_lio::core::OutputPositionFilter;
 
 // A walk with a 2-Hz sway, its exact acceleration, scans at 10 Hz and IMU samples at 400 Hz.
@@ -68,43 +67,6 @@ TEST(OutputPositionFilter, ResetStartsAtTheGivenPosition) {
   filter.reset(5.0, Eigen::Vector3d(1.0, 2.0, 3.0), Eigen::Vector3d::Zero());
   EXPECT_TRUE(filter.initialized());
   EXPECT_NEAR((filter.update(5.0, Eigen::Vector3d(1.0, 2.0, 3.0)) - Eigen::Vector3d(1.0, 2.0, 3.0)).norm(), 0.0, 1e-12);
-}
-
-TEST(OutputPositionFilter, UpdateWithSigmaSquaredIdentityIsTheScalarUpdate) {
-  OutputPositionFilter scalar({0.02, 0.003, 1.0e-5});
-  OutputPositionFilter full({0.02, 0.003, 1.0e-5});
-  scalar.reset(0.0, Eigen::Vector3d::Zero(), Eigen::Vector3d(1.0, 0.0, 0.0));
-  full.reset(0.0, Eigen::Vector3d::Zero(), Eigen::Vector3d(1.0, 0.0, 0.0));
-  for (int k = 1; k <= 20; ++k) {
-    const double t = 0.1 * k;
-    scalar.propagate(t - 0.05, Eigen::Vector3d(0.1, 0.0, 0.0));
-    full.propagate(t - 0.05, Eigen::Vector3d(0.1, 0.0, 0.0));
-    const Eigen::Vector3d p(t, 0.01 * (k % 3), 0.0);
-    EXPECT_EQ(scalar.update(t, p), full.update(t, p, 0.02 * 0.02 * Eigen::Matrix3d::Identity()));
-  }
-}
-
-TEST(MeasurementNoiseModel, FollowsTheRegistrationHessian) {
-  // H averaged over residuals, [t; r]: x is weakly constrained (a corridor along x).
-  Eigen::Matrix<double, 6, 6> H = Eigen::Matrix<double, 6, 6>::Identity();
-  H(0, 0) = 0.01;
-  const Eigen::Matrix<double, 6, 6> zero = Eigen::Matrix<double, 6, 6>::Zero();
-  // fixed: sigma^2 I whatever H is
-  MeasurementNoiseModel fixed("fixed", 0.02, 1.0, 0.25, 4.0);
-  EXPECT_TRUE(fixed.covariance(H).isApprox(4e-4 * Eigen::Matrix3d::Identity()));
-  // shape: the weak axis gets the noise (C = diag(100, 1, 1), mean 34); the others go down, limited to lo
-  MeasurementNoiseModel shape("shape", 0.02, 1.0, 0.25, 4.0);
-  const Eigen::Matrix3d R = shape.covariance(H);
-  EXPECT_NEAR(R(0, 0), 4e-4 * 100.0 / 34.0, 1e-12);
-  EXPECT_NEAR(R(1, 1), 4e-4 * 0.25, 1e-12);
-  EXPECT_NEAR(R(0, 1), 0.0, 1e-12);
-  // scalar: a scan like the average of those before gets sigma^2 I; a weaker one more
-  MeasurementNoiseModel scalar("scalar", 0.02, 1.0, 0.25, 4.0);
-  EXPECT_TRUE(scalar.covariance(Eigen::Matrix<double, 6, 6>::Identity()).isApprox(4e-4 * Eigen::Matrix3d::Identity()));
-  EXPECT_TRUE(scalar.covariance(Eigen::Matrix<double, 6, 6>::Identity()).isApprox(4e-4 * Eigen::Matrix3d::Identity()));
-  EXPECT_GT(scalar.covariance(0.5 * Eigen::Matrix<double, 6, 6>::Identity())(0, 0), 4e-4);
-  // a scan without a Hessian keeps sigma^2 I
-  EXPECT_TRUE(scalar.covariance(zero).isApprox(4e-4 * Eigen::Matrix3d::Identity()));
 }
 
 } // namespace

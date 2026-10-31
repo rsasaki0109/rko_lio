@@ -40,7 +40,6 @@
 #include "photometric_features.hpp"
 #include "photometric_image.hpp"
 #include "persistent_weak_direction.hpp"
-#include "scan_statistics.hpp"
 #include "selective_visual_fusion.hpp"
 #include "stall_guard.hpp"
 #include "voxel_hash_map.hpp"
@@ -56,22 +55,6 @@
 
 /** Core namespace containing LIO data structures and state definitions. */
 namespace rko_lio::core {
-
-/** `registered` moved back toward `predicted` so that the horizontal distance is at most
- *  `limit_xy` and the vertical one at most `limit_z` (0: that part unbounded)
- *  (registration_innovation_limit_xy / _z). A part within its limit is returned bit for bit
- *  (predicted + (registered - predicted) can round off it). */
-inline Eigen::Vector3d clamp_innovation(const Eigen::Vector3d& registered,
-                                        const Eigen::Vector3d& predicted,
-                                        const double limit_xy,
-                                        const double limit_z) {
-  const Eigen::Vector3d d = registered - predicted;
-  const double dxy = d.head<2>().norm();
-  Eigen::Vector3d bounded = registered;
-  if (limit_xy > 0.0 && dxy > limit_xy) bounded.head<2>() = predicted.head<2>() + d.head<2>() * (limit_xy / dxy);
-  if (limit_z > 0.0 && std::abs(d.z()) > limit_z) bounded.z() = predicted.z() + std::copysign(limit_z, d.z());
-  return bounded;
-}
 
 /** `position` moved back onto the sphere of `radius` around `anchor` if it lies outside
  *  (start_standstill_hold_radius). */
@@ -231,21 +214,6 @@ public:
 
     /** Max distance for correspondences (m). */
     double max_correspondence_distance = 0.5;
-
-    /** When positive, every correspondence of an ICP iteration is weighted with the
-     *  Geman-McClure kernel (s^2 / (s^2 + r^2))^2, whose scale s is this factor times the
-     *  median correspondence distance of that iteration (at least 1 mm), so that a few far
-     *  correspondences no longer dominate the least-squares system. With 2.0 it roughly halved
-     *  the error of the indoor MapsHD humanoid trials but made the outdoor ones (MapsHD
-     *  outdoor-urk, Oxford Spires) worse. 0 disables it (plain least squares). */
-    double icp_robust_kernel_scale_factor = 0.0;
-
-    /** Weight of the along-surface residual of every correspondence whose map voxel has a
-     *  normal: W = t (I - n n^T) + w n n^T (w the localizability weight, at least 1). 1 keeps
-     *  the point-to-point ICP (the normals are not even looked up); 0 is point-to-plane. The
-     *  rings a spinning LiDAR leaves on the ground pull a point-to-point registration along the
-     *  ground while the map is young. */
-    double icp_tangential_weight = 1.0;
 
     /** Thread count for data association (0 = automatic). */
     int max_num_threads = 0;
@@ -459,18 +427,6 @@ public:
     double output_filter_acceleration_noise = 0.001;
     /** Random walk of the output filter's acceleration bias (m^2/s^5). */
     double output_filter_bias_noise = 1.0e-4;
-    /** Measurement noise of the output filter (MeasurementNoiseModel in output_position_filter.hpp):
-     *  "fixed" (output_filter_position_sigma in every direction), or "scalar", "shape" or
-     *  "marginal" from each scan's registration Hessian, with the exponent and the factor limits
-     *  below. */
-    std::string output_filter_measurement_noise = "fixed";
-    double output_filter_noise_exponent = 1.0;
-    double output_filter_noise_min_factor = 0.25;
-    double output_filter_noise_max_factor = 4.0;
-    /** Record the output filter's inputs in output_filter_events (IMU world accelerations,
-     *  registered positions, restarts), so the filter can be replayed offline with other settings.
-     *  Changes no output. */
-    bool output_filter_log = false;
 
     /** Hold a vehicle's speed while its registration stalls (see stall_guard.hpp). */
     bool vehicle_stall_guard = false;
@@ -820,12 +776,6 @@ public:
      *  near the sensor, and the registration slips along it (GrandTour ARC-3 at 307 s, BIEVR-LIO
      *  in the same place), while the keypoints keep the far structure that holds the translation. */
     double bump_image_point_to_point_weight = 0.0;
-    /** With point-to-point terms (weight above 0), take the vertical translation from them
-     *  alone: the world z translation is marginalised out of the bump system (Schur complement)
-     *  before the two are added. On stairs and slopes the bump images pull the height (Oxford Keble 05:
-     *  0.10 m off while climbing 4 m, against 0.02 m point-to-point), while they hold the
-     *  horizontal and the attitude better. */
-    bool bump_image_vertical_from_point_to_point = false;
     /** Add the point-to-point terms only once the registered pose has been this far (m) from the
      *  first pose (0: from the first scan). While a legged robot stands at the start on an open
      *  field, the people walking around it are most of what the keypoints see, and the
@@ -857,23 +807,6 @@ public:
     /** A positive boost turns the localizability weighting on for close scenes. */
     double close_scene_localizability_boost = 0.0;
     bool close_scene_localizability_normal_only = false;
-    double close_scene_icp_robust_kernel_scale_factor = 0.0;
-    /** icp_tangential_weight for close scenes; a negative value keeps icp_tangential_weight. */
-    double close_scene_icp_tangential_weight = -1.0;
-
-    /** When positive, a registered scan is added to the map only if the sensor has moved at
-     *  least this far (m) since the last scan that was added. A sensor standing still adds the
-     *  same sampling pattern again and again: the voxels fill up (max_points_per_voxel) with the
-     *  rings of a spinning LiDAR, and the scans after the start of motion, which sample between
-     *  those rings, can no longer add points there. 0 adds every scan. */
-    double map_update_min_translation = 0.0;
-    /** Bound how far a scan's registration may move it from its IMU prediction (the initial
-     *  guess): horizontally (m) and vertically (m), 0 leaving that part unbounded. A walking
-     *  robot's prediction over one scan is good to centimetres; a registration that jumps by
-     *  tenths of a metre between scans has slipped (a GrandTour HS run rose 0.63 m in 0.6 s on
-     *  stairs). A clamped scan is not added to the map, so the slip does not become the map. */
-    double registration_innovation_limit_xy = 0.0;
-    double registration_innovation_limit_z = 0.0;
 
     /** When positive, every scan interval while the sensor is still within this distance (m)
      *  of where it started, and whose IMU shows no rotation (mean gyro below
@@ -904,43 +837,17 @@ public:
     double start_standstill_max_gyro_rad_s = 0.0;
     /** The standstill handling ends this long (s) after the first scan, whatever the IMU says. */
     double start_standstill_max_sec = 60.0;
-    /** After a moving start (initialization_max_gyro_rad_s), once the standing-still intervals
-     *  near the start (start_standstill_radius) add up to this long (s), level the world frame
-     *  with their mean specific force and start the maps again where the sensor stands (0: off).
-     *  The first interval of a walking start holds the gait's acceleration and leaves the frame
-     *  tilted (a GrandTour mission: 16 deg); a standing robot measures gravity alone. Until then
-     *  the standing intervals do not re-estimate the accelerometer bias (it would absorb the
-     *  tilt). The sensor has not moved, so the trajectory stays continuous; the output filter
-     *  (output_filter_position_sigma) starts once the frame is level. */
-    double start_standstill_level_sec = 0.0;
     /** How a standing interval near the start sets the IMU biases: "interval" (each interval
      *  replaces them with its own means; the default), "average" (the mean over every standing
      *  interval so far: a legged robot sways while it stands, and one 0.1-s interval takes the
      *  sway for a gyro bias of several mrad/s, far above a tactical-grade IMU's), or "none"
      *  (the biases are left as they are; the velocity is still held at zero). */
     std::string start_standstill_bias = "interval";
-    /** Apply start_standstill_bias only after a static start; after a moving start the standing
-     *  intervals leave the biases as they are (its frame is tilted by the walking initialization,
-     *  and the bias update would take that tilt for an accelerometer bias in the body frame, wrong
-     *  once the robot turns). */
-    bool start_standstill_bias_static_only = false;
-    /** Let start_standstill_bias set the accelerometer bias too. When false the standing intervals
-     *  set only the gyro bias, and the accelerometer bias stays as the initialization left it
-     *  (along gravity): a standing interval's specific force against gravity in the registered
-     *  attitude takes the attitude's error (0.1 deg: 0.017 m/s^2) for a horizontal bias in the
-     *  body frame, which turns with the robot. */
-    bool start_standstill_accel_bias = true;
     /** When positive, a close scan whose registration with the close-scene settings leaves
      *  fewer than this fraction of its keypoints within their correspondence cap is
      *  registered again: first with the base settings, then with the close-scene settings
      *  starting from that result. */
     double close_scene_min_inlier_fraction = 0.0;
-    /** Record per-scan registration statistics that use no ground truth (see
-     *  scan_statistics.hpp): keypoint-to-map distances and the translation information of the
-     *  final ICP system. Analysis only; the estimate is unchanged. */
-    bool scan_statistics = false;
-    /** Distance up to which scan_statistics searches a keypoint's nearest map point (m). */
-    double scan_statistics_search_distance = 0.75;
   };
 
   /** Configuration parameters. */
@@ -1048,19 +955,6 @@ public:
   /** The output trajectory when output_filter_position_sigma is set (the registered attitude and
    *  the filtered position, one entry per entry of poses_with_timestamps); empty otherwise. */
   std::vector<std::pair<Nsec, Sophus::SE3d>> output_poses_with_timestamps;
-  /** One input of the output filter (output_filter_log): 'P' propagate to `time` with world
-   *  acceleration `a`; 'U' update with the registered position `a` (with `b` the position the
-   *  scan's registration started from, the IMU prediction, and `H` the registration's final
-   *  Gauss-Newton Hessian, zero when the scan was not registered by ICP); 'R' restart at
-   *  position `a` with velocity `b`. */
-  struct OutputFilterEvent {
-    char kind = 'P';
-    double time = 0.0;
-    Eigen::Vector3d a = Eigen::Vector3d::Zero();
-    Eigen::Vector3d b = Eigen::Vector3d::Zero();
-    Eigen::Matrix6d H = Eigen::Matrix6d::Zero();
-  };
-  std::vector<OutputFilterEvent> output_filter_events;
 
   /** Base-frame state propagated from IMU measurements. Runs ahead of `lidar_state` between scans; reset to the
    *  optimized lidar pose after each successful registration. Used for gravity compensation and for publishing
@@ -1113,8 +1007,6 @@ public:
   void reset_inertial_window_interval() { _window_preintegration = ImuPreintegration{}; }
   /** Per-scan (time [s], bump rotation correction [deg]) while the limit is active. */
   std::vector<std::pair<double, double>> bump_rotation_corrections;
-  /** One row per registered scan while Config::scan_statistics is on. */
-  std::vector<ScanStatistics> scan_statistics_rows;
 
   /** Tracked photometric patches. */
   const PhotometricFeatureManager& photometric_features() const { return _photometric_features; }
@@ -1161,8 +1053,6 @@ public:
   /** Angle (deg) between the re-estimated gravity and the initial world z
    *  (moving_start_gravity_window_sec); 0 until it is estimated. */
   double moving_start_gravity_tilt_deg = 0.0;
-  /** Tilt (deg) removed by start_standstill_level_sec; 0 until the frame is levelled. */
-  double start_level_tilt_deg = 0.0;
 
   /** Diagnostic-only counters for the intensity-vs-ICP velocity disagreement gate: how many
    *  scans had a stored previous profile to correlate against, how many of those produced a
@@ -1189,9 +1079,6 @@ public:
   /** Registered scans that used the close-scene settings (close_scene_max_median_range). */
   std::size_t close_scene_scan_count = 0;
   std::size_t close_scene_fallback_count = 0;
-  /** Registered scans not added to the map because the sensor had not moved enough
-   *  (map_update_min_translation). */
-  std::size_t map_update_skipped_count = 0;
   /** Scan intervals treated as standing still near the start (start_standstill_radius). */
   std::size_t start_standstill_count = 0;
   /** Scans whose keypoints were taken again at the finer voxel (keypoint_shortfall_voxel_multiplier). */
@@ -1204,8 +1091,6 @@ public:
    *  correction_m_sum / corrected_scan_count gives the mean applied correction (m). */
   std::size_t kinematic_gate_attempt_count = 0;
   std::size_t kinematic_gate_corrected_scan_count = 0;
-  /** Scans whose registration was bounded by registration_innovation_limit_xy / _z. */
-  std::size_t innovation_clamped_scan_count = 0;
   double kinematic_gate_correction_m_sum = 0.0;
 
   /** Soft kinematic velocity blend diagnostics. */
@@ -1317,8 +1202,6 @@ private:
    *  registered (set by the extrinsic overload of register_scan). */
   PhotometricFeatureManager _photometric_features;
   Sophus::SE3d _photometric_base_from_cloud;
-  /** The current scan's initial guess (the IMU prediction), for output_filter_log. */
-  Eigen::Vector3d _scan_predicted_position = Eigen::Vector3d::Zero();
 
   /** Same idea as _previous_intensity_profile but for the Hessian-gate-free intensity
    *  velocity-disagreement gate: anchored to the axis/origin chosen from the *previous*
@@ -1366,8 +1249,6 @@ private:
   std::deque<std::pair<Nsec, Eigen::Vector3d>> _gravity_alignment_window;
   /** The configuration with the close_scene_* keys applied, built on the first close scan. */
   std::optional<Config> _close_scene_config;
-  /** Sensor position of the last scan added to the map (map_update_min_translation). */
-  std::optional<Eigen::Vector3d> _last_map_update_position;
   /** The sensor has left the start_standstill_radius around its start. */
   bool _left_start = false;
   /** This scan interval stood still near the start (start_standstill_radius). */
@@ -1383,15 +1264,12 @@ private:
   std::optional<double> _moving_start_time;
   std::vector<WorldSpecificForceInterval> _moving_start_intervals;
   OutputPositionFilter _output_filter;
-  MeasurementNoiseModel _output_noise_model;
   /** The output filter waits for the gravity of a moving start (output_filter_position_sigma). */
   bool _output_filter_held = false;
   /** The gravity has just been estimated again: the filter starts at the next recorded pose. */
   bool _output_filter_resume = false;
   /** The initialization interval was a moving start (initialization_max_gyro_rad_s). */
   bool _moving_start = false;
-  /** start_standstill_level_sec: a moving start waits for its standing intervals. */
-  bool _start_level_pending = false;
   /** Where the robot started standing (start_standstill_hold_radius); reset when it moves. */
   std::optional<Eigen::Vector3d> _standstill_anchor;
   /** start_standstill_bias "average": sums over the standing intervals near the start. */
@@ -1399,11 +1277,6 @@ private:
   Eigen::Vector3d _standstill_accel_bias_sum = Eigen::Vector3d::Zero();
   double _standstill_duration = 0.0;
   double _standstill_accel_duration = 0.0;
-  Eigen::Vector3d _start_level_force_sum = Eigen::Vector3d::Zero();
-  double _start_level_duration = 0.0;
-  /** Level the world frame with the standing intervals' mean specific force and start the maps
-   *  again at the current pose (start_standstill_level_sec). */
-  void level_start_frame();
   /** Append the pose just recorded in poses_with_timestamps to output_poses_with_timestamps:
    *  filtered after a registration, otherwise the filter starts again at it. */
   void record_output_pose(bool registered);

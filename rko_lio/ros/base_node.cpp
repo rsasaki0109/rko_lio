@@ -293,29 +293,18 @@ void to_json(BasicJsonType& nlohmann_json_j, const LIO::Config& nlohmann_json_t)
   nlohmann_json_j["relocalization_max_iterations"] = nlohmann_json_t.relocalization_max_iterations;
   nlohmann_json_j["legacy_voxel_downsample"] = nlohmann_json_t.legacy_voxel_downsample;
   nlohmann_json_j["samplewise_gyro_deskew"] = nlohmann_json_t.samplewise_gyro_deskew;
-  nlohmann_json_j["scan_statistics"] = nlohmann_json_t.scan_statistics;
-  nlohmann_json_j["scan_statistics_search_distance"] = nlohmann_json_t.scan_statistics_search_distance;
-  nlohmann_json_j["icp_robust_kernel_scale_factor"] = nlohmann_json_t.icp_robust_kernel_scale_factor;
-  nlohmann_json_j["icp_tangential_weight"] = nlohmann_json_t.icp_tangential_weight;
-  nlohmann_json_j["close_scene_icp_tangential_weight"] = nlohmann_json_t.close_scene_icp_tangential_weight;
-  nlohmann_json_j["map_update_min_translation"] = nlohmann_json_t.map_update_min_translation;
   nlohmann_json_j["start_standstill_radius"] = nlohmann_json_t.start_standstill_radius;
   nlohmann_json_j["start_standstill_max_accel_std"] = nlohmann_json_t.start_standstill_max_accel_std;
   nlohmann_json_j["start_standstill_hold"] = nlohmann_json_t.start_standstill_hold;
   nlohmann_json_j["start_standstill_max_gyro_rad_s"] = nlohmann_json_t.start_standstill_max_gyro_rad_s;
   nlohmann_json_j["start_standstill_max_sec"] = nlohmann_json_t.start_standstill_max_sec;
-  nlohmann_json_j["start_standstill_level_sec"] = nlohmann_json_t.start_standstill_level_sec;
   nlohmann_json_j["start_standstill_bias"] = nlohmann_json_t.start_standstill_bias;
   nlohmann_json_j["start_standstill_hold_radius"] = nlohmann_json_t.start_standstill_hold_radius;
-  nlohmann_json_j["start_standstill_bias_static_only"] = nlohmann_json_t.start_standstill_bias_static_only;
   nlohmann_json_j["start_standstill_moving_start_only"] = nlohmann_json_t.start_standstill_moving_start_only;
-  nlohmann_json_j["start_standstill_accel_bias"] = nlohmann_json_t.start_standstill_accel_bias;
   nlohmann_json_j["close_scene_max_median_range"] = nlohmann_json_t.close_scene_max_median_range;
   nlohmann_json_j["close_scene_max_correspondence_distance"] = nlohmann_json_t.close_scene_max_correspondence_distance;
   nlohmann_json_j["close_scene_localizability_boost"] = nlohmann_json_t.close_scene_localizability_boost;
   nlohmann_json_j["close_scene_localizability_normal_only"] = nlohmann_json_t.close_scene_localizability_normal_only;
-  nlohmann_json_j["close_scene_icp_robust_kernel_scale_factor"] =
-      nlohmann_json_t.close_scene_icp_robust_kernel_scale_factor;
   nlohmann_json_j["close_scene_min_inlier_fraction"] = nlohmann_json_t.close_scene_min_inlier_fraction;
 }
 template <typename BasicJsonType,
@@ -487,17 +476,6 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
       nlohmann_json_j.value("legacy_voxel_downsample", nlohmann_json_t.legacy_voxel_downsample);
   nlohmann_json_t.samplewise_gyro_deskew =
       nlohmann_json_j.value("samplewise_gyro_deskew", nlohmann_json_t.samplewise_gyro_deskew);
-  nlohmann_json_t.scan_statistics = nlohmann_json_j.value("scan_statistics", nlohmann_json_t.scan_statistics);
-  nlohmann_json_t.scan_statistics_search_distance =
-      nlohmann_json_j.value("scan_statistics_search_distance", nlohmann_json_t.scan_statistics_search_distance);
-  nlohmann_json_t.icp_robust_kernel_scale_factor =
-      nlohmann_json_j.value("icp_robust_kernel_scale_factor", nlohmann_json_t.icp_robust_kernel_scale_factor);
-  nlohmann_json_t.icp_tangential_weight =
-      nlohmann_json_j.value("icp_tangential_weight", nlohmann_json_t.icp_tangential_weight);
-  nlohmann_json_t.close_scene_icp_tangential_weight =
-      nlohmann_json_j.value("close_scene_icp_tangential_weight", nlohmann_json_t.close_scene_icp_tangential_weight);
-  nlohmann_json_t.map_update_min_translation =
-      nlohmann_json_j.value("map_update_min_translation", nlohmann_json_t.map_update_min_translation);
   nlohmann_json_t.start_standstill_radius =
       nlohmann_json_j.value("start_standstill_radius", nlohmann_json_t.start_standstill_radius);
   nlohmann_json_t.start_standstill_max_accel_std =
@@ -508,16 +486,10 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
       nlohmann_json_j.value("start_standstill_max_gyro_rad_s", nlohmann_json_t.start_standstill_max_gyro_rad_s);
   nlohmann_json_t.start_standstill_max_sec =
       nlohmann_json_j.value("start_standstill_max_sec", nlohmann_json_t.start_standstill_max_sec);
-  nlohmann_json_t.start_standstill_level_sec =
-      nlohmann_json_j.value("start_standstill_level_sec", nlohmann_json_t.start_standstill_level_sec);
   nlohmann_json_t.start_standstill_bias =
       nlohmann_json_j.value("start_standstill_bias", nlohmann_json_t.start_standstill_bias);
   nlohmann_json_t.start_standstill_hold_radius =
       nlohmann_json_j.value("start_standstill_hold_radius", nlohmann_json_t.start_standstill_hold_radius);
-  nlohmann_json_t.start_standstill_bias_static_only = nlohmann_json_j.value(
-      "start_standstill_bias_static_only", nlohmann_json_t.start_standstill_bias_static_only);
-  nlohmann_json_t.start_standstill_accel_bias =
-      nlohmann_json_j.value("start_standstill_accel_bias", nlohmann_json_t.start_standstill_accel_bias);
   nlohmann_json_t.start_standstill_moving_start_only = nlohmann_json_j.value(
       "start_standstill_moving_start_only", nlohmann_json_t.start_standstill_moving_start_only);
   nlohmann_json_t.close_scene_max_median_range =
@@ -528,8 +500,6 @@ void from_json(const BasicJsonType& nlohmann_json_j, LIO::Config& nlohmann_json_
       nlohmann_json_j.value("close_scene_localizability_boost", nlohmann_json_t.close_scene_localizability_boost);
   nlohmann_json_t.close_scene_localizability_normal_only = nlohmann_json_j.value(
       "close_scene_localizability_normal_only", nlohmann_json_t.close_scene_localizability_normal_only);
-  nlohmann_json_t.close_scene_icp_robust_kernel_scale_factor = nlohmann_json_j.value(
-      "close_scene_icp_robust_kernel_scale_factor", nlohmann_json_t.close_scene_icp_robust_kernel_scale_factor);
   nlohmann_json_t.close_scene_min_inlier_fraction =
       nlohmann_json_j.value("close_scene_min_inlier_fraction", nlohmann_json_t.close_scene_min_inlier_fraction);
 }
@@ -621,14 +591,6 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("convergence_criterion", lio_config.convergence_criterion);
   lio_config.max_correspondence_distance =
       node->declare_parameter<double>("max_correspondence_distance", lio_config.max_correspondence_distance);
-  lio_config.icp_robust_kernel_scale_factor =
-      node->declare_parameter<double>("icp_robust_kernel_scale_factor", lio_config.icp_robust_kernel_scale_factor);
-  lio_config.icp_tangential_weight =
-      node->declare_parameter<double>("icp_tangential_weight", lio_config.icp_tangential_weight);
-  lio_config.close_scene_icp_tangential_weight = node->declare_parameter<double>(
-      "close_scene_icp_tangential_weight", lio_config.close_scene_icp_tangential_weight);
-  lio_config.map_update_min_translation =
-      node->declare_parameter<double>("map_update_min_translation", lio_config.map_update_min_translation);
   lio_config.start_standstill_radius =
       node->declare_parameter<double>("start_standstill_radius", lio_config.start_standstill_radius);
   lio_config.start_standstill_max_accel_std =
@@ -639,16 +601,10 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "start_standstill_max_gyro_rad_s", lio_config.start_standstill_max_gyro_rad_s);
   lio_config.start_standstill_max_sec =
       node->declare_parameter<double>("start_standstill_max_sec", lio_config.start_standstill_max_sec);
-  lio_config.start_standstill_level_sec =
-      node->declare_parameter<double>("start_standstill_level_sec", lio_config.start_standstill_level_sec);
   lio_config.start_standstill_bias =
       node->declare_parameter<std::string>("start_standstill_bias", lio_config.start_standstill_bias);
   lio_config.start_standstill_hold_radius =
       node->declare_parameter<double>("start_standstill_hold_radius", lio_config.start_standstill_hold_radius);
-  lio_config.start_standstill_bias_static_only = node->declare_parameter<bool>(
-      "start_standstill_bias_static_only", lio_config.start_standstill_bias_static_only);
-  lio_config.start_standstill_accel_bias =
-      node->declare_parameter<bool>("start_standstill_accel_bias", lio_config.start_standstill_accel_bias);
   lio_config.start_standstill_moving_start_only = node->declare_parameter<bool>(
       "start_standstill_moving_start_only", lio_config.start_standstill_moving_start_only);
   if (lio_config.start_standstill_bias != "interval" && lio_config.start_standstill_bias != "average" &&
@@ -663,8 +619,6 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("close_scene_localizability_boost", lio_config.close_scene_localizability_boost);
   lio_config.close_scene_localizability_normal_only = node->declare_parameter<bool>(
       "close_scene_localizability_normal_only", lio_config.close_scene_localizability_normal_only);
-  lio_config.close_scene_icp_robust_kernel_scale_factor = node->declare_parameter<double>(
-      "close_scene_icp_robust_kernel_scale_factor", lio_config.close_scene_icp_robust_kernel_scale_factor);
   lio_config.close_scene_min_inlier_fraction =
       node->declare_parameter<double>("close_scene_min_inlier_fraction", lio_config.close_scene_min_inlier_fraction);
   lio_config.max_num_threads =
@@ -870,23 +824,6 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "output_filter_acceleration_noise", lio_config.output_filter_acceleration_noise);
   lio_config.output_filter_bias_noise =
       node->declare_parameter<double>("output_filter_bias_noise", lio_config.output_filter_bias_noise);
-  lio_config.output_filter_log = node->declare_parameter<bool>("output_filter_log", lio_config.output_filter_log);
-  lio_config.registration_innovation_limit_xy =
-      node->declare_parameter<double>("registration_innovation_limit_xy", lio_config.registration_innovation_limit_xy);
-  lio_config.registration_innovation_limit_z =
-      node->declare_parameter<double>("registration_innovation_limit_z", lio_config.registration_innovation_limit_z);
-  lio_config.output_filter_measurement_noise = node->declare_parameter<std::string>(
-      "output_filter_measurement_noise", lio_config.output_filter_measurement_noise);
-  lio_config.output_filter_noise_exponent =
-      node->declare_parameter<double>("output_filter_noise_exponent", lio_config.output_filter_noise_exponent);
-  lio_config.output_filter_noise_min_factor =
-      node->declare_parameter<double>("output_filter_noise_min_factor", lio_config.output_filter_noise_min_factor);
-  lio_config.output_filter_noise_max_factor =
-      node->declare_parameter<double>("output_filter_noise_max_factor", lio_config.output_filter_noise_max_factor);
-  if (lio_config.output_filter_measurement_noise != "fixed" && lio_config.output_filter_measurement_noise != "scalar" &&
-      lio_config.output_filter_measurement_noise != "shape" && lio_config.output_filter_measurement_noise != "marginal") {
-    throw std::invalid_argument("output_filter_measurement_noise must be fixed, scalar, shape or marginal");
-  }
   lio_config.gravity_window_alignment =
       node->declare_parameter<bool>("gravity_window_alignment", lio_config.gravity_window_alignment);
   lio_config.gravity_window_sec = node->declare_parameter<double>("gravity_window_sec", lio_config.gravity_window_sec);
@@ -914,9 +851,6 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("localizability_min_step_m", lio_config.localizability_min_step_m);
   lio_config.localizability_normal_only =
       node->declare_parameter<bool>("localizability_normal_only", lio_config.localizability_normal_only);
-  lio_config.scan_statistics = node->declare_parameter<bool>("scan_statistics", lio_config.scan_statistics);
-  lio_config.scan_statistics_search_distance = node->declare_parameter<double>(
-      "scan_statistics_search_distance", lio_config.scan_statistics_search_distance);
 
   // ---- accelerometer-consistency velocity gate (fork addition; default-off) ----
   lio_config.kinematic_velocity_gate =
@@ -1076,8 +1010,6 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       node->declare_parameter<double>("bump_image_huber_delta", lio_config.bump_image_huber_delta);
   lio_config.bump_image_point_to_point_weight = node->declare_parameter<double>(
       "bump_image_point_to_point_weight", lio_config.bump_image_point_to_point_weight);
-  lio_config.bump_image_vertical_from_point_to_point = node->declare_parameter<bool>(
-      "bump_image_vertical_from_point_to_point", lio_config.bump_image_vertical_from_point_to_point);
   lio_config.bump_image_point_to_point_start_distance = node->declare_parameter<double>(
       "bump_image_point_to_point_start_distance", lio_config.bump_image_point_to_point_start_distance);
   lio_config.bump_image_max_rotation_correction_deg = node->declare_parameter<double>(
@@ -1917,23 +1849,6 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
       }
       std::cout << "Poses written to " << std::filesystem::absolute(output_file) << "\n";
     }
-    if (lio->config.output_filter_log) {
-      // the output filter's inputs, for replaying it offline (output_filter_log)
-      if (std::ofstream file(output_dir / "output_filter_events.txt"); file.is_open()) {
-        file << std::setprecision(17);
-        for (const auto& event : lio->output_filter_events) {
-          file << event.kind << " " << event.time << " " << event.a.x() << " " << event.a.y() << " " << event.a.z();
-          if (event.kind == 'R') file << " " << event.b.x() << " " << event.b.y() << " " << event.b.z();
-          if (event.kind == 'U') {
-            for (int i = 0; i < 6; ++i) {
-              for (int j = 0; j < 6; ++j) file << " " << event.H(i, j);
-            }
-            file << " " << event.b.x() << " " << event.b.y() << " " << event.b.z();
-          }
-          file << "\n";
-        }
-      }
-    }
     // dump config
     const nlohmann::json json_config = {{"config", lio->config}};
     const std::filesystem::path config_file = output_dir / "config.json";
@@ -2073,39 +1988,8 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
     if (lio->config.start_standstill_radius > 0.0) {
       std::cout << "Standing still near the start on " << lio->start_standstill_count << " scan intervals\n";
     }
-    if (lio->config.registration_innovation_limit_xy > 0.0 || lio->config.registration_innovation_limit_z > 0.0) {
-      std::cout << "Registration kept within the innovation limits on " << lio->innovation_clamped_scan_count
-                << " scans\n";
-    }
-    if (lio->config.map_update_min_translation > 0.0) {
-      std::cout << "Map not updated on " << lio->map_update_skipped_count
-                << " registered scans (sensor moved less than map_update_min_translation)\n";
-    }
     if (lio->config.keypoint_shortfall_voxel_multiplier > 0.0) {
       std::cout << "Keypoints taken again at the finer voxel on " << lio->keypoint_shortfall_scan_count << " scans\n";
-    }
-    // GT-free per-scan registration statistics (scan_statistics.hpp).
-    if (lio->config.scan_statistics && !lio->scan_statistics_rows.empty()) {
-      const std::filesystem::path statistics_file = output_dir / "scan_statistics.csv";
-      if (std::ofstream file(statistics_file); file.is_open()) {
-        file << "time_sec,keypoints,correspondences,nn_p10,nn_p25,nn_p50,nn_p75,nn_p90,within_0_25,within_0_5,"
-                "matched_normals,normal_eigenvalue_min,normal_eigenvalue_mid,normal_eigenvalue_max,"
-                "motion_axis_information_ratio,ceiling_correspondences,floor_correspondences,median_keypoint_range\n";
-        for (const rko_lio::core::ScanStatistics& row : lio->scan_statistics_rows) {
-          file << std::setprecision(17) << row.time_sec << std::setprecision(10) << "," << row.keypoints << ","
-               << row.correspondences;
-          for (const double value : row.nn_distance_quantiles) {
-            file << "," << value;
-          }
-          file << "," << row.fraction_within_0_25 << "," << row.fraction_within_0_5 << "," << row.matched_normals;
-          for (const double value : row.normal_eigenvalues) {
-            file << "," << value;
-          }
-          file << "," << row.motion_axis_information_ratio << "," << row.ceiling_correspondences << ","
-               << row.floor_correspondences << "," << row.median_keypoint_range << "\n";
-        }
-        std::cout << "Scan statistics written to " << statistics_file << "\n";
-      }
     }
     // Sliding-window gravity alignment summary.
     if (lio->config.gravity_window_alignment) {

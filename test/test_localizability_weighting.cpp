@@ -16,7 +16,6 @@ namespace {
 
 using rko_lio::core::localizability_weight;
 using rko_lio::core::normal_only_information;
-using rko_lio::core::planar_information;
 using rko_lio::core::VoxelHashMap;
 
 TEST(LocalizabilityWeight, NeutralWithoutNormalOrBoostOrAxis) {
@@ -125,24 +124,6 @@ TEST(VoxelHashMapNormals, ClippingErasesNormalsWithVoxels) {
   ASSERT_TRUE(grid.voxel_normal(wall.front()).has_value());
   grid.remove_points_far_from_location(Eigen::Vector3d::Zero());
   EXPECT_FALSE(grid.voxel_normal(wall.front()).has_value());
-}
-
-TEST(PlanarInformation, IdentityWithoutNormal) {
-  EXPECT_TRUE(planar_information(std::nullopt, 31.0, 0.0).isApprox(Eigen::Matrix3d::Identity()));
-}
-
-TEST(PlanarInformation, ScalesTheAlongSurfaceResidual) {
-  const Eigen::Vector3d normal = Eigen::Vector3d(1.0, 1.0, 0.0).normalized();
-  const Eigen::Vector3d along_surface = Eigen::Vector3d(1.0, -1.0, 0.0).normalized();
-  const Eigen::Matrix3d W = planar_information(normal, 31.0, 0.25);
-  EXPECT_NEAR(normal.dot(W * normal), 31.0, 1.0e-12);
-  EXPECT_NEAR(along_surface.dot(W * along_surface), 0.25, 1.0e-12);
-  EXPECT_NEAR(Eigen::Vector3d::UnitZ().dot(W * Eigen::Vector3d::UnitZ()), 0.25, 1.0e-12);
-  // Tangential weight 1 is the normal-only information; 0 is point-to-plane.
-  EXPECT_TRUE(planar_information(normal, 31.0, 1.0).isApprox(normal_only_information(normal, 31.0)));
-  EXPECT_TRUE(planar_information(normal, 5.0, 0.0).isApprox(5.0 * normal * normal.transpose()));
-  // A weight below 1 counts as 1 along the normal.
-  EXPECT_TRUE(planar_information(normal, 0.5, 0.0).isApprox(normal * normal.transpose()));
 }
 
 } // namespace

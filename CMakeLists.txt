@@ -127,12 +127,6 @@ else()
       target_link_libraries(test_localizability_weighting rko_lio::core)
     endif()
     ament_add_gtest(
-      test_scan_statistics
-      test/test_scan_statistics.cpp)
-    if(TARGET test_scan_statistics)
-      target_link_libraries(test_scan_statistics rko_lio::core)
-    endif()
-    ament_add_gtest(
       test_refine_keypoints
       test/test_refine_keypoints.cpp)
     if(TARGET test_refine_keypoints)

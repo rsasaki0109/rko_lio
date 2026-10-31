@@ -34,13 +34,9 @@
 #pragma once
 
 #include <Eigen/Core>
-#include <Eigen/Eigenvalues>
 #include <Eigen/LU>
 
-#include <algorithm>
-#include <cmath>
 #include <optional>
-#include <string>
 
 namespace rko_lio::core {
 
@@ -89,17 +85,6 @@ public:
     return _x.segment<3>(0);
   }
 
-  /** update() with the measurement covariance R in place of position_sigma^2 I. */
-  Eigen::Vector3d update(const double time, const Eigen::Vector3d& position, const Eigen::Matrix3d& R) {
-    advance(time);
-    const Eigen::Matrix3d S = _P.block<3, 3>(0, 0) + R;
-    const Eigen::Matrix<double, 9, 3> K = _P.block<9, 3>(0, 0) * S.inverse();
-    _x += K * (position - _x.segment<3>(0));
-    _P -= K * _P.block<3, 9>(0, 0);
-    _P = 0.5 * (_P + _P.transpose()).eval();
-    return _x.segment<3>(0);
-  }
-
   Eigen::Vector3d position() const { return _x.segment<3>(0); }
   Eigen::Vector3d velocity() const { return _x.segment<3>(3); }
   Eigen::Vector3d acceleration_bias() const { return _x.segment<3>(6); }
@@ -132,54 +117,6 @@ private:
   Eigen::Matrix<double, 9, 9> _P = Eigen::Matrix<double, 9, 9>::Zero();
   std::optional<double> _time;
   Eigen::Vector3d _acceleration = Eigen::Vector3d::Zero();
-};
-
-/** Measurement covariance of a registered position from its registration's final Gauss-Newton
- *  Hessian H (Config::output_filter_measurement_noise). H is averaged over the residuals, ordered
- *  [t_world; r_world]; C, the translation block of H^-1, is the marginal translation covariance up
- *  to a scale. With C = V diag(lambda) V^T, s = trace(C) / 3 and s_ref the geometric mean of s over
- *  this and every earlier scan with a Hessian (so the scale is learned online):
- *    "fixed"     sigma^2 I
- *    "scalar"    sigma^2 clip((s / s_ref)^alpha) I
- *    "shape"     sigma^2 V clip((lambda / s)^alpha) V^T
- *    "marginal"  sigma^2 V clip((lambda / s_ref)^alpha) V^T
- *  clip limits each factor to [lo, hi]. A zero or singular H gives sigma^2 I and leaves s_ref. */
-class MeasurementNoiseModel {
-public:
-  MeasurementNoiseModel() = default;
-  MeasurementNoiseModel(const std::string& mode, const double sigma, const double alpha, const double lo,
-                        const double hi)
-      : _mode(mode), _variance(sigma * sigma), _alpha(alpha), _lo(lo), _hi(hi) {}
-
-  Eigen::Matrix3d covariance(const Eigen::Matrix<double, 6, 6>& H) {
-    Eigen::Matrix3d R = _variance * Eigen::Matrix3d::Identity();
-    if (_mode == "fixed" || !(H.norm() > 0.0)) return R;
-    const Eigen::FullPivLU<Eigen::Matrix<double, 6, 6>> lu(H);
-    if (!lu.isInvertible()) return R;
-    Eigen::Matrix3d C = lu.inverse().block<3, 3>(0, 0);
-    C = 0.5 * (C + C.transpose()).eval();
-    const Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eig(C);
-    const Eigen::Vector3d lambda = eig.eigenvalues().cwiseMax(1e-30);
-    const double s = lambda.sum() / 3.0;
-    _log_sum += std::log(s);
-    ++_count;
-    const double s_ref = std::exp(_log_sum / static_cast<double>(_count));
-    const auto clip = [this](const double f) { return std::clamp(std::pow(f, _alpha), _lo, _hi); };
-    Eigen::Vector3d f;
-    for (int k = 0; k < 3; ++k) {
-      f(k) = _mode == "scalar" ? clip(s / s_ref) : _mode == "shape" ? clip(lambda(k) / s) : clip(lambda(k) / s_ref);
-    }
-    return _variance * eig.eigenvectors() * f.asDiagonal() * eig.eigenvectors().transpose();
-  }
-
-private:
-  std::string _mode = "fixed";
-  double _variance = 0.0;
-  double _alpha = 1.0;
-  double _lo = 0.25;
-  double _hi = 4.0;
-  double _log_sum = 0.0;
-  long _count = 0;
 };
 
 } // namespace rko_lio::core

@@ -444,12 +444,11 @@ TEST_CASE("samplewise_gyro_deskew only matters when the rate changes within an i
   }
 }
 
-TEST_CASE("Bump images alone and with the point-to-point terms recover a translation", "[register_scan]") {
-  auto run = [](const double point_to_point_weight, const bool vertical_from_point_to_point = false) {
+TEST_CASE("Bump images alone and with the point-to-point terms both recover a translation", "[register_scan]") {
+  auto run = [](const double point_to_point_weight) {
     LIO::Config config;
     config.bump_image_registration = true;
     config.bump_image_point_to_point_weight = point_to_point_weight;
-    config.bump_image_vertical_from_point_to_point = vertical_from_point_to_point;
     // A map voxel as fine as the cloud, so that the point-to-point terms are not biased by the
     // sampling (at the default 1 m voxel they alone would settle 9 cm off).
     config.voxel_size = 0.1;
@@ -467,10 +466,10 @@ TEST_CASE("Bump images alone and with the point-to-point terms recover a transla
     lio.register_scan(cloud2, instant_timestamps(cloud2.size(), SECOND_SCAN_END));
     return std::pair{lio.lidar_state.pose, t};
   };
-  for (const auto& [weight, vertical] : {std::pair{0.0, false}, std::pair{1.0, false}, std::pair{1.0, true}}) {
-    const auto [pose, t] = run(weight, vertical);
-    INFO("weight " << weight << " vertical from point-to-point " << vertical << " translation "
-                   << pose.translation().transpose() << " rotation " << pose.so3().log().norm());
+  for (const double weight : {0.0, 1.0}) {
+    const auto [pose, t] = run(weight);
+    INFO("weight " << weight << " translation " << pose.translation().transpose() << " rotation "
+                   << pose.so3().log().norm());
     REQUIRE(approx_equal(pose.translation(), t, 1e-2));
     REQUIRE(pose.so3().log().norm() < 1e-2);
   }
@@ -503,53 +502,6 @@ TEST_CASE("Point-to-point terms wait for the start distance", "[register_scan]")
   const auto waiting = run(1.0, 100.0);
   REQUIRE(waiting.translation() == bump_alone.translation());
   REQUIRE(waiting.so3().unit_quaternion().coeffs() == bump_alone.so3().unit_quaternion().coeffs());
-}
-
-TEST_CASE("A walking start is levelled once the robot stands", "[register_scan]") {
-  // The sensor is tilted by 10 deg of roll. The first interval holds the gait's acceleration
-  // and some rotation (a moving start), so the initial attitude is off; then the robot stands.
-  LIO::Config config;
-  config.initialization_phase = true;
-  config.initialization_max_gyro_rad_s = 0.02;
-  config.start_standstill_radius = 1.0;
-  config.start_standstill_level_sec = 0.5;
-  LIO lio(config);
-  const auto cloud = make_hollow_cube();
-  const Sophus::SO3d true_attitude = Sophus::SO3d::exp(Eigen::Vector3d(10.0 * M_PI / 180.0, 0.0, 0.0));
-  const Eigen::Vector3d standing_force = true_attitude.inverse() * Eigen::Vector3d(0.0, 0.0, GRAVITY_MAG);
-  lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
-  feed_imu(lio, 0.11, 0.2, 10, standing_force + Eigen::Vector3d(2.0, 0.0, 0.0), {0.0, 0.0, 0.1});
-  lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.2));
-  const auto tilt_deg = [&] {
-    const Eigen::Vector3d up = (lio.lidar_state.pose.so3() * standing_force).normalized();
-    return std::acos(std::min(1.0, up.z())) * 180.0 / M_PI;
-  };
-  REQUIRE(tilt_deg() > 5.0); // the walking start left the frame tilted
-  for (int k = 3; k <= 10; ++k) {
-    const double t = 0.1 * k;
-    feed_imu(lio, t - 0.09, t, 10, standing_force, Eigen::Vector3d::Zero());
-    lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
-  }
-  REQUIRE(lio.start_level_tilt_deg > 5.0);
-  REQUIRE(tilt_deg() < 0.1);
-  REQUIRE(lio.lidar_state.pose.translation().norm() < 0.05);
-}
-
-TEST_CASE("A static start is not levelled again", "[register_scan]") {
-  LIO::Config config;
-  config.initialization_phase = true;
-  config.initialization_max_gyro_rad_s = 0.02;
-  config.start_standstill_radius = 1.0;
-  config.start_standstill_level_sec = 0.5;
-  LIO lio(config);
-  const auto cloud = make_hollow_cube();
-  lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
-  for (int k = 2; k <= 10; ++k) {
-    const double t = 0.1 * k;
-    feed_static_imu(lio, t - 0.09, t, 10);
-    lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
-  }
-  REQUIRE(lio.start_level_tilt_deg == 0.0);
 }
 
 TEST_CASE("Standing intervals set the gyro bias per interval, as their average, or not at all", "[register_scan]") {
@@ -617,68 +569,27 @@ TEST_CASE("A standing position is clamped to the hold radius", "[register_scan]"
   REQUIRE(approx_equal(clamp_to_radius(anchor + Eigen::Vector3d(0.3, 0.4, 0.0), anchor, 0.0), anchor, 1e-12));
 }
 
-TEST_CASE("Standing intervals after a moving start can leave the biases alone", "[register_scan]") {
-  // The same standing robot, after a static and after a walking start: with
-  // start_standstill_bias_static_only only the static start's biases follow the standing intervals.
-  const auto gyro_bias = [](const bool moving_start) {
-    LIO::Config config;
-    config.initialization_phase = true;
-    config.initialization_max_gyro_rad_s = 0.02;
-    config.start_standstill_radius = 1.0;
-    config.start_standstill_bias = "average";
-    config.start_standstill_bias_static_only = true;
-    LIO lio(config);
-    const auto cloud = make_hollow_cube();
-    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
-    if (moving_start) {
-      feed_imu(lio, 0.11, 0.2, 10, {1.0, 0.0, GRAVITY_MAG}, {0.0, 0.0, 0.1});
-    } else {
-      feed_static_imu(lio, 0.11, 0.2, 10);
-    }
-    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.2));
-    for (int k = 3; k <= 8; ++k) {
-      const double t = 0.1 * k;
-      feed_imu(lio, t - 0.09, t, 10, {0.0, 0.0, GRAVITY_MAG}, {0.0, 0.0, 0.003});
-      lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
-    }
-    REQUIRE(lio.start_standstill_count == 6);
-    return lio.imu_bias.gyroscope.z();
-  };
-  REQUIRE_THAT(gyro_bias(false), WithinAbs(0.003, 1e-9)); // the average of the standing intervals
-  REQUIRE_THAT(gyro_bias(true), WithinAbs(0.0, 1e-12));   // a moving start leaves them at zero
-}
-
-TEST_CASE("Standing intervals can set the gyro bias alone", "[register_scan]") {
+TEST_CASE("Standing intervals set the accelerometer bias too", "[register_scan]") {
   // A static start, then standing intervals whose specific force leans 0.05 m/s^2 off the level
-  // attitude: with start_standstill_accel_bias they take it for an accelerometer bias, without it
-  // only the gyro bias follows them.
-  const auto biases = [](const bool accel_bias) {
-    LIO::Config config;
-    config.initialization_phase = true;
-    config.initialization_max_gyro_rad_s = 0.02;
-    config.start_standstill_radius = 1.0;
-    config.start_standstill_bias = "interval";
-    config.start_standstill_accel_bias = accel_bias;
-    LIO lio(config);
-    const auto cloud = make_hollow_cube();
-    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
-    feed_static_imu(lio, 0.11, 0.2, 10);
-    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.2));
-    const Eigen::Vector3d initial_accel_bias = lio.imu_bias.accelerometer;
-    for (int k = 3; k <= 8; ++k) {
-      const double t = 0.1 * k;
-      feed_imu(lio, t - 0.09, t, 10, {0.05, 0.0, GRAVITY_MAG}, {0.0, 0.0, 0.003});
-      lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
-    }
-    REQUIRE(lio.start_standstill_count == 6);
-    return std::make_tuple(lio.imu_bias.gyroscope.z(), lio.imu_bias.accelerometer, initial_accel_bias);
-  };
-  const auto [gyro_with, accel_with, initial_with] = biases(true);
-  REQUIRE_THAT(gyro_with, WithinAbs(0.003, 1e-9));
-  REQUIRE_THAT(accel_with.x(), WithinAbs(0.05, 1e-3));
-  const auto [gyro_without, accel_without, initial_without] = biases(false);
-  REQUIRE_THAT(gyro_without, WithinAbs(0.003, 1e-9));
-  REQUIRE(approx_equal(accel_without, initial_without, 1e-12));
+  // attitude: they take it for an accelerometer bias, and the gyro bias follows them as well.
+  LIO::Config config;
+  config.initialization_phase = true;
+  config.initialization_max_gyro_rad_s = 0.02;
+  config.start_standstill_radius = 1.0;
+  config.start_standstill_bias = "interval";
+  LIO lio(config);
+  const auto cloud = make_hollow_cube();
+  lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
+  feed_static_imu(lio, 0.11, 0.2, 10);
+  lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.2));
+  for (int k = 3; k <= 8; ++k) {
+    const double t = 0.1 * k;
+    feed_imu(lio, t - 0.09, t, 10, {0.05, 0.0, GRAVITY_MAG}, {0.0, 0.0, 0.003});
+    lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
+  }
+  REQUIRE(lio.start_standstill_count == 6);
+  REQUIRE_THAT(lio.imu_bias.gyroscope.z(), WithinAbs(0.003, 1e-9));
+  REQUIRE_THAT(lio.imu_bias.accelerometer.x(), WithinAbs(0.05, 1e-3));
 }
 
 TEST_CASE("A moving start's gravity can go to the output filter alone", "[register_scan]") {
@@ -729,52 +640,6 @@ TEST_CASE("A moving start's gravity can go to the output filter alone", "[regist
   REQUIRE((output_only.back().second.translation() - poses_only.back().second.translation()).norm() < 0.01);
 }
 
-TEST_CASE("The output filter's logged inputs replay its output", "[register_scan]") {
-  // A static start, then a sensor moving at constant velocity: the log changes no output, and an
-  // OutputPositionFilter fed with the logged events gives the filtered positions exactly.
-  const auto run = [](const bool log) {
-    LIO::Config config;
-    config.initialization_phase = true;
-    config.output_filter_position_sigma = 0.02;
-    config.output_filter_log = log;
-    LIO lio(config);
-    const auto cloud = make_hollow_cube();
-    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
-    for (int k = 2; k <= 20; ++k) {
-      const double t = 0.1 * k;
-      feed_static_imu(lio, t - 0.09, t, 10);
-      lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
-    }
-    return lio;
-  };
-  const LIO plain = run(false);
-  const LIO logged = run(true);
-  REQUIRE(plain.output_filter_events.empty());
-  REQUIRE(!logged.output_filter_events.empty());
-  REQUIRE(logged.output_poses_with_timestamps.size() == plain.output_poses_with_timestamps.size());
-  for (size_t i = 0; i < plain.output_poses_with_timestamps.size(); ++i) {
-    REQUIRE(logged.output_poses_with_timestamps[i].second.translation() ==
-            plain.output_poses_with_timestamps[i].second.translation());
-  }
-  rko_lio::core::OutputPositionFilter filter({0.02, logged.config.output_filter_acceleration_noise,
-                                               logged.config.output_filter_bias_noise});
-  std::vector<Eigen::Vector3d> replayed;
-  for (const auto& event : logged.output_filter_events) {
-    if (event.kind == 'P') {
-      filter.propagate(event.time, event.a);
-    } else if (event.kind == 'U') {
-      replayed.push_back(filter.update(event.time, event.a));
-    } else {
-      filter.reset(event.time, event.a, event.b);
-      replayed.push_back(event.a);
-    }
-  }
-  REQUIRE(replayed.size() == logged.output_poses_with_timestamps.size());
-  for (size_t i = 0; i < replayed.size(); ++i) {
-    REQUIRE(replayed[i] == logged.output_poses_with_timestamps[i].second.translation());
-  }
-}
-
 TEST_CASE("The start standstill handling can be kept to moving starts", "[register_scan]") {
   // The same standing robot after a static and after a walking start: with
   // start_standstill_moving_start_only only the walking start counts standing intervals, and the
@@ -810,53 +675,4 @@ TEST_CASE("The start standstill handling can be kept to moving starts", "[regist
   for (size_t i = 0; i < poses.size(); ++i) {
     REQUIRE(poses[i].second.translation() == poses_off[i].second.translation());
   }
-}
-
-TEST_CASE("A registration is kept within the innovation limits of its prediction", "[register_scan]") {
-  using rko_lio::core::clamp_innovation;
-  const Eigen::Vector3d predicted(1.0, 2.0, 3.0);
-  // within the limits: unchanged
-  REQUIRE(approx_equal(clamp_innovation(predicted + Eigen::Vector3d(0.03, 0.0, -0.04), predicted, 0.1, 0.05),
-                       predicted + Eigen::Vector3d(0.03, 0.0, -0.04), 1e-12));
-  // bit for bit, also where going through the prediction would round (near the origin)
-  const Eigen::Vector3d near_origin(0.0047, 0.0013, -0.0022);
-  REQUIRE(clamp_innovation(near_origin, Eigen::Vector3d(0.0012, -0.0031, 0.0005), 0.1, 0.05) == near_origin);
-  // a part within its limit stays bit for bit while the other is cut
-  const Eigen::Vector3d high =
-      clamp_innovation(Eigen::Vector3d(0.0047, 0.0013, 0.6), Eigen::Vector3d(0.0012, -0.0031, 0.0005), 0.1, 0.05);
-  REQUIRE(high.head<2>() == Eigen::Vector2d(0.0047, 0.0013));
-  REQUIRE_THAT(high.z(), Catch::Matchers::WithinAbs(0.0505, 1e-12));
-  // a vertical jump is cut to the vertical limit, the horizontal part kept
-  REQUIRE(approx_equal(clamp_innovation(predicted + Eigen::Vector3d(0.03, 0.0, 0.6), predicted, 0.1, 0.05),
-                       predicted + Eigen::Vector3d(0.03, 0.0, 0.05), 1e-12));
-  // a horizontal jump is cut along its direction
-  REQUIRE(approx_equal(clamp_innovation(predicted + Eigen::Vector3d(0.3, 0.4, 0.0), predicted, 0.1, 0.05),
-                       predicted + Eigen::Vector3d(0.06, 0.08, 0.0), 1e-12));
-  // 0 leaves that part unbounded
-  REQUIRE(approx_equal(clamp_innovation(predicted + Eigen::Vector3d(0.3, 0.4, 0.6), predicted, 0.0, 0.0),
-                       predicted + Eigen::Vector3d(0.3, 0.4, 0.6), 1e-12));
-}
-
-TEST_CASE("The innovation limits leave a registration that follows its prediction alone", "[register_scan]") {
-  // A static sensor in a static cube: the registration agrees with the prediction, the limits
-  // change nothing.
-  const auto run = [](const double limit) {
-    LIO::Config config;
-    config.initialization_phase = true;
-    config.registration_innovation_limit_xy = limit;
-    config.registration_innovation_limit_z = limit;
-    LIO lio(config);
-    const auto cloud = make_hollow_cube();
-    lio.register_scan(cloud, instant_timestamps(cloud.size(), 0.1));
-    for (int k = 2; k <= 10; ++k) {
-      const double t = 0.1 * k;
-      feed_static_imu(lio, t - 0.09, t, 10);
-      lio.register_scan(cloud, instant_timestamps(cloud.size(), t));
-    }
-    return std::make_pair(lio.innovation_clamped_scan_count, lio.lidar_state.pose.translation());
-  };
-  const auto [count_off, position_off] = run(0.0);
-  const auto [count_on, position_on] = run(0.05);
-  REQUIRE(count_on == 0);
-  REQUIRE(position_on == position_off);
 }
