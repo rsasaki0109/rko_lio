@@ -115,10 +115,22 @@ else()
       target_link_libraries(test_gravity_alignment rko_lio::core)
     endif()
     ament_add_gtest(
+      test_output_position_filter
+      test/test_output_position_filter.cpp)
+    if(TARGET test_output_position_filter)
+      target_link_libraries(test_output_position_filter rko_lio::core)
+    endif()
+    ament_add_gtest(
       test_localizability_weighting
       test/test_localizability_weighting.cpp)
     if(TARGET test_localizability_weighting)
       target_link_libraries(test_localizability_weighting rko_lio::core)
+    endif()
+    ament_add_gtest(
+      test_refine_keypoints
+      test/test_refine_keypoints.cpp)
+    if(TARGET test_refine_keypoints)
+      target_link_libraries(test_refine_keypoints rko_lio::core)
     endif()
     ament_add_gtest(
       test_kinematic_velocity_gate

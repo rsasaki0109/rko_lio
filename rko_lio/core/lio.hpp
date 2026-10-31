@@ -35,6 +35,8 @@
 #include "bump_rotation_gate.hpp"
 #include "inertial_window.hpp"
 #include "gait_speed.hpp"
+#include "gravity_alignment.hpp"
+#include "output_position_filter.hpp"
 #include "photometric_features.hpp"
 #include "photometric_image.hpp"
 #include "persistent_weak_direction.hpp"
@@ -42,6 +44,7 @@
 #include "stall_guard.hpp"
 #include "voxel_hash_map.hpp"
 #include "util.hpp"
+#include <algorithm>
 #include <array>
 #include <deque>
 #include <tuple>
@@ -52,6 +55,17 @@
 
 /** Core namespace containing LIO data structures and state definitions. */
 namespace rko_lio::core {
+
+/** `position` moved back onto the sphere of `radius` around `anchor` if it lies outside
+ *  (start_standstill_hold_radius). */
+inline Eigen::Vector3d clamp_to_radius(const Eigen::Vector3d& position,
+                                       const Eigen::Vector3d& anchor,
+                                       const double radius) {
+  const Eigen::Vector3d offset = position - anchor;
+  const double distance = offset.norm();
+  if (distance <= radius) return position;
+  return anchor + offset * (std::max(radius, 0.0) / distance);
+}
 
 struct VisualPosePrior {
   Nsec time{0};
@@ -228,6 +242,12 @@ public:
      *  can slide along a weakly observed direction and write the error into the map. */
     size_t min_icp_keypoints = 10;
 
+    /** When positive, a scan with fewer than min_icp_keypoints keypoints takes its keypoints
+     *  again at voxel_size times this multiplier (from the map-resolution downsample in
+     *  double-downsample mode) before it is dropped. A small scene, such as a stairwell, can
+     *  leave too few keypoints at the regular keypoint voxel while the scan itself is full. */
+    double keypoint_shortfall_voxel_multiplier = 0.0;
+
     /** Minimum weight for orientation regularization. */
     double min_beta = 200;
 
@@ -384,6 +404,29 @@ public:
     /** Treat the start as moving, and leave the IMU biases at zero, when the mean gyro rate
      *  of the initialization interval exceeds this (rad/s; 0: always static). */
     double initialization_max_gyro_rad_s = 0.0;
+    /** After a moving start (initialization_max_gyro_rad_s), estimate the world-frame gravity
+     *  again from this many seconds of motion (0: off), starting 1 s after the initialization:
+     *  the specific force rotated into the world frame, less the velocity change measured by the
+     *  registered positions (estimate_world_up_while_moving). The 0.1-s initialization average of a
+     *  walking start contains the gait's acceleration (GrandTour ARC-5: the world frame came out
+     *  16 deg from level). The frame and the map are kept, so the trajectory stays continuous;
+     *  only the gravity vector the filter, the propagation and the regularization use changes. */
+    double moving_start_gravity_window_sec = 0.0;
+    /** Give the gravity of moving_start_gravity_window_sec to the output filter only: the
+     *  registration, the propagation and the regularization keep the initial gravity (and so give
+     *  the same trajectory as without the window), and the filter's IMU acceleration takes the
+     *  estimate, so that the output is filtered after a moving start as well. */
+    bool moving_start_gravity_output_only = false;
+    /** Filter the output positions (published odometry, dumped trajectory) with the IMU between
+     *  scans: registered position noise in m (0: off; see output_position_filter.hpp). The
+     *  registration chain and the map are unchanged. Its prediction needs the gravity direction:
+     *  after a moving start the output stays unfiltered until moving_start_gravity_window_sec has
+     *  estimated the gravity again, and for the whole run without it. */
+    double output_filter_position_sigma = 0.0;
+    /** White acceleration noise of the output filter's motion model (m^2/s^3). */
+    double output_filter_acceleration_noise = 0.001;
+    /** Random walk of the output filter's acceleration bias (m^2/s^5). */
+    double output_filter_bias_noise = 1.0e-4;
 
     /** Hold a vehicle's speed while its registration stalls (see stall_guard.hpp). */
     bool vehicle_stall_guard = false;
@@ -727,6 +770,18 @@ public:
     double bump_image_source_voxel_size = 0.1;
     int bump_image_informed_voxels = 300;
     double bump_image_huber_delta = 0.1;
+    /** Add the point-to-point system of the ICP keypoints to the bump system with this weight,
+     *  each averaged over its own residuals (0 keeps the bump terms alone). The informed voxels
+     *  are the map voxels with the most relief; in an open scene they lie mostly on the ground
+     *  near the sensor, and the registration slips along it (GrandTour ARC-3 at 307 s, BIEVR-LIO
+     *  in the same place), while the keypoints keep the far structure that holds the translation. */
+    double bump_image_point_to_point_weight = 0.0;
+    /** Add the point-to-point terms only once the registered pose has been this far (m) from the
+     *  first pose (0: from the first scan). While a legged robot stands at the start on an open
+     *  field, the people walking around it are most of what the keypoints see, and the
+     *  point-to-point terms follow them (GrandTour SNOW-3: 0.089 m with them from the start,
+     *  0.027 m with the bump terms alone); the bump terms keep the ground's relief. */
+    double bump_image_point_to_point_start_distance = 0.0;
     /** Register a scan again without the bump terms when they turn the pose more than
      *  this (deg) away from the IMU prediction (0 disables). In a circular tunnel the roll
      *  about the axis is unobservable and the bump images slip around it by degrees per
@@ -741,6 +796,58 @@ public:
     /** Above this correction (deg) a scan falls back at once, whatever the window says
      *  (0 disables). */
     double bump_image_rotation_hard_limit_deg = 0.0;
+
+    /** Close-scene settings. When close_scene_max_median_range is positive, a scan whose
+     *  keypoints lie at a median distance below it (m) from the sensor is registered with the
+     *  close_scene_* keys below in place of the corresponding settings (a key at 0 keeps the
+     *  setting); every other scan uses the configuration as it is. On the development data,
+     *  rooms, garages and corridors lie below 9.1 m and open outdoor scenes above 13 m. */
+    double close_scene_max_median_range = 0.0;
+    double close_scene_max_correspondence_distance = 0.0;
+    /** A positive boost turns the localizability weighting on for close scenes. */
+    double close_scene_localizability_boost = 0.0;
+    bool close_scene_localizability_normal_only = false;
+
+    /** When positive, every scan interval while the sensor is still within this distance (m)
+     *  of where it started, and whose IMU shows no rotation (mean gyro below
+     *  initialization_max_gyro_rad_s) and no shaking (standard deviation of the acceleration
+     *  magnitude below start_standstill_max_accel_std), re-estimates the IMU biases from that
+     *  interval and holds the velocity at zero. A legged robot often settles for a moment and
+     *  then stands still before it walks off: the initialization interval sees the settling,
+     *  leaves the biases at zero, and in a scene that does not constrain the horizontal (a
+     *  flat snow field seen by a narrow-FOV LiDAR) the IMU then drifts while it stands. 0 off. */
+    double start_standstill_radius = 0.0;
+    /** Apply start_standstill_radius (and all its handling) only after a moving start; a static
+     *  start then runs as without it. */
+    bool start_standstill_moving_start_only = false;
+    double start_standstill_max_accel_std = 0.5;
+    /** With start_standstill_radius: a standing-still interval also keeps the position (the scan
+     *  is not registered: around a robot standing in an open field, people walking past can be
+     *  the only things that constrain the horizontal, and the registration follows them); the
+     *  attitude follows the gyro. */
+    bool start_standstill_hold = false;
+    /** With start_standstill_hold: 0 keeps the position of a standing interval; a positive radius
+     *  (m) registers the scan and keeps the position within this distance of where the robot
+     *  started standing (a legged robot shifts by a few centimetres while it stands, which a
+     *  well-constrained registration follows; people walking past pull it further). Standing scans
+     *  are not added to the map either way. */
+    double start_standstill_hold_radius = 0.0;
+    /** Mean gyro rate (rad/s) below which an interval counts as standing still (0: use
+     *  initialization_max_gyro_rad_s). */
+    double start_standstill_max_gyro_rad_s = 0.0;
+    /** The standstill handling ends this long (s) after the first scan, whatever the IMU says. */
+    double start_standstill_max_sec = 60.0;
+    /** How a standing interval near the start sets the IMU biases: "interval" (each interval
+     *  replaces them with its own means; the default), "average" (the mean over every standing
+     *  interval so far: a legged robot sways while it stands, and one 0.1-s interval takes the
+     *  sway for a gyro bias of several mrad/s, far above a tactical-grade IMU's), or "none"
+     *  (the biases are left as they are; the velocity is still held at zero). */
+    std::string start_standstill_bias = "interval";
+    /** When positive, a close scan whose registration with the close-scene settings leaves
+     *  fewer than this fraction of its keypoints within their correspondence cap is
+     *  registered again: first with the base settings, then with the close-scene settings
+     *  starting from that result. */
+    double close_scene_min_inlier_fraction = 0.0;
   };
 
   /** Configuration parameters. */
@@ -845,6 +952,9 @@ public:
 
   /** Sequence of registered scan poses with corresponding timestamps. */
   std::vector<std::pair<Nsec, Sophus::SE3d>> poses_with_timestamps;
+  /** The output trajectory when output_filter_position_sigma is set (the registered attitude and
+   *  the filtered position, one entry per entry of poses_with_timestamps); empty otherwise. */
+  std::vector<std::pair<Nsec, Sophus::SE3d>> output_poses_with_timestamps;
 
   /** Base-frame state propagated from IMU measurements. Runs ahead of `lidar_state` between scans; reset to the
    *  optimized lidar pose after each successful registration. Used for gravity compensation and for publishing
@@ -940,6 +1050,9 @@ public:
   std::size_t gravity_alignment_applied_count = 0;
   double gravity_alignment_last_tilt_rad = 0.0;
   double gravity_alignment_correction_rad_sum = 0.0;
+  /** Angle (deg) between the re-estimated gravity and the initial world z
+   *  (moving_start_gravity_window_sec); 0 until it is estimated. */
+  double moving_start_gravity_tilt_deg = 0.0;
 
   /** Diagnostic-only counters for the intensity-vs-ICP velocity disagreement gate: how many
    *  scans had a stored previous profile to correlate against, how many of those produced a
@@ -963,6 +1076,13 @@ public:
    *  boosted_fraction_sum / weighted_scan_count gives the mean fraction of
    *  correspondences boosted per weighted scan (final ICP iteration). */
   std::size_t localizability_attempt_count = 0;
+  /** Registered scans that used the close-scene settings (close_scene_max_median_range). */
+  std::size_t close_scene_scan_count = 0;
+  std::size_t close_scene_fallback_count = 0;
+  /** Scan intervals treated as standing still near the start (start_standstill_radius). */
+  std::size_t start_standstill_count = 0;
+  /** Scans whose keypoints were taken again at the finer voxel (keypoint_shortfall_voxel_multiplier). */
+  std::size_t keypoint_shortfall_scan_count = 0;
   std::size_t localizability_weighted_scan_count = 0;
   double localizability_boosted_fraction_sum = 0.0;
 
@@ -1127,5 +1247,42 @@ private:
   /** Sliding window of (scan time, world-frame raw-accelerometer interval mean) samples for
    *  gravity_window_alignment. Entries older than gravity_window_sec are dropped each scan. */
   std::deque<std::pair<Nsec, Eigen::Vector3d>> _gravity_alignment_window;
+  /** The configuration with the close_scene_* keys applied, built on the first close scan. */
+  std::optional<Config> _close_scene_config;
+  /** The sensor has left the start_standstill_radius around its start. */
+  bool _left_start = false;
+  /** This scan interval stood still near the start (start_standstill_radius). */
+  bool _standstill_this_scan = false;
+  /** bump_image_point_to_point_start_distance has been reached (latched). */
+  bool _bump_point_to_point_started = false;
+  /** World-frame gravity (m/s^2): gravity() unless moving_start_gravity_window_sec re-estimated it. */
+  Eigen::Vector3d _gravity_world = gravity();
+  /** Added to the output filter's world acceleration: the estimated gravity less _gravity_world
+   *  (moving_start_gravity_output_only), zero otherwise. */
+  Eigen::Vector3d _output_filter_gravity_correction = Eigen::Vector3d::Zero();
+  /** Initialization time (s) of a moving start while its gravity window is being collected. */
+  std::optional<double> _moving_start_time;
+  std::vector<WorldSpecificForceInterval> _moving_start_intervals;
+  OutputPositionFilter _output_filter;
+  /** The output filter waits for the gravity of a moving start (output_filter_position_sigma). */
+  bool _output_filter_held = false;
+  /** The gravity has just been estimated again: the filter starts at the next recorded pose. */
+  bool _output_filter_resume = false;
+  /** The initialization interval was a moving start (initialization_max_gyro_rad_s). */
+  bool _moving_start = false;
+  /** Where the robot started standing (start_standstill_hold_radius); reset when it moves. */
+  std::optional<Eigen::Vector3d> _standstill_anchor;
+  /** start_standstill_bias "average": sums over the standing intervals near the start. */
+  Eigen::Vector3d _standstill_gyro_sum = Eigen::Vector3d::Zero();
+  Eigen::Vector3d _standstill_accel_bias_sum = Eigen::Vector3d::Zero();
+  double _standstill_duration = 0.0;
+  double _standstill_accel_duration = 0.0;
+  /** Append the pose just recorded in poses_with_timestamps to output_poses_with_timestamps:
+   *  filtered after a registration, otherwise the filter starts again at it. */
+  void record_output_pose(bool registered);
+  /** Collect the interval ending at current_lidar_time for moving_start_gravity_window_sec and,
+   *  once the registered poses cover the window, re-estimate _gravity_world. */
+  void update_moving_start_gravity(const Nsec& current_lidar_time, const Sophus::SO3d& current_rotation);
+  std::optional<Nsec> _first_scan_time;
 };
 } // namespace rko_lio::core

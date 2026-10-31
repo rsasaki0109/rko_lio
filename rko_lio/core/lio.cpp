@@ -45,6 +45,7 @@
 // stl
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <unordered_map>
 #include <functional>
 #include <iostream>
@@ -74,6 +75,7 @@ inline void transform_points(const Sophus::SE3d& T, Vector3dVector& points) { tr
 struct AccelInfo {
   double accel_mag_variance;
   Eigen::Vector3d local_gravity_estimate;
+  Eigen::Vector3d gravity_world;
 };
 
 struct BodyAccelKF {
@@ -90,7 +92,8 @@ AccelFilterStep step_body_accel_filter(const BodyAccelKF& prev,
                                        const IntervalStats& stats,
                                        const Sophus::SO3d& rotation_estimate,
                                        const Nsec dt,
-                                       const double max_expected_jerk) {
+                                       const double max_expected_jerk,
+                                       const Eigen::Vector3d& gravity_world) {
   if (stats.imu_count <= 1) {
     std::cerr << "[WARNING] " << stats.imu_count
               << " IMU message(s) in interval between two lidar scans. Cannot compute "
@@ -101,7 +104,7 @@ AccelFilterStep step_body_accel_filter(const BodyAccelKF& prev,
 
   const Eigen::Vector3d avg_imu_accel = stats.imu_acceleration_sum / stats.imu_count;
   const double accel_mag_variance = stats.welford_sum_of_squares / (stats.imu_count - 1);
-  const Eigen::Vector3d body_accel_measurement = avg_imu_accel + rotation_estimate.inverse() * gravity();
+  const Eigen::Vector3d body_accel_measurement = avg_imu_accel + rotation_estimate.inverse() * gravity_world;
 
   const double max_acceleration_change = max_expected_jerk * to_seconds(dt);
   // assume [j, -j] range for uniform dist. on jerk. variance is (2j)^2 / 12 = j^2/3. multiply by dt^2 for accel
@@ -117,7 +120,9 @@ AccelFilterStep step_body_accel_filter(const BodyAccelKF& prev,
   const Eigen::Matrix3d new_cov = cov_pred - kalman_gain * cov_pred;
 
   const Eigen::Vector3d local_gravity_estimate = avg_imu_accel - new_mean; // points upwards
-  return {AccelInfo{.accel_mag_variance = accel_mag_variance, .local_gravity_estimate = local_gravity_estimate},
+  return {AccelInfo{.accel_mag_variance = accel_mag_variance,
+                    .local_gravity_estimate = local_gravity_estimate,
+                    .gravity_world = gravity_world},
           BodyAccelKF{new_mean, new_cov}};
 }
 
@@ -327,15 +332,16 @@ LinearSystem build_icp_linear_system(const Sophus::SE3d& current_pose,
 }
 
 LinearSystem build_orientation_linear_system(const Sophus::SE3d& current_pose,
-                                             const Eigen::Vector3d& local_gravity_estimate) {
+                                             const Eigen::Vector3d& local_gravity_estimate,
+                                             const Eigen::Vector3d& gravity_world) {
   const Sophus::SO3d& current_rotation = current_pose.so3();
   const Eigen::Vector3d predicted_gravity =
-      current_rotation.inverse() * (-1 * gravity()); // points upwards, same as local_gravity_estimate
+      current_rotation.inverse() * (-1 * gravity_world); // points upwards, same as local_gravity_estimate
   const auto constraint = robust_gravity_direction(predicted_gravity, local_gravity_estimate);
   const Eigen::Vector3d& residual = constraint.residual;
 
   Eigen::Matrix3_6d J_ori = Eigen::Matrix3_6d::Zero();
-  J_ori.block<3, 3>(0, 3) = current_rotation.inverse().matrix() * Sophus::SO3d::hat(-1 * gravity()).matrix();
+  J_ori.block<3, 3>(0, 3) = current_rotation.inverse().matrix() * Sophus::SO3d::hat(-1 * gravity_world).matrix();
 
   const auto& loss = constraint.loss;
   return LinearSystem{loss.weight * (J_ori.transpose() * J_ori),
@@ -369,6 +375,8 @@ struct BumpTerms {
   const BumpImageMap* map = nullptr;
   const Vector3dVector* points = nullptr;
   double huber_delta = 0.1;
+  /** Weight of the point-to-point system added to the bump system (0: bump terms alone). */
+  double point_to_point_weight = 0.0;
 };
 
 // Photometric terms added to every ICP iteration (see photometric_features.hpp).
@@ -435,6 +443,22 @@ IcpResult icp(const Vector3dVector& frame,
           geometric = {system.H / n, system.b / n, system.chi / n};
           weighting_stats = IcpWeightingStats{system.residuals, 0};
           bump_used = true;
+          if (bump->point_to_point_weight > 0.0) {
+            // The keypoints' point-to-point system (averaged over its correspondences) added
+            // with this weight; its statistics stay apart, so the photometric weighting below
+            // still counts the bump residuals.
+            IcpWeightingStats point_to_point_stats;
+            const auto [H_p2p, b_p2p, chi_p2p] = build_icp_linear_system(
+                current_pose, frame, voxel_map, config.max_correspondence_distance, voxel_search_radius,
+                localizability_axis, localizability_boost, &point_to_point_stats,
+                voxel_search_radius <= 1 ? &neighborhoods : nullptr, config.localizability_normal_only);
+            if (point_to_point_stats.correspondences > 0) {
+              auto& [H_geo, b_geo, chi_geo] = geometric;
+              H_geo += bump->point_to_point_weight * H_p2p;
+              b_geo += bump->point_to_point_weight * b_p2p;
+              chi_geo += bump->point_to_point_weight * chi_p2p;
+            }
+          }
         }
       }
       if (!bump_used) {
@@ -469,7 +493,8 @@ IcpResult icp(const Vector3dVector& frame,
       }
       if (beta >= 0) {
         const auto& [H_ori, b_ori, chi_ori] =
-            build_orientation_linear_system(current_pose, optional_accel_info->local_gravity_estimate);
+            build_orientation_linear_system(current_pose, optional_accel_info->local_gravity_estimate,
+                                            optional_accel_info->gravity_world);
         return {H_icp + H_ori / beta, b_icp + b_ori / beta, chi_icp + chi_ori / beta};
       }
       return {H_icp, b_icp, chi_icp};
@@ -647,9 +672,12 @@ LIO::LIO(const Config& config_)
       bump_map(config_.bump_image_map),
       relocalization_map(config_.voxel_size, config_.max_range, config_.max_points_per_voxel),
       _photometric_features(config_.photometric_features) {
+  _output_filter = OutputPositionFilter({config.output_filter_position_sigma, config.output_filter_acceleration_noise,
+                                         config.output_filter_bias_noise});
   // Per-voxel normals are only maintained when the localizability weighting can
   // consume them; the default path pays nothing.
-  map.set_maintain_normals(config.localizability_weighting);
+  map.set_maintain_normals(config.localizability_weighting ||
+                           (config.close_scene_max_median_range > 0.0 && config.close_scene_localizability_boost > 0.0));
   if (config.gait_speed_prior) {
     GaitSpeedEstimator::Config gait_config;
     gait_config.window_sec = config.gait_window_sec;
@@ -687,6 +715,7 @@ void LIO::initialize(const Nsec lidar_time) {
     std::cerr << "[WARNING] Cannot initialize. No imu measurements received.\n";
     // lidar_state.time has the time from the previous lidar, which we didn't log if init_phase was on
     poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+    record_output_pose(false);
     _initialized = true;
     return;
   }
@@ -700,12 +729,13 @@ void LIO::initialize(const Nsec lidar_time) {
 
   // lidar_state.time has the time from the previous lidar, which we didn't log if init_phase was on
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  record_output_pose(false);
 
   // the pose for the current time gets logged at the end of register_scan in the typical fashion
   lidar_state.time = lidar_time;
   imu_state.time = lidar_time;
 
-  const Eigen::Vector3d local_gravity = imu_state.pose.so3().inverse() * gravity();
+  const Eigen::Vector3d local_gravity = imu_state.pose.so3().inverse() * _gravity_world;
   imu_bias.accelerometer = avg_accel + local_gravity;
   imu_bias.gyroscope = avg_gyro;
   if (config.initialization_max_gyro_rad_s > 0.0 && avg_gyro.norm() > config.initialization_max_gyro_rad_s) {
@@ -713,6 +743,11 @@ void LIO::initialize(const Nsec lidar_time) {
     imu_bias.accelerometer.setZero();
     imu_bias.gyroscope.setZero();
     std::cout << "[INFO] Moving start (gyro " << avg_gyro.norm() << " rad/s): IMU biases left at zero.\n";
+    _output_filter_held = true;
+    _moving_start = true;
+    if (config.moving_start_gravity_window_sec > 0.0) {
+      _moving_start_time = to_seconds(lidar_time);
+    }
   }
 
   _initialized = true;
@@ -735,6 +770,7 @@ Vector3dVector LIO::bootstrap_first_scan(const Vector3dVector& scan, const Nsec 
   update_maps(config.double_downsample ? preproc.map_frame : preproc.keypoints, lidar_state.pose,
               &preproc.filtered_frame);
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  record_output_pose(false);
   std::cout << "[INFO] Odometry map frame initialized with first lidar scan.\n";
   return std::move(preproc.filtered_frame);
 }
@@ -793,6 +829,75 @@ void LIO::relevel_local_frame(const Sophus::SO3d& correction, const Eigen::Vecto
   }
 }
 
+void LIO::record_output_pose(const bool registered) {
+  if (!(config.output_filter_position_sigma > 0.0)) return;
+  const auto& [time, pose] = poses_with_timestamps.back();
+  if (registered && _output_filter.initialized() && !_output_filter_held) {
+    const Eigen::Vector3d position = _output_filter.update(to_seconds(time), pose.translation());
+    output_poses_with_timestamps.emplace_back(time, Sophus::SE3d(pose.so3(), position));
+    return;
+  }
+  _output_filter.reset(to_seconds(time), pose.translation(), pose.so3() * lidar_state.velocity);
+  output_poses_with_timestamps.push_back(poses_with_timestamps.back());
+  if (_output_filter_resume) {
+    // the filter starts here, propagated from now on with the gravity just estimated
+    _output_filter_held = false;
+    _output_filter_resume = false;
+  }
+}
+
+void LIO::update_moving_start_gravity(const Nsec& current_lidar_time, const Sophus::SO3d& current_rotation) {
+  // The registration settles over the first scans after a moving start (its velocity starts at zero).
+  constexpr double settle_sec = 1.0;
+  constexpr double half_span = 0.5;
+  const double begin = *_moving_start_time + settle_sec;
+  const double end = begin + config.moving_start_gravity_window_sec;
+  const double start = to_seconds(lidar_state.time);
+  const double stop = to_seconds(current_lidar_time);
+  if (stop > start && interval_stats.imu_count > 0) {
+    // The interval's mean sample is rotated with the attitude halfway through the interval.
+    const Sophus::SO3d& previous = lidar_state.pose.so3();
+    const Sophus::SO3d middle = previous * Sophus::SO3d::exp(0.5 * (previous.inverse() * current_rotation).log());
+    _moving_start_intervals.push_back(
+        {0.5 * (start + stop), stop - start, middle * (interval_stats.imu_acceleration_sum / interval_stats.imu_count)});
+  }
+  // The positions up to end + half_span must be registered (the current scan's pose is stored later).
+  if (poses_with_timestamps.empty() || to_seconds(poses_with_timestamps.back().first) < end + half_span) {
+    return;
+  }
+  const auto position_at = [this](const double time) -> Eigen::Vector3d {
+    const auto after = std::lower_bound(poses_with_timestamps.cbegin(), poses_with_timestamps.cend(), time,
+                                        [](const auto& entry, const double t) { return to_seconds(entry.first) < t; });
+    if (after == poses_with_timestamps.cbegin()) return after->second.translation();
+    if (after == poses_with_timestamps.cend()) return std::prev(after)->second.translation();
+    const auto before = std::prev(after);
+    const double t0 = to_seconds(before->first);
+    const double t1 = to_seconds(after->first);
+    const double f = t1 > t0 ? (time - t0) / (t1 - t0) : 0.0;
+    return (1.0 - f) * before->second.translation() + f * after->second.translation();
+  };
+  const std::optional<Eigen::Vector3d> up =
+      estimate_world_up_while_moving(_moving_start_intervals, position_at, begin, end, half_span);
+  _moving_start_time.reset();
+  _moving_start_intervals.clear();
+  if (!up.has_value() || std::abs(up->norm() - GRAVITY_MAG) > 0.05 * GRAVITY_MAG) {
+    std::cout << "[WARNING] Moving start: the gravity window gave "
+              << (up.has_value() ? std::to_string(up->norm()) + " m/s2" : std::string("no estimate"))
+              << "; the initial gravity is kept.\n";
+    return;
+  }
+  const Eigen::Vector3d gravity_estimate = -GRAVITY_MAG * up->normalized();
+  if (config.moving_start_gravity_output_only) {
+    _output_filter_gravity_correction = gravity_estimate - _gravity_world;
+  } else {
+    _gravity_world = gravity_estimate;
+  }
+  _output_filter_resume = true;
+  moving_start_gravity_tilt_deg = std::acos(std::clamp(up->normalized().z(), -1.0, 1.0)) * 180.0 / M_PI;
+  std::cout << "[INFO] Moving start: gravity estimated again from " << config.moving_start_gravity_window_sec
+            << " s of motion, " << moving_start_gravity_tilt_deg << " deg from the initial world z.\n";
+}
+
 Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
                                       const Vector3dVector& map_update_frame,
                                       const Nsec& current_lidar_time,
@@ -824,6 +929,7 @@ Vector3dVector LIO::recover_with_scan(const Vector3dVector& filtered_frame,
   gyro_deskew_history.clear();
   update_maps(map_update_frame, lidar_state.pose, &filtered_frame);
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  record_output_pose(false);
   _consecutive_registration_failures = 0;
   std::cout << "[INFO] Kidnap recovery accepted scan at " << to_seconds(current_lidar_time) << "s via " << reason
             << ".\n";
@@ -951,8 +1057,13 @@ void LIO::add_imu_measurement(const ImuControl& base_imu) {
   const Eigen::Vector3d unbiased_ang_vel = base_imu.angular_velocity - imu_bias.gyroscope;
   const Eigen::Vector3d unbiased_accel = base_imu.acceleration - imu_bias.accelerometer;
 
-  const Eigen::Vector3d local_gravity = imu_state.pose.so3().inverse() * gravity();
+  const Eigen::Vector3d local_gravity = imu_state.pose.so3().inverse() * _gravity_world;
   const Eigen::Vector3d compensated_accel = unbiased_accel + local_gravity;
+  if (_output_filter.initialized()) {
+    const Eigen::Vector3d world_acceleration =
+        imu_state.pose.so3() * compensated_accel + _output_filter_gravity_correction;
+    _output_filter.propagate(to_seconds(base_imu.time), world_acceleration);
+  }
 
   gyro_deskew_history.add(imu_state.time, base_imu.time, unbiased_ang_vel);
 
@@ -1083,7 +1194,54 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                                 " seconds exceeds max_scan_delta_sec; re-anchoring at the new timestamp.");
   }
 
+  const bool initializing = config.initialization_phase && !_initialized;
   const auto [avg_body_accel, avg_ang_vel] = motion_priors_from_imu(current_lidar_time);
+  _standstill_this_scan = false;
+  if (!_first_scan_time.has_value()) {
+    _first_scan_time = current_lidar_time;
+  }
+  if (config.start_standstill_radius > 0.0 && !initializing && !_left_start && interval_stats.imu_count > 1 &&
+      (_moving_start || !config.start_standstill_moving_start_only)) {
+    if (lidar_state.pose.translation().norm() > config.start_standstill_radius ||
+        to_seconds(current_lidar_time - *_first_scan_time) > config.start_standstill_max_sec) {
+      _left_start = true;
+    } else {
+      // The interval statistics are bias-corrected; add the current biases back.
+      const double n = static_cast<double>(interval_stats.imu_count);
+      const Eigen::Vector3d mean_gyro = interval_stats.angular_velocity_sum / n + imu_bias.gyroscope;
+      const double accel_std = std::sqrt(interval_stats.welford_sum_of_squares / (n - 1.0));
+      const double max_gyro = config.start_standstill_max_gyro_rad_s > 0.0 ? config.start_standstill_max_gyro_rad_s
+                                                                            : config.initialization_max_gyro_rad_s;
+      if (mean_gyro.norm() < max_gyro &&
+          accel_std < config.start_standstill_max_accel_std) {
+        const Eigen::Vector3d mean_accel = interval_stats.imu_acceleration_sum / n + imu_bias.accelerometer;
+        const double interval = to_seconds(current_lidar_time - lidar_state.time);
+        const bool update_bias = config.start_standstill_bias != "none";
+        if (config.start_standstill_bias == "average" && update_bias) {
+          _standstill_duration += interval;
+          _standstill_gyro_sum += interval * mean_gyro;
+          imu_bias.gyroscope = _standstill_gyro_sum / _standstill_duration;
+        } else if (update_bias) {
+          imu_bias.gyroscope = mean_gyro;
+        }
+        if (config.start_standstill_bias == "average" && update_bias) {
+          _standstill_accel_duration += interval;
+          _standstill_accel_bias_sum += interval * (mean_accel + lidar_state.pose.so3().inverse() * _gravity_world);
+          imu_bias.accelerometer = _standstill_accel_bias_sum / _standstill_accel_duration;
+        } else if (update_bias) {
+          imu_bias.accelerometer = mean_accel + lidar_state.pose.so3().inverse() * _gravity_world;
+        }
+        lidar_state.velocity.setZero();
+        _standstill_this_scan = true;
+        ++start_standstill_count;
+        if (!_standstill_anchor.has_value()) {
+          _standstill_anchor = lidar_state.pose.translation();
+        }
+      } else {
+        _standstill_anchor.reset();
+      }
+    }
+  }
 
   const Nsec earliest = std::min(lidar_state.time, *std::min_element(timestamps.begin(), timestamps.end()));
   const bool samplewise_rotation = config.samplewise_gyro_deskew &&
@@ -1255,13 +1413,22 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   // body acceleration filter
   const auto kf_step = step_body_accel_filter({mean_body_acceleration, body_acceleration_covariance}, interval_stats,
                                               initial_guess.so3(), current_lidar_time - lidar_state.time,
-                                              config.max_expected_jerk);
+                                              config.max_expected_jerk, _gravity_world);
   mean_body_acceleration = kf_step.updated.mean;
   body_acceleration_covariance = kf_step.updated.covariance;
 
   auto preproc_result =
       config.deskew ? preprocess_scan(deskew_scan(scan, timestamps, current_lidar_time, relative_pose_at_time), config)
                     : preprocess_scan(scan, config);
+
+  if (config.keypoint_shortfall_voxel_multiplier > 0.0 &&
+      preproc_result.keypoints.size() < std::max<size_t>(1, config.min_icp_keypoints)) {
+    Vector3dVector finer = refine_keypoints(preproc_result, config, config.keypoint_shortfall_voxel_multiplier);
+    if (finer.size() > preproc_result.keypoints.size()) {
+      preproc_result.keypoints = std::move(finer);
+      ++keypoint_shortfall_scan_count;
+    }
+  }
 
   if (preproc_result.keypoints.size() < std::max<size_t>(1, config.min_icp_keypoints)) {
     const std::string error_msg =
@@ -1300,6 +1467,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   bool kinematic_gate_corrected_this_scan = false;
   bool kinematic_blend_suppress_map_update_this_scan = false;
   bool registration_skipped_this_scan = false;
+  bool standstill_clamped_this_scan = false;
   bool inertial_window_added = false;
   double kinematic_blend_map_update_fraction_this_scan = 1.0;
 
@@ -1320,12 +1488,36 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // degeneracy_prior_pose slot.
     const std::optional<Sophus::SE3d>& degeneracy_prior_pose =
         radar_prior_pose.has_value() ? radar_prior_pose : intensity_prior_pose;
+    // Close-scene settings (close_scene_max_median_range): the registration of a scan whose
+    // keypoints' median range is below the limit uses the configuration with the close_scene_*
+    // keys applied; every other scan uses the configuration as it is.
+    bool close_scene = false;
+    if (config.close_scene_max_median_range > 0.0 && !preproc_result.keypoints.empty()) {
+      std::vector<double> ranges(preproc_result.keypoints.size());
+      std::transform(preproc_result.keypoints.cbegin(), preproc_result.keypoints.cend(), ranges.begin(),
+                     [](const Eigen::Vector3d& point) { return point.norm(); });
+      const auto middle = ranges.begin() + static_cast<std::ptrdiff_t>(ranges.size() / 2);
+      std::nth_element(ranges.begin(), middle, ranges.end());
+      close_scene = *middle < config.close_scene_max_median_range;
+    }
+    if (close_scene && !_close_scene_config.has_value()) {
+      _close_scene_config = config;
+      if (config.close_scene_max_correspondence_distance > 0.0) {
+        _close_scene_config->max_correspondence_distance = config.close_scene_max_correspondence_distance;
+      }
+      if (config.close_scene_localizability_boost > 0.0) {
+        _close_scene_config->localizability_weighting = true;
+        _close_scene_config->localizability_boost = config.close_scene_localizability_boost;
+        _close_scene_config->localizability_normal_only = config.close_scene_localizability_normal_only;
+      }
+    }
+    const Config& scan_config = close_scene ? *_close_scene_config : config;
     // Localizability weighting axis: the predicted motion direction for this
     // scan (initial guess vs. previous pose), same convention as the intensity
     // disagreement gate's correlation axis. No Hessian gating on purpose --
     // soft degeneracy is precisely the regime the eigenvalue gates miss.
     std::optional<Eigen::Vector3d> localizability_axis;
-    if (config.localizability_weighting) {
+    if (scan_config.localizability_weighting) {
       localizability_axis = unit_axis_from_step(initial_guess.translation() - lidar_state.pose.translation(),
                                                 config.localizability_min_step_m);
       if (localizability_axis.has_value()) {
@@ -1366,19 +1558,74 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
         bump_points = sample_informed_points(
             bump_map, voxel_down_sample(preproc_result.filtered_frame, config.bump_image_source_voxel_size),
             initial_guess, static_cast<std::size_t>(std::max(0, config.bump_image_informed_voxels)));
-        bump_terms = BumpTerms{&bump_map, &bump_points, config.bump_image_huber_delta};
+        double point_to_point_weight = config.bump_image_point_to_point_weight;
+        if (config.bump_image_point_to_point_start_distance > 0.0 && !_bump_point_to_point_started) {
+          if (!poses_with_timestamps.empty() &&
+              (lidar_state.pose.translation() - poses_with_timestamps.front().second.translation()).norm() >=
+                  config.bump_image_point_to_point_start_distance) {
+            _bump_point_to_point_started = true;
+          } else {
+            point_to_point_weight = 0.0;
+          }
+        }
+        bump_terms = BumpTerms{&bump_map, &bump_points, config.bump_image_huber_delta, point_to_point_weight};
       }
-      registration_skipped_this_scan = config.skip_registration_after_gap_sec > 0.0 &&
-                                       to_seconds(current_lidar_time - lidar_state.time) >
-                                           config.skip_registration_after_gap_sec;
+      const bool standstill_held =
+          config.start_standstill_hold && _standstill_this_scan && !(config.start_standstill_hold_radius > 0.0);
+      standstill_clamped_this_scan =
+          config.start_standstill_hold && _standstill_this_scan && config.start_standstill_hold_radius > 0.0;
+      registration_skipped_this_scan = (config.skip_registration_after_gap_sec > 0.0 &&
+                                        to_seconds(current_lidar_time - lidar_state.time) >
+                                            config.skip_registration_after_gap_sec) ||
+                                       standstill_held;
+      if (close_scene && !registration_skipped_this_scan) {
+        ++close_scene_scan_count;
+      }
+      // A held scan keeps the position (the robot stands; with a frame still tilted by a moving
+      // start the IMU-predicted translation would carry the tilt's gravity), and turns with the gyro.
       IcpResult icp_result =
           registration_skipped_this_scan
-              ? IcpResult{initial_guess}
-              : icp(preproc_result.keypoints, map, initial_guess, config, kf_step.info, 1,
+              ? IcpResult{standstill_held ? Sophus::SE3d(initial_guess.so3(), lidar_state.pose.translation())
+                                          : initial_guess}
+              : icp(preproc_result.keypoints, map, initial_guess, scan_config, kf_step.info, 1,
                     _persistent_weak_direction_tracker.state(),
                     config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,
-                    visual_pose_prior, degeneracy_prior_pose, localizability_axis, config.localizability_boost,
+                    visual_pose_prior, degeneracy_prior_pose, localizability_axis, scan_config.localizability_boost,
                     use_photometric ? &photometric_terms : nullptr, use_bump ? &bump_terms : nullptr);
+      // A close scan that the close-scene settings do not explain well (too few keypoints within
+      // their correspondence cap, e.g. a large initial error the tight cap cannot capture) is
+      // registered again: coarse with the base settings, then fine with the close-scene settings.
+      if (close_scene && !registration_skipped_this_scan && config.close_scene_min_inlier_fraction > 0.0 &&
+          !preproc_result.keypoints.empty()) {
+        const Vector3dVector& keypoints = preproc_result.keypoints;
+        std::vector<std::uint8_t> inlier(keypoints.size(), 0);
+        tbb::parallel_for(tbb::blocked_range<std::size_t>{0, keypoints.size()},
+                          [&](const tbb::blocked_range<std::size_t>& range) {
+                            for (std::size_t i = range.begin(); i != range.end(); ++i) {
+                              const auto [neighbor, distance] = map.get_closest_neighbor(icp_result.pose * keypoints[i]);
+                              inlier[i] = distance < scan_config.max_correspondence_distance ? 1 : 0;
+                            }
+                          });
+        const double fraction = static_cast<double>(std::accumulate(inlier.begin(), inlier.end(), std::size_t{0})) /
+                                static_cast<double>(keypoints.size());
+        if (fraction < config.close_scene_min_inlier_fraction) {
+          // Coarse with the base settings, then fine with the close-scene settings from there.
+          ++close_scene_fallback_count;
+          const IcpResult coarse =
+              icp(preproc_result.keypoints, map, initial_guess, config, kf_step.info, 1,
+                  _persistent_weak_direction_tracker.state(),
+                  config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,
+                  visual_pose_prior, degeneracy_prior_pose,
+                  config.localizability_weighting ? localizability_axis : std::nullopt, config.localizability_boost,
+                  use_photometric ? &photometric_terms : nullptr, use_bump ? &bump_terms : nullptr);
+          icp_result = icp(preproc_result.keypoints, map, coarse.pose, scan_config, kf_step.info, 1,
+                           _persistent_weak_direction_tracker.state(),
+                           config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,
+                           visual_pose_prior, degeneracy_prior_pose, localizability_axis,
+                           scan_config.localizability_boost, use_photometric ? &photometric_terms : nullptr,
+                           use_bump ? &bump_terms : nullptr);
+        }
+      }
       if (use_bump && !registration_skipped_this_scan && config.bump_image_max_rotation_correction_deg > 0.0) {
         const double rotation_deg =
             (icp_result.pose.so3() * initial_guess.so3().inverse()).log().norm() * 180.0 / M_PI;
@@ -1390,11 +1637,11 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                                       config.bump_image_rotation_hard_limit_deg);
         }
         if (_bump_rotation_gate->fall_back(rotation_deg)) {
-          icp_result = icp(preproc_result.keypoints, map, initial_guess, config, kf_step.info, 1,
+          icp_result = icp(preproc_result.keypoints, map, initial_guess, scan_config, kf_step.info, 1,
                            _persistent_weak_direction_tracker.state(),
                            config.degeneracy_adaptive_iteration_budget && _adaptive_iteration_hold_remaining > 0,
-                           visual_pose_prior, degeneracy_prior_pose, localizability_axis, config.localizability_boost,
-                           use_photometric ? &photometric_terms : nullptr, nullptr);
+                           visual_pose_prior, degeneracy_prior_pose, localizability_axis,
+                           scan_config.localizability_boost, use_photometric ? &photometric_terms : nullptr, nullptr);
           ++bump_rotation_fallback_count;
         }
       }
@@ -1405,6 +1652,10 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
                                                std::max(1, icp_result.weighting_stats.correspondences);
       }
       optimized_pose = icp_result.pose;
+      if (standstill_clamped_this_scan && _standstill_anchor.has_value()) {
+        optimized_pose.translation() =
+            clamp_to_radius(optimized_pose.translation(), *_standstill_anchor, config.start_standstill_hold_radius);
+      }
       icp_H = icp_result.H;
       icp_b = icp_result.b;
       degeneracy_intervention_count = icp_result.degeneracy_intervention_count;
@@ -2192,6 +2443,9 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     const Eigen::Vector3d local_linear_acceleration =
         (local_velocity.head<3>() - motion.so3().inverse() * lidar_state.velocity) / dt;
 
+    if (_moving_start_time.has_value()) {
+      update_moving_start_gravity(current_lidar_time, optimized_pose.so3());
+    }
     // update
     lidar_state.pose = optimized_pose;
     lidar_state.velocity = local_velocity.head<3>();
@@ -2410,7 +2664,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       _inertial_window.add(to_seconds(current_lidar_time), lidar_state.pose,
                            lidar_state.pose.so3() * lidar_state.velocity, _window_preintegration);
       inertial_window_added = true;
-      if (_inertial_window.solve(gravity())) {
+      if (_inertial_window.solve(_gravity_world)) {
         ++inertial_window_solve_count;
         lidar_state.velocity = lidar_state.pose.so3().inverse() * _inertial_window.latest_velocity();
         imu_bias.accelerometer = _inertial_window.accelerometer_bias();
@@ -2436,7 +2690,8 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   // Gate-corrected scans stay out of the map (see Config::kinematic_gate_skip_map_update):
   // inserting a glided scan would let the next ICP anchor to its own correction.
   if (!(kinematic_gate_corrected_this_scan && config.kinematic_gate_skip_map_update) &&
-      !kinematic_blend_suppress_map_update_this_scan && !registration_skipped_this_scan) {
+      !kinematic_blend_suppress_map_update_this_scan && !registration_skipped_this_scan &&
+      !standstill_clamped_this_scan) {
     if (kinematic_blend_map_update_fraction_this_scan >= 1.0) {
       update_maps(map_input, lidar_state.pose, &preproc_result.filtered_frame);
     } else {
@@ -2459,6 +2714,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
   }
 
   poses_with_timestamps.emplace_back(lidar_state.time, lidar_state.pose);
+  record_output_pose(true);
   _consecutive_registration_failures = 0;
 
   return preproc_result.filtered_frame;

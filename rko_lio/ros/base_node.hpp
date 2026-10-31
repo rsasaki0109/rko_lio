@@ -125,6 +125,9 @@ public:
   bool invert_odom_tf = false;
   bool publish_lidar_acceleration = false;
   bool publish_deskewed_scan = false;
+  // Voxel size (m) of the published deskewed scan; 0 publishes every point. A recorded backend input of a long
+  // 32-beam mission otherwise fills a small disk, and the backend thins the scans to its own leaf size anyway.
+  double deskewed_scan_voxel_size = 0.0;
   // See core/imu_acceleration_unit.hpp; the scale is fixed by the first IMU message.
   std::string imu_acceleration_unit = "mps2";
   double imu_acceleration_scale = 0.0;
