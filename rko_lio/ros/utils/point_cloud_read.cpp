@@ -63,7 +63,9 @@ point_cloud2_to_eigen_with_timestamps(const PointCloud2::ConstSharedPtr& msg) {
 
   const auto& timestamp_field = std::invoke([&msg]() -> PointField {
     for (const PointField& field : msg->fields) {
-      if ((field.name == "t" || field.name == "timestamp" || field.name == "time" || field.name == "stamps")) {
+      // offset_time: Livox ROS driver (uint32 nanoseconds from the scan header stamp)
+      if ((field.name == "t" || field.name == "timestamp" || field.name == "time" || field.name == "stamps" ||
+           field.name == "offset_time")) {
         if (field.count != 0U) {
           return field;
         }
