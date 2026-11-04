@@ -27,6 +27,7 @@
 #include "rko_lio/ros/utils/rosbag.hpp"
 // other
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <chrono>
 #include <cmath>
@@ -49,6 +50,11 @@ public:
   std::unique_ptr<utils::BufferableBag> bag;
 
   BagProgressPublisher::SharedPtr bag_progress_publisher;
+  // Fork addition: the bag's NavSatFix topic, passed through to the ROS graph so a
+  // backend can georeference the map (the offline node otherwise keeps every bag topic
+  // to itself). Empty = off.
+  std::string gnss_topic;
+  rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr gnss_publisher;
 
   float total_bag_msgs = 0;
   float processed_bag_msgs = 0;
@@ -66,6 +72,12 @@ public:
     }
     if (!radar_topic.empty()) {
       topics.push_back(radar_topic);
+    }
+    gnss_topic = node->declare_parameter<std::string>("gnss_topic", "");
+    if (!gnss_topic.empty()) {
+      topics.push_back(gnss_topic);
+      // Reliable and deep: the bag is read faster than real time and every fix counts.
+      gnss_publisher = node->create_publisher<sensor_msgs::msg::NavSatFix>(gnss_topic, rclcpp::QoS(1000));
     }
     bag = std::make_unique<utils::BufferableBag>(node->declare_parameter<std::string>("bag_path"),
                                                  std::make_shared<utils::BufferableBag::TFBridge>(*node),
@@ -103,9 +115,11 @@ public:
     if (subscriber_timeout > 0.0) {
       const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(subscriber_timeout);
       while (odom_publisher->get_subscription_count() == 0 ||
-             (publish_deskewed_scan && frame_publisher->get_subscription_count() == 0)) {
+             (publish_deskewed_scan && frame_publisher->get_subscription_count() == 0) ||
+             (gnss_publisher && gnss_publisher->get_subscription_count() == 0)) {
         if (!rclcpp::ok() || std::chrono::steady_clock::now() >= deadline) {
-          RCLCPP_ERROR(node->get_logger(), "Timed out waiting for offline odometry/scan subscribers");
+          RCLCPP_ERROR(node->get_logger(), "Timed out waiting for offline odometry/scan%s subscribers",
+                       gnss_publisher ? "/GNSS" : "");
           return false;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -147,6 +161,9 @@ public:
         // Fork addition: radar ego-velocity fusion dispatch.
         const auto& radar_msg = deserialize_next_msg<sensor_msgs::msg::PointCloud2>(serialized_msg);
         radar_callback(radar_msg);
+      } else if (gnss_publisher && topic_name == gnss_topic) {
+        // Fork addition: GNSS pass-through, published as read (stamps untouched).
+        gnss_publisher->publish(*deserialize_next_msg<sensor_msgs::msg::NavSatFix>(serialized_msg));
       }
 
       processed_bag_msgs++;
