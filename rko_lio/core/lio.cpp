@@ -46,6 +46,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
 #include <unordered_map>
 #include <functional>
 #include <iostream>
@@ -2364,6 +2367,36 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
     // residual tilt is fed back as a small, capped, roll/pitch-only left-multiplicative
     // correction. Applied before the velocity/acceleration estimation below so the state
     // update sees the corrected orientation.
+    // Diagnostic only, never read back (RKO_LIO_TILT_DIAG=<file>): per scan, the registration's
+    // attitude correction of the mean-rate prediction and of the sample-wise gyro integral, and
+    // the rotation information of the final ICP system with the translation marginalized out
+    // (the Schur complement, independent of the pivot), all in the world frame.
+    if (static const char* const tilt_diag_path = std::getenv("RKO_LIO_TILT_DIAG");
+        tilt_diag_path != nullptr && icp_H.allFinite() && icp_H.trace() > 0.0) {
+      static std::ofstream tilt_diag(tilt_diag_path);
+      const Eigen::Vector3d correction_mean = (optimized_pose.so3() * initial_guess.so3().inverse()).log();
+      Eigen::Vector3d correction_sw = Eigen::Vector3d::Constant(std::numeric_limits<double>::quiet_NaN());
+      if (samplewise_rotation) {
+        if (const auto end_rotation = gyro_deskew_history.at(current_lidar_time)) {
+          const Sophus::SO3d predicted_sw = lidar_state.pose.so3() * rotation_origin.inverse() * *end_rotation;
+          correction_sw = (optimized_pose.so3() * predicted_sw.inverse()).log();
+        }
+      }
+      const Eigen::Matrix3d Htt = icp_H.block<3, 3>(0, 0);
+      const Eigen::Matrix3d S =
+          icp_H.block<3, 3>(3, 3) - icp_H.block<3, 3>(3, 0) * Htt.ldlt().solve(icp_H.block<3, 3>(0, 3));
+      const double rate =
+          interval_stats.imu_count > 0
+              ? (interval_stats.angular_velocity_sum / interval_stats.imu_count).norm()
+              : std::numeric_limits<double>::quiet_NaN();
+      tilt_diag << std::setprecision(9) << to_seconds(current_lidar_time) << std::setprecision(6);
+      for (const double v : {correction_mean.x(), correction_mean.y(), correction_mean.z(), correction_sw.x(),
+                             correction_sw.y(), correction_sw.z(), S(0, 0), S(1, 1), S(2, 2), S(0, 1), S(0, 2),
+                             S(1, 2), Htt(0, 0), Htt(1, 1), Htt(2, 2), rate}) {
+        tilt_diag << ' ' << v;
+      }
+      tilt_diag << '\n';
+    }
     if (config.max_tilt_correction_deg > 0.0) {
       // Keep roll and pitch from the gyro: limit the registration's correction of the
       // predicted attitude about horizontal axes. Yaw stays free, and the absolute tilt is
