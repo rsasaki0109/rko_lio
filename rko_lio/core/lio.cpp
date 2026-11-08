@@ -2389,7 +2389,7 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
           interval_stats.imu_count > 0
               ? (interval_stats.angular_velocity_sum / interval_stats.imu_count).norm()
               : std::numeric_limits<double>::quiet_NaN();
-      tilt_diag << std::setprecision(9) << to_seconds(current_lidar_time) << std::setprecision(6);
+      tilt_diag << std::fixed << std::setprecision(6) << to_seconds(current_lidar_time) << std::defaultfloat;
       for (const double v : {correction_mean.x(), correction_mean.y(), correction_mean.z(), correction_sw.x(),
                              correction_sw.y(), correction_sw.z(), S(0, 0), S(1, 1), S(2, 2), S(0, 1), S(0, 2),
                              S(1, 2), Htt(0, 0), Htt(1, 1), Htt(2, 2), rate}) {
@@ -2405,6 +2405,15 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       optimized_pose.so3() = limit_tilt_correction(initial_guess.so3(), optimized_pose.so3(),
                                                    config.max_tilt_correction_deg * M_PI / 180.0, &limited);
       if (limited) ++tilt_correction_limited_count;
+    }
+    if (config.gyro_bias_time_constant_sec > 0.0) {
+      // The kept correction of the gyro-predicted attitude, in the body frame, is the bias error
+      // integrated over the interval (see gyro_bias_time_constant_sec).
+      const Eigen::Vector3d delta = (initial_guess.so3().inverse() * optimized_pose.so3()).log();
+      if (delta.allFinite() && delta.norm() <= config.gyro_bias_max_correction_deg * M_PI / 180.0) {
+        imu_bias.gyroscope -= delta / config.gyro_bias_time_constant_sec;
+        ++gyro_bias_update_count;
+      }
     }
     if (config.gravity_window_alignment && interval_stats.imu_count > 0) {
       const Eigen::Vector3d interval_mean_accel = interval_stats.imu_acceleration_sum / interval_stats.imu_count;

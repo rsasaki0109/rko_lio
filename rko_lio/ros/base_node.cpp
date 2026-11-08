@@ -796,6 +796,10 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   // ---- sliding-window absolute gravity alignment (fork addition; default-off) ----
   lio_config.max_tilt_correction_deg =
       node->declare_parameter<double>("max_tilt_correction_deg", lio_config.max_tilt_correction_deg);
+  lio_config.gyro_bias_time_constant_sec =
+      node->declare_parameter<double>("gyro_bias_time_constant_sec", lio_config.gyro_bias_time_constant_sec);
+  lio_config.gyro_bias_max_correction_deg =
+      node->declare_parameter<double>("gyro_bias_max_correction_deg", lio_config.gyro_bias_max_correction_deg);
   lio_config.vehicle_stall_guard =
       node->declare_parameter<bool>("vehicle_stall_guard", lio_config.vehicle_stall_guard);
   lio_config.stall_guard.window_sec =
@@ -2015,6 +2019,10 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
     }
     if (lio->config.max_tilt_correction_deg > 0.0) {
       std::cout << "Tilt correction limited on " << lio->tilt_correction_limited_count << " scans\n";
+    }
+    if (lio->config.gyro_bias_time_constant_sec > 0.0) {
+      std::cout << "Gyro bias tracked on " << lio->gyro_bias_update_count << " scans, final "
+                << lio->imu_bias.gyroscope.transpose() << "\n";
     }
     // Kinematic velocity gate summary.
     if (lio->config.kinematic_velocity_gate) {

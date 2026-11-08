@@ -401,6 +401,15 @@ public:
      *  vehicle pulls the pitch by about 1 deg/s in tunnels and on bridges; the gyro holds
      *  it, and gravity_window_alignment corrects the absolute tilt. */
     double max_tilt_correction_deg = 0.0;
+    /** Track the gyro bias from the registration (s; 0: off). After the tilt limit, the attitude
+     *  the scan keeps differs from the gyro prediction by delta (body frame); a bias error e
+     *  makes delta = e * dt, so each scan moves the bias by -delta / time constant, a first-order
+     *  low-pass of the registration's rate correction. The 0.1-s initialization average of a
+     *  standing legged robot can be several mrad/s off (its sway), which a tilt limit otherwise
+     *  carries into the world frame. */
+    double gyro_bias_time_constant_sec = 0.0;
+    /** Scans whose kept correction exceeds this (deg) leave the gyro bias alone. */
+    double gyro_bias_max_correction_deg = 1.0;
     /** Treat the start as moving, and leave the IMU biases at zero, when the mean gyro rate
      *  of the initialization interval exceeds this (rad/s; 0: always static). */
     double initialization_max_gyro_rad_s = 0.0;
@@ -1046,6 +1055,8 @@ public:
   StallGuard stall_guard;
   /** Scans whose roll/pitch correction hit max_tilt_correction_deg. */
   std::size_t tilt_correction_limited_count = 0;
+  /** Scans that moved the gyro bias (gyro_bias_time_constant_sec). */
+  std::size_t gyro_bias_update_count = 0;
   std::size_t gravity_alignment_attempt_count = 0;
   std::size_t gravity_alignment_applied_count = 0;
   double gravity_alignment_last_tilt_rad = 0.0;
