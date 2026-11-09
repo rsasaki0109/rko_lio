@@ -753,6 +753,9 @@ void LIO::initialize(const Nsec lidar_time) {
     }
   }
 
+  if (!_moving_start && config.gyro_bias_start_sec > 0.0) {
+    _gyro_bias_start_until = to_seconds(lidar_time) + config.gyro_bias_start_sec;
+  }
   _initialized = true;
   std::cout << "[INFO] Odometry map frame initialized using " << interval_stats.imu_count
             << " IMU measurements. Estimated initial rotation [se(3)] is " << imu_state.pose.so3().log().transpose()
@@ -2410,8 +2413,14 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       // The kept correction of the gyro-predicted attitude, in the body frame, is the bias error
       // integrated over the interval (see gyro_bias_time_constant_sec).
       const Eigen::Vector3d delta = (initial_guess.so3().inverse() * optimized_pose.so3()).log();
+      // Every scan, unless a start window or a standstill gate is set: then every scan inside the
+      // window after a static start, and outside it only standing scans (none without the gate).
       bool standing = true;
-      if (config.gyro_bias_standstill_max_speed > 0.0) {
+      const bool gated = config.gyro_bias_standstill_max_speed > 0.0 || config.gyro_bias_start_sec > 0.0;
+      if (gated && to_seconds(current_lidar_time) > _gyro_bias_start_until) {
+        standing = config.gyro_bias_standstill_max_speed > 0.0;
+      }
+      if (gated && standing && to_seconds(current_lidar_time) > _gyro_bias_start_until) {
         const double scan_dt = to_seconds(current_lidar_time - lidar_state.time);
         standing = scan_dt > 0.0 && (optimized_pose.translation() - lidar_state.pose.translation()).norm() <=
                                         config.gyro_bias_standstill_max_speed * scan_dt;

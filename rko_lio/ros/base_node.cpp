@@ -804,6 +804,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
       "gyro_bias_standstill_max_speed", lio_config.gyro_bias_standstill_max_speed);
   lio_config.gyro_bias_standstill_max_rate_rad_s = node->declare_parameter<double>(
       "gyro_bias_standstill_max_rate_rad_s", lio_config.gyro_bias_standstill_max_rate_rad_s);
+  lio_config.gyro_bias_start_sec =
+      node->declare_parameter<double>("gyro_bias_start_sec", lio_config.gyro_bias_start_sec);
   lio_config.vehicle_stall_guard =
       node->declare_parameter<bool>("vehicle_stall_guard", lio_config.vehicle_stall_guard);
   lio_config.stall_guard.window_sec =

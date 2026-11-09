@@ -417,6 +417,12 @@ public:
     /** With gyro_bias_standstill_max_speed: also at most this mean gyro rate (rad/s, bias as
      *  currently estimated; 0: no rate limit). */
     double gyro_bias_standstill_max_rate_rad_s = 0.0;
+    /** For this long after a static initialization (s; 0: no window) the bias follows every
+     *  scan, so a bias the 0.1-s average got wrong is corrected even when the robot walks off at
+     *  once; after the window only standing scans (gyro_bias_standstill_max_speed), or none
+     *  without that gate. Never after a moving start, whose biases start at zero and whose
+     *  first corrections are the attitude's, not the bias's. */
+    double gyro_bias_start_sec = 0.0;
     /** Treat the start as moving, and leave the IMU biases at zero, when the mean gyro rate
      *  of the initialization interval exceeds this (rad/s; 0: always static). */
     double initialization_max_gyro_rad_s = 0.0;
@@ -1288,6 +1294,8 @@ private:
   bool _output_filter_resume = false;
   /** The initialization interval was a moving start (initialization_max_gyro_rad_s). */
   bool _moving_start = false;
+  /** Until this time (s) the gyro bias follows every scan (gyro_bias_start_sec). */
+  double _gyro_bias_start_until = -1.0;
   /** Where the robot started standing (start_standstill_hold_radius); reset when it moves. */
   std::optional<Eigen::Vector3d> _standstill_anchor;
   /** start_standstill_bias "average": sums over the standing intervals near the start. */
