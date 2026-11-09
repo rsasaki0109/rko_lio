@@ -401,6 +401,16 @@ public:
      *  vehicle pulls the pitch by about 1 deg/s in tunnels and on bridges; the gyro holds
      *  it, and gravity_window_alignment corrects the absolute tilt. */
     double max_tilt_correction_deg = 0.0;
+    /** With max_tilt_correction_deg: the limit is at least this multiple of the median of the
+     *  registration's roll/pitch corrections of the gyro prediction over every scan so far, taken
+     *  before the limit (0: a fixed limit). A rig whose gyro prediction is routinely corrected by
+     *  more than the fixed limit (a consumer IMU on a walking humanoid, about 0.16 deg per moving
+     *  scan against 0.04 for a STIM320 on a legged robot) keeps its routine corrections, while a
+     *  correction well above the rig's routine is still limited. */
+    double max_tilt_correction_median_factor = 0.0;
+    /** Scans whose corrections the median needs before it is used; the fixed limit applies until
+     *  then. */
+    int max_tilt_correction_median_min_scans = 100;
     /** Track the gyro bias from the registration (s; 0: off). After the tilt limit, the attitude
      *  the scan keeps differs from the gyro prediction by delta (body frame); a bias error e
      *  makes delta = e * dt, so each scan moves the bias by -delta / time constant, a first-order
@@ -1068,6 +1078,12 @@ public:
   StallGuard stall_guard;
   /** Scans whose roll/pitch correction hit max_tilt_correction_deg. */
   std::size_t tilt_correction_limited_count = 0;
+  /** Roll/pitch corrections before the limit (max_tilt_correction_median_factor), in bins of
+   *  0.001 deg from 0 to 1 deg and one bin above; their count. */
+  std::array<std::uint32_t, 1001> _tilt_correction_histogram{};
+  std::size_t _tilt_correction_count = 0;
+  /** The last limit applied (rad), for the summary. */
+  double tilt_correction_last_limit_rad = 0.0;
   /** Scans that moved the gyro bias (gyro_bias_time_constant_sec). */
   std::size_t gyro_bias_update_count = 0;
   std::size_t gravity_alignment_attempt_count = 0;

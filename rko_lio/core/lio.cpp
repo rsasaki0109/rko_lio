@@ -2405,8 +2405,29 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       // predicted attitude about horizontal axes. Yaw stays free, and the absolute tilt is
       // left to the gravity window alignment.
       bool limited = false;
-      optimized_pose.so3() = limit_tilt_correction(initial_guess.so3(), optimized_pose.so3(),
-                                                   config.max_tilt_correction_deg * M_PI / 180.0, &limited);
+      double tilt_limit = config.max_tilt_correction_deg * M_PI / 180.0;
+      if (config.max_tilt_correction_median_factor > 0.0) {
+        // The rig's routine correction: the median over every scan so far, before the limit.
+        const Eigen::Vector3d correction = (optimized_pose.so3() * initial_guess.so3().inverse()).log();
+        const double tilt_deg = std::hypot(correction.x(), correction.y()) * 180.0 / M_PI;
+        if (std::isfinite(tilt_deg)) {
+          const auto bin = static_cast<std::size_t>(std::min(tilt_deg * 1000.0, 1000.0));
+          ++_tilt_correction_histogram[bin];
+          ++_tilt_correction_count;
+        }
+        if (_tilt_correction_count >= static_cast<std::size_t>(std::max(1, config.max_tilt_correction_median_min_scans))) {
+          std::size_t below = 0;
+          std::size_t bin = 0;
+          while (bin < _tilt_correction_histogram.size() - 1 &&
+                 2 * (below + _tilt_correction_histogram[bin]) < _tilt_correction_count) {
+            below += _tilt_correction_histogram[bin++];
+          }
+          const double median_deg = (static_cast<double>(bin) + 0.5) / 1000.0;
+          tilt_limit = std::max(tilt_limit, config.max_tilt_correction_median_factor * median_deg * M_PI / 180.0);
+        }
+      }
+      tilt_correction_last_limit_rad = tilt_limit;
+      optimized_pose.so3() = limit_tilt_correction(initial_guess.so3(), optimized_pose.so3(), tilt_limit, &limited);
       if (limited) ++tilt_correction_limited_count;
     }
     if (config.gyro_bias_time_constant_sec > 0.0) {
