@@ -289,14 +289,15 @@ void VoxelHashMap::add_points(const std::vector<Eigen::Vector3d>& points) {
       return;
     }
     if (voxel_points.empty()) {
-      voxel_fronts_.push_back({p, voxel});
+      voxel_fronts_.push_back({p});
       far_bound_sq_ = std::max(far_bound_sq_, (p - far_bound_origin_).squaredNorm());
     }
-    // Grow each voxel's storage in steps (4, 8, 16, ..., capped at max_points_per_voxel_) instead of
-    // reserving the cap for every voxel: most voxels hold far fewer points than the cap. The points
-    // and their order are the same; the map is only read through pointers while it does not change.
+    // Grow each voxel's storage in steps (1, 2, 4, 8, 16, ..., capped at max_points_per_voxel_)
+    // instead of reserving the cap for every voxel: most voxels hold far fewer points than the cap,
+    // and a quarter of a large outdoor map's voxels hold one. The points and their order are the
+    // same; the map is only read through pointers while it does not change.
     if (voxel_points.size() == voxel_points.capacity()) {
-      const std::size_t grown = std::max<std::size_t>(4, 2 * voxel_points.capacity());
+      const std::size_t grown = std::max<std::size_t>(1, 2 * voxel_points.capacity());
       voxel_points.reserve(std::min<std::size_t>(max_points_per_voxel_, grown));
     }
     voxel_points.emplace_back(p);
@@ -374,8 +375,10 @@ void VoxelHashMap::remove_points_far_from_location(const Eigen::Vector3d& origin
     // ideal bucket as that order allows, whatever the order of the deletions.
     for (std::size_t i = 0; i < voxel_fronts_.size();) {
       if (distance_sq(voxel_fronts_[i]) > clipping_distance_sq) {
-        normal_map_.erase(voxel_fronts_[i].voxel);
-        map_.erase(voxel_fronts_[i].voxel);
+        // The voxel's key, from its first point as add_points() took it.
+        const Voxel voxel = point_to_voxel(voxel_fronts_[i].point, inv_voxel_size_);
+        normal_map_.erase(voxel);
+        map_.erase(voxel);
         voxel_fronts_[i] = voxel_fronts_.back();
         voxel_fronts_.pop_back();
       } else {

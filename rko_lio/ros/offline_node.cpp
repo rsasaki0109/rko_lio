@@ -61,7 +61,11 @@ public:
   std::chrono::steady_clock::time_point bag_start_time;
 
   explicit OfflineNode(const rclcpp::NodeOptions& options)
-      : ThreadedNode("rko_lio_offline_node", options), bag_start_time(std::chrono::steady_clock::now()) {
+      // The bag reader waits while the registration has frames to work on, so a short queue only
+      // keeps fewer converted scans in memory (10 frames, 1 s at 10 Hz, instead of the online 50;
+      // about 60 MB less on a 32-beam Hesai). The queue still holds the frames that wait for IMU
+      // data later in the bag.
+      : ThreadedNode("rko_lio_offline_node", options, 10), bag_start_time(std::chrono::steady_clock::now()) {
     // bag reading
     const tf2::Duration skip_to_time = tf2::durationFromSec(node->declare_parameter<double>("skip_to_time", 0.0));
     // Fork addition: dispatch the optional radar and direct-visual-frontend image topics from

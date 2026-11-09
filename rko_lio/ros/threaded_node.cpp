@@ -35,9 +35,12 @@ using namespace std::literals;
 
 namespace rko_lio::ros {
 
-ThreadedNode::ThreadedNode(const std::string& node_name, const rclcpp::NodeOptions& options) : BaseNode(node_name, options) {
+ThreadedNode::ThreadedNode(const std::string& node_name,
+                           const rclcpp::NodeOptions& options,
+                           const size_t default_max_lidar_buffer_size)
+    : BaseNode(node_name, options) {
   const int buffer_size = node->declare_parameter<int>(
-      "async.max_lidar_buffer_size", static_cast<int>(max_lidar_buffer_size));
+      "async.max_lidar_buffer_size", static_cast<int>(default_max_lidar_buffer_size));
   if (buffer_size < 1) {
     throw std::invalid_argument("async.max_lidar_buffer_size must be positive");
   }

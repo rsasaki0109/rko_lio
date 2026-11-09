@@ -59,7 +59,9 @@ public:
   std::chrono::milliseconds output_publish_delay{0};
 
   ThreadedNode() = delete;
-  ThreadedNode(const std::string& node_name, const rclcpp::NodeOptions& options);
+  /** default_max_lidar_buffer_size: the default of async.max_lidar_buffer_size (frames). */
+  ThreadedNode(const std::string& node_name, const rclcpp::NodeOptions& options,
+               size_t default_max_lidar_buffer_size = 50);
 
   void imu_callback(const sensor_msgs::msg::Imu::ConstSharedPtr& imu_msg);
   void lidar_callback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& lidar_msg);

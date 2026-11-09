@@ -123,10 +123,10 @@ private:
   void refresh_normal(const Voxel& voxel, const VoxelBlock& points);
 
   // The first point of every voxel, which remove_points_far_from_location() judges the voxel by,
-  // with its key, in no particular order. Scanning this list is much cheaper than walking map_.
+  // in no particular order; the voxel's key is that point's voxel. Scanning this list is much
+  // cheaper than walking map_.
   struct VoxelFront {
     Eigen::Vector3d point;
-    Voxel voxel;
   };
   std::vector<VoxelFront> voxel_fronts_;
   // Upper bound on the squared distance from far_bound_origin_ to any point of voxel_fronts_.
