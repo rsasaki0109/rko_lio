@@ -37,6 +37,7 @@
 #include <optional>
 #include <sophus/se3.hpp>
 #include <tsl/robin_map.h>
+#include <string>
 #include <tuple>
 #include <vector>
 
@@ -61,6 +62,9 @@ struct VoxelHashMap {
   void add_points(const std::vector<Eigen::Vector3d>& points);
   void remove_points_far_from_location(const Eigen::Vector3d& origin);
   std::vector<Eigen::Vector3d> pointcloud() const;
+  /** Diagnostic only (RKO_LIO_MAP_DIAG): one line of the map's sizes, its tables' bucket counts and
+   *  the voxels by number of points (1, 2, 3-4, 5-8, 9-16, 17+) with their summed point capacity. */
+  std::string memory_summary() const;
   /** Re-express every stored point as `transform * point`, rebuilding the voxel grid. */
   void transform(const Sophus::SE3d& transform);
   std::tuple<Eigen::Vector3d, double> get_closest_neighbor(const Eigen::Vector3d& query) const;

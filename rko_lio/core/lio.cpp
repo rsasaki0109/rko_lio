@@ -804,6 +804,13 @@ void LIO::update_maps(const Vector3dVector& map_update_frame,
                       const Sophus::SE3d& pose,
                       const Vector3dVector* full_frame) {
   map.update(map_update_frame, pose);
+  // Diagnostic only, never read back (RKO_LIO_MAP_DIAG=<file>): every 50th map update, the local
+  // map's sizes (VoxelHashMap::memory_summary).
+  if (static const char* const map_diag_path = std::getenv("RKO_LIO_MAP_DIAG"); map_diag_path != nullptr) {
+    static std::ofstream map_diag(map_diag_path);
+    static std::size_t map_updates = 0;
+    if (map_updates++ % 50 == 0) map_diag << map.memory_summary() << '\n' << std::flush;
+  }
   if (config.bump_image_registration && full_frame != nullptr) {
     Vector3dVector world_points(full_frame->size());
     std::vector<double> ranges(full_frame->size());

@@ -409,6 +409,24 @@ void VoxelHashMap::transform(const Sophus::SE3d& transform) {
   add_points(points);
 }
 
+std::string VoxelHashMap::memory_summary() const {
+  std::array<std::size_t, 6> by_size{};
+  std::size_t points = 0;
+  std::size_t capacity = 0;
+  for (const auto& [_, block] : map_) {
+    const std::size_t n = block.size();
+    points += n;
+    capacity += block.capacity();
+    by_size[n <= 1 ? 0 : n == 2 ? 1 : n <= 4 ? 2 : n <= 8 ? 3 : n <= 16 ? 4 : 5]++;
+  }
+  std::string out = std::to_string(map_.size()) + ' ' + std::to_string(map_.bucket_count()) + ' ' +
+                    std::to_string(normal_map_.size()) + ' ' + std::to_string(normal_map_.bucket_count()) + ' ' +
+                    std::to_string(voxel_fronts_.size()) + ' ' + std::to_string(voxel_fronts_.capacity()) + ' ' +
+                    std::to_string(points) + ' ' + std::to_string(capacity);
+  for (const std::size_t c : by_size) out += ' ' + std::to_string(c);
+  return out;
+}
+
 std::vector<Eigen::Vector3d> VoxelHashMap::pointcloud() const {
   std::vector<Eigen::Vector3d> point_cloud;
   point_cloud.reserve(map_.size() * max_points_per_voxel_);
