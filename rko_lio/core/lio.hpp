@@ -410,6 +410,13 @@ public:
     double gyro_bias_time_constant_sec = 0.0;
     /** Scans whose kept correction exceeds this (deg) leave the gyro bias alone. */
     double gyro_bias_max_correction_deg = 1.0;
+    /** Track the gyro bias only on scans that stand still: registered speed at most this (m/s;
+     *  0: every scan). On long stairs the registration tilts the attitude itself, and a bias that
+     *  follows every scan takes that in; a standing robot's scan repeats the previous one. */
+    double gyro_bias_standstill_max_speed = 0.0;
+    /** With gyro_bias_standstill_max_speed: also at most this mean gyro rate (rad/s, bias as
+     *  currently estimated; 0: no rate limit). */
+    double gyro_bias_standstill_max_rate_rad_s = 0.0;
     /** Treat the start as moving, and leave the IMU biases at zero, when the mean gyro rate
      *  of the initialization interval exceeds this (rad/s; 0: always static). */
     double initialization_max_gyro_rad_s = 0.0;

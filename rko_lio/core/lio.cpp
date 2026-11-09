@@ -2410,7 +2410,18 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       // The kept correction of the gyro-predicted attitude, in the body frame, is the bias error
       // integrated over the interval (see gyro_bias_time_constant_sec).
       const Eigen::Vector3d delta = (initial_guess.so3().inverse() * optimized_pose.so3()).log();
-      if (delta.allFinite() && delta.norm() <= config.gyro_bias_max_correction_deg * M_PI / 180.0) {
+      bool standing = true;
+      if (config.gyro_bias_standstill_max_speed > 0.0) {
+        const double scan_dt = to_seconds(current_lidar_time - lidar_state.time);
+        standing = scan_dt > 0.0 && (optimized_pose.translation() - lidar_state.pose.translation()).norm() <=
+                                        config.gyro_bias_standstill_max_speed * scan_dt;
+        if (standing && config.gyro_bias_standstill_max_rate_rad_s > 0.0) {
+          standing = interval_stats.imu_count > 0 &&
+                     (interval_stats.angular_velocity_sum / interval_stats.imu_count).norm() <=
+                         config.gyro_bias_standstill_max_rate_rad_s;
+        }
+      }
+      if (standing && delta.allFinite() && delta.norm() <= config.gyro_bias_max_correction_deg * M_PI / 180.0) {
         imu_bias.gyroscope -= delta / config.gyro_bias_time_constant_sec;
         ++gyro_bias_update_count;
       }
