@@ -333,4 +333,50 @@ TEST(VoxelHashMap, CachedSearchSkipsOnlyWhenTheNearestPointCannotChange) {
   }
 }
 
+
+// Compact points (32-bit offsets from the voxel's corner) give the same nearest points as 64-bit
+// coordinates, within their rounding (about 1e-8 m at a 0.5 m voxel), on every search path; the
+// cached search on a compact map is bit-identical to the uncached one on it.
+TEST(VoxelHashMap, CompactPointsMatchFullPrecisionWithinRounding) {
+  std::uint64_t state = 11;
+  const auto uniform = [&state]() {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    return static_cast<double>(state >> 11) / static_cast<double>(std::uint64_t{1} << 53);
+  };
+  VoxelHashMap full(0.5, 100.0, 20U);
+  VoxelHashMap compact(0.5, 100.0, 20U);
+  compact.set_compact_points(true);
+  std::vector<Eigen::Vector3d> points;
+  for (int i = 0; i < 3000; ++i) {
+    // far from the origin, where 32-bit coordinates would round to about 1e-5 m
+    points.emplace_back(300.0 + 6.0 * uniform(), -250.0 + 6.0 * uniform(), 40.0 + uniform());
+  }
+  full.add_points(points);
+  compact.add_points(points);
+  EXPECT_EQ(full.pointcloud().size(), compact.pointcloud().size());
+
+  VoxelHashMap::NeighborhoodCache cache;
+  Eigen::Vector3d query(303.0, -247.0, 40.5);
+  for (int step = 0; step < 1000; ++step) {
+    query += Eigen::Vector3d(0.1 * uniform() - 0.05, 0.1 * uniform() - 0.05, 0.04 * uniform() - 0.02);
+    const auto [expected, expected_distance] = full.get_closest_neighbor(query);
+    const auto [actual, distance] = compact.get_closest_neighbor(query);
+    EXPECT_NEAR(distance, expected_distance, 1e-7) << "query: " << query.transpose();
+    EXPECT_LT((actual - expected).norm(), 1e-7) << "query: " << query.transpose();
+    const auto [cached, cached_distance] = compact.get_closest_neighbor(query, cache);
+    EXPECT_TRUE(cached == actual) << "query: " << query.transpose();
+    EXPECT_EQ(cached_distance, distance) << "query: " << query.transpose();
+    const auto [wide, wide_distance] = compact.get_closest_neighbor(query, 3);
+    const auto [wide_expected, wide_expected_distance] = full.get_closest_neighbor(query, 3);
+    EXPECT_NEAR(wide_distance, wide_expected_distance, 1e-7) << "query: " << query.transpose();
+    EXPECT_LT((wide - wide_expected).norm(), 1e-7) << "query: " << query.transpose();
+  }
+
+  // Moving the origin away removes the same voxels from both maps.
+  full.update({}, Sophus::SE3d(Sophus::SO3d(), Eigen::Vector3d(380.0, -250.0, 40.0)));
+  compact.update({}, Sophus::SE3d(Sophus::SO3d(), Eigen::Vector3d(380.0, -250.0, 40.0)));
+  EXPECT_EQ(full.pointcloud().size(), compact.pointcloud().size());
+  EXPECT_LT(full.pointcloud().size(), points.size());
+}
+
 } // namespace

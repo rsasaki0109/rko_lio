@@ -44,6 +44,7 @@
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 #if defined(_MSC_VER) && !defined(__clang__) && (defined(_M_X64) || defined(_M_IX86))
@@ -64,17 +65,31 @@ inline void prefetch(const void* address) {
 #endif
 }
 
-// The first cache lines (up to three, or eight points) of the `count` points at `points`.
-inline void prefetch_points(const Eigen::Vector3d* points, const std::uint32_t count) {
+// The first cache lines (up to three) of the `count` points of `point_size` bytes at `points`.
+inline void prefetch_points(const void* points, const std::uint32_t count, const std::size_t point_size) {
   if (points == nullptr) {
     return;
   }
-  const char* bytes = reinterpret_cast<const char*>(points);
-  const std::size_t size = std::min<std::size_t>(std::size_t{count} * sizeof(Eigen::Vector3d), 3 * 64);
+  const char* bytes = static_cast<const char*>(points);
+  const std::size_t size = std::min<std::size_t>(std::size_t{count} * point_size, 3 * 64);
   for (std::size_t offset = 0; offset < size; offset += 64) {
     prefetch(bytes + offset);
   }
 }
+
+// The points of one voxel as closest_neighbor_around() reads them: stored coordinates, or 32-bit
+// offsets from the voxel's corner (VoxelHashMap::set_compact_points).
+struct DoublePoints {
+  const Eigen::Vector3d* points = nullptr;
+  std::size_t count = 0;
+  const Eigen::Vector3d& operator[](const std::size_t i) const { return points[i]; }
+};
+struct CompactPoints {
+  const Eigen::Vector3f* offsets = nullptr;
+  std::size_t count = 0;
+  Eigen::Vector3d corner = Eigen::Vector3d::Zero();
+  Eigen::Vector3d operator[](const std::size_t i) const { return corner + offsets[i].cast<double>(); }
+};
 
 static const std::array<Voxel, 27> shifts{
     Voxel{-1, -1, -1}, Voxel{-1, -1, 0}, Voxel{-1, -1, 1}, //
@@ -132,14 +147,15 @@ std::tuple<Eigen::Vector3d, double> closest_neighbor_around(const Eigen::Vector3
       }
       continue;
     }
-    const auto [points, count] = points_of(shift);
-    for (std::size_t i = 0; i < count; ++i) {
-      const double squared_distance = (points[i] - query).squaredNorm();
+    const auto points = points_of(shift);
+    for (std::size_t i = 0; i < points.count; ++i) {
+      const auto& point = points[i];
+      const double squared_distance = (point - query).squaredNorm();
       if (squared_distance < closest_squared_distance) {
         if constexpr (kBoundOthers) {
           others = std::min(others, closest_squared_distance);
         }
-        closest_neighbor = points[i];
+        closest_neighbor = point;
         closest_squared_distance = squared_distance;
       } else if constexpr (kBoundOthers) {
         others = std::min(others, squared_distance);
@@ -175,10 +191,17 @@ VoxelHashMap::VoxelHashMap(const double voxel_size,
 
 std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eigen::Vector3d& query) const {
   const Voxel voxel = point_to_voxel(query, inv_voxel_size_);
+  if (compact_points_) {
+    return closest_neighbor_around(query, voxel, voxel_size_, [&](const std::size_t shift) {
+      const Voxel neighbor = voxel + shifts[shift];
+      const auto search = compact_map_.find(neighbor);
+      return search != compact_map_.end() ? CompactPoints{search.value().data(), search.value().size(), corner(neighbor)}
+                                          : CompactPoints{};
+    });
+  }
   return closest_neighbor_around(query, voxel, voxel_size_, [&](const std::size_t shift) {
     const auto search = map_.find(voxel + shifts[shift]);
-    return search != map_.end() ? std::pair(search.value().data(), search.value().size())
-                                : std::pair<const Eigen::Vector3d*, std::size_t>(nullptr, 0);
+    return search != map_.end() ? DoublePoints{search.value().data(), search.value().size()} : DoublePoints{};
   });
 }
 
@@ -204,25 +227,40 @@ std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eig
     // The search below reads again the points of the voxels found by the earlier calls, and those
     // are rarely still in the cache by then. Requesting them all first lets the misses overlap
     // instead of stalling the search one voxel at a time.
+    const std::size_t point_size = compact_points_ ? sizeof(Eigen::Vector3f) : sizeof(Eigen::Vector3d);
     for (std::uint32_t pending = cache.looked_up; pending != 0; pending &= pending - 1) {
       const auto shift = static_cast<std::size_t>(std::countr_zero(pending));
-      prefetch_points(cache.points[shift], cache.sizes[shift]);
+      prefetch_points(cache.points[shift], cache.sizes[shift], point_size);
     }
   }
+  // Looks the voxel voxel + shifts[shift] up in `map` once and keeps its points in the cache.
+  const auto look_up = [&](const auto& map, const std::size_t shift) {
+    const std::uint32_t bit = std::uint32_t{1} << shift;
+    if ((cache.looked_up & bit) == 0) {
+      const auto search = map.find(voxel + shifts[shift]);
+      cache.points[shift] = search != map.end() ? static_cast<const void*>(search.value().data()) : nullptr;
+      cache.sizes[shift] = search != map.end() ? static_cast<std::uint32_t>(search.value().size()) : 0U;
+      cache.looked_up |= bit;
+    }
+  };
   double others_squared_distance = std::numeric_limits<double>::max();
-  const auto result = closest_neighbor_around<true>(
-      query, voxel, voxel_size_,
-      [&](const std::size_t shift) {
-        const std::uint32_t bit = std::uint32_t{1} << shift;
-        if ((cache.looked_up & bit) == 0) {
-          const auto search = map_.find(voxel + shifts[shift]);
-          cache.points[shift] = search != map_.end() ? search.value().data() : nullptr;
-          cache.sizes[shift] = search != map_.end() ? static_cast<std::uint32_t>(search.value().size()) : 0U;
-          cache.looked_up |= bit;
-        }
-        return std::pair<const Eigen::Vector3d*, std::size_t>(cache.points[shift], cache.sizes[shift]);
-      },
-      &others_squared_distance);
+  const auto result =
+      compact_points_
+          ? closest_neighbor_around<true>(
+                query, voxel, voxel_size_,
+                [&](const std::size_t shift) {
+                  look_up(compact_map_, shift);
+                  return CompactPoints{static_cast<const Eigen::Vector3f*>(cache.points[shift]), cache.sizes[shift],
+                                       corner(voxel + shifts[shift])};
+                },
+                &others_squared_distance)
+          : closest_neighbor_around<true>(
+                query, voxel, voxel_size_,
+                [&](const std::size_t shift) {
+                  look_up(map_, shift);
+                  return DoublePoints{static_cast<const Eigen::Vector3d*>(cache.points[shift]), cache.sizes[shift]};
+                },
+                &others_squared_distance);
   cache.has_reference = std::get<1>(result) != std::numeric_limits<double>::max();
   cache.reference_query = query;
   cache.reference_neighbor = std::get<0>(result);
@@ -256,18 +294,27 @@ std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eig
           continue;
         }
         const Voxel query_voxel = voxel + Voxel{dx, dy, dz};
+        const auto search_points = [&](const auto& points) {
+          for (std::size_t i = 0; i < points.count; ++i) {
+            const auto& point = points[i];
+            const double squared_distance = (point - query).squaredNorm();
+            if (squared_distance < closest_squared_distance) {
+              closest_neighbor = point;
+              closest_squared_distance = squared_distance;
+            }
+          }
+        };
+        if (compact_points_) {
+          if (const auto search = compact_map_.find(query_voxel); search != compact_map_.end()) {
+            search_points(CompactPoints{search.value().data(), search.value().size(), corner(query_voxel)});
+          }
+          continue;
+        }
         const auto search = map_.find(query_voxel);
         if (search == map_.end()) {
           continue;
         }
-        const VoxelBlock& voxel_points = search.value();
-        for (const Eigen::Vector3d& point : voxel_points) {
-          const double squared_distance = (point - query).squaredNorm();
-          if (squared_distance < closest_squared_distance) {
-            closest_neighbor = point;
-            closest_squared_distance = squared_distance;
-          }
-        }
+        search_points(DoublePoints{search.value().data(), search.value().size()});
       }
     }
   }
@@ -278,14 +325,33 @@ std::tuple<Eigen::Vector3d, double> VoxelHashMap::get_closest_neighbor(const Eig
 }
 
 void VoxelHashMap::add_points(const std::vector<Eigen::Vector3d>& points) {
+  if (compact_points_) {
+    add_points_to(compact_map_, points);
+  } else {
+    add_points_to(map_, points);
+  }
+}
+
+template <typename Map>
+void VoxelHashMap::add_points_to(Map& map, const std::vector<Eigen::Vector3d>& points) {
+  constexpr bool kCompact = std::is_same_v<typename Map::mapped_type, CompactVoxelBlock>;
   const double map_resolution_sq = voxel_size_ * voxel_size_ / max_points_per_voxel_;
   std::for_each(points.cbegin(), points.cend(), [&](const Eigen::Vector3d& p) {
     const Voxel voxel = point_to_voxel(p, inv_voxel_size_);
-    auto it = map_.try_emplace(voxel).first;
-    VoxelBlock& voxel_points = it.value();
-    if (voxel_points.size() == max_points_per_voxel_ ||
-        std::any_of(voxel_points.cbegin(), voxel_points.cend(),
-                    [&](const auto& voxel_point) { return (voxel_point - p).squaredNorm() < map_resolution_sq; })) {
+    auto it = map.try_emplace(voxel).first;
+    auto& voxel_points = it.value();
+    if constexpr (kCompact) {
+      const Eigen::Vector3d offset = p - corner(voxel);
+      if (voxel_points.size() == max_points_per_voxel_ ||
+          std::any_of(voxel_points.cbegin(), voxel_points.cend(), [&](const Eigen::Vector3f& voxel_point) {
+            return (voxel_point.cast<double>() - offset).squaredNorm() < map_resolution_sq;
+          })) {
+        return;
+      }
+    } else if (voxel_points.size() == max_points_per_voxel_ ||
+               std::any_of(voxel_points.cbegin(), voxel_points.cend(), [&](const auto& voxel_point) {
+                 return (voxel_point - p).squaredNorm() < map_resolution_sq;
+               })) {
       return;
     }
     if (voxel_points.empty()) {
@@ -300,25 +366,38 @@ void VoxelHashMap::add_points(const std::vector<Eigen::Vector3d>& points) {
       const std::size_t grown = std::max<std::size_t>(1, 2 * voxel_points.capacity());
       voxel_points.reserve(std::min<std::size_t>(max_points_per_voxel_, grown));
     }
-    voxel_points.emplace_back(p);
+    if constexpr (kCompact) {
+      voxel_points.emplace_back((p - corner(voxel)).template cast<float>());
+    } else {
+      voxel_points.emplace_back(p);
+    }
     if (maintain_normals_) {
       refresh_normal(voxel, voxel_points);
     }
   });
 }
 
-void VoxelHashMap::refresh_normal(const Voxel& voxel, const VoxelBlock& points) {
+template <typename Points>
+void VoxelHashMap::refresh_normal(const Voxel& voxel, const Points& points) {
   if (points.size() < min_normal_points_) {
     return; // too few samples: keep any stale normal erased
   }
+  // The voxel's points as coordinates (compact points are offsets from the voxel's corner).
+  const auto point_at = [&](const std::size_t i) -> Eigen::Vector3d {
+    if constexpr (std::is_same_v<Points, CompactVoxelBlock>) {
+      return corner(voxel) + points[i].template cast<double>();
+    } else {
+      return points[i];
+    }
+  };
   Eigen::Vector3d mean = Eigen::Vector3d::Zero();
-  for (const Eigen::Vector3d& p : points) {
-    mean += p;
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    mean += point_at(i);
   }
   mean /= static_cast<double>(points.size());
   Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
-  for (const Eigen::Vector3d& p : points) {
-    const Eigen::Vector3d d = p - mean;
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    const Eigen::Vector3d d = point_at(i) - mean;
     covariance += d * d.transpose();
   }
   covariance /= static_cast<double>(points.size());
@@ -378,7 +457,11 @@ void VoxelHashMap::remove_points_far_from_location(const Eigen::Vector3d& origin
         // The voxel's key, from its first point as add_points() took it.
         const Voxel voxel = point_to_voxel(voxel_fronts_[i].point, inv_voxel_size_);
         normal_map_.erase(voxel);
-        map_.erase(voxel);
+        if (compact_points_) {
+          compact_map_.erase(voxel);
+        } else {
+          map_.erase(voxel);
+        }
         voxel_fronts_[i] = voxel_fronts_.back();
         voxel_fronts_.pop_back();
       } else {
@@ -416,13 +499,19 @@ std::string VoxelHashMap::memory_summary() const {
   std::array<std::size_t, 6> by_size{};
   std::size_t points = 0;
   std::size_t capacity = 0;
-  for (const auto& [_, block] : map_) {
-    const std::size_t n = block.size();
-    points += n;
-    capacity += block.capacity();
-    by_size[n <= 1 ? 0 : n == 2 ? 1 : n <= 4 ? 2 : n <= 8 ? 3 : n <= 16 ? 4 : 5]++;
-  }
-  std::string out = std::to_string(map_.size()) + ' ' + std::to_string(map_.bucket_count()) + ' ' +
+  const auto count = [&](const auto& map) {
+    for (const auto& [_, block] : map) {
+      const std::size_t n = block.size();
+      points += n;
+      capacity += block.capacity();
+      by_size[n <= 1 ? 0 : n == 2 ? 1 : n <= 4 ? 2 : n <= 8 ? 3 : n <= 16 ? 4 : 5]++;
+    }
+  };
+  count(map_);
+  count(compact_map_);
+  const std::size_t voxels = compact_points_ ? compact_map_.size() : map_.size();
+  const std::size_t buckets = compact_points_ ? compact_map_.bucket_count() : map_.bucket_count();
+  std::string out = std::to_string(voxels) + ' ' + std::to_string(buckets) + ' ' +
                     std::to_string(normal_map_.size()) + ' ' + std::to_string(normal_map_.bucket_count()) + ' ' +
                     std::to_string(voxel_fronts_.size()) + ' ' + std::to_string(voxel_fronts_.capacity()) + ' ' +
                     std::to_string(points) + ' ' + std::to_string(capacity);
@@ -432,6 +521,16 @@ std::string VoxelHashMap::memory_summary() const {
 
 std::vector<Eigen::Vector3d> VoxelHashMap::pointcloud() const {
   std::vector<Eigen::Vector3d> point_cloud;
+  if (compact_points_) {
+    point_cloud.reserve(compact_map_.size() * max_points_per_voxel_);
+    for (const auto& [voxel, block] : compact_map_) {
+      const Eigen::Vector3d origin = corner(voxel);
+      for (const Eigen::Vector3f& offset : block) {
+        point_cloud.emplace_back(origin + offset.cast<double>());
+      }
+    }
+    return point_cloud;
+  }
   point_cloud.reserve(map_.size() * max_points_per_voxel_);
   for (const auto& [_, block] : map_) {
     point_cloud.insert(point_cloud.end(), block.cbegin(), block.cend());

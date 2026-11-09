@@ -152,6 +152,11 @@ public:
     /** Max points per voxel. */
     int max_points_per_voxel = 20;
 
+    /** Keep the local map's points as 32-bit offsets from their voxel's corner instead of 64-bit
+     *  coordinates: half the memory of the map's points (12 instead of 24 bytes a point), within
+     *  about 1e-8 m of the point at a 0.25 m voxel. The trajectory changes by that rounding. */
+    bool local_map_compact_points = false;
+
     /** Maximum lidar range (m). */
     double max_range = 100.0;
 

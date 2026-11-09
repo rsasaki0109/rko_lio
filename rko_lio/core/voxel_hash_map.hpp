@@ -45,6 +45,8 @@ namespace rko_lio::core {
 
 using Voxel = Eigen::Vector3i;
 using VoxelBlock = std::vector<Eigen::Vector3d>;
+/** A voxel's points as 32-bit offsets from the voxel's corner (set_compact_points). */
+using CompactVoxelBlock = std::vector<Eigen::Vector3f>;
 
 struct VoxelHashMap {
   explicit VoxelHashMap(const double voxel_size,
@@ -53,11 +55,16 @@ struct VoxelHashMap {
 
   void clear() {
     map_.clear();
+    compact_map_.clear();
     normal_map_.clear();
     voxel_fronts_.clear();
     far_bound_sq_ = 0.0;
   }
-  bool empty() const { return map_.empty(); }
+  bool empty() const { return compact_points_ ? compact_map_.empty() : map_.empty(); }
+  /** Keep the points as 32-bit offsets from their voxel's corner instead of 64-bit coordinates:
+   *  12 instead of 24 bytes a point, within about 1e-8 m of the point at a 0.25 m voxel. Set it
+   *  while the map is empty. */
+  void set_compact_points(bool compact) { compact_points_ = compact; }
   void update(const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& pose);
   void add_points(const std::vector<Eigen::Vector3d>& points);
   void remove_points_far_from_location(const Eigen::Vector3d& origin);
@@ -90,7 +97,7 @@ struct VoxelHashMap {
     Eigen::Vector3d reference_neighbor = Eigen::Vector3d::Zero();
     double reference_others_distance = 0.0; // lower bound, from reference_query
     std::uint32_t looked_up = 0;            // bit i: shift i has been looked up
-    std::array<const Eigen::Vector3d*, 27> points{};
+    std::array<const void*, 27> points{}; // Eigen::Vector3d, or Eigen::Vector3f with compact points
     std::array<std::uint32_t, 27> sizes{};
   };
   /** Same result as the single-argument overload, reusing `cache` for the voxel lookups. */
@@ -118,9 +125,16 @@ struct VoxelHashMap {
   double planarity_ratio_ = 3.0;
   double min_mid_to_major_ratio_ = 0.05;
   tsl::robin_map<Voxel, Eigen::Vector3d, VoxelHash> normal_map_;
+  bool compact_points_ = false;
+  tsl::robin_map<Voxel, CompactVoxelBlock, VoxelHash> compact_map_;
 
 private:
-  void refresh_normal(const Voxel& voxel, const VoxelBlock& points);
+  template <typename Points>
+  void refresh_normal(const Voxel& voxel, const Points& points);
+  template <typename Map>
+  void add_points_to(Map& map, const std::vector<Eigen::Vector3d>& points);
+  /** The corner of `voxel`, from which compact points are offsets. */
+  Eigen::Vector3d corner(const Voxel& voxel) const { return voxel.cast<double>() * voxel_size_; }
 
   // The first point of every voxel, which remove_points_far_from_location() judges the voxel by,
   // in no particular order; the voxel's key is that point's voxel. Scanning this list is much

@@ -585,6 +585,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   lio_config.voxel_size = node->declare_parameter<double>("voxel_size", lio_config.voxel_size);
   lio_config.max_points_per_voxel =
       static_cast<int>(node->declare_parameter<int>("max_points_per_voxel", lio_config.max_points_per_voxel));
+  lio_config.local_map_compact_points =
+      node->declare_parameter<bool>("local_map_compact_points", lio_config.local_map_compact_points);
   lio_config.max_range = node->declare_parameter<double>("max_range", lio_config.max_range);
   lio_config.min_range = node->declare_parameter<double>("min_range", lio_config.min_range);
   lio_config.convergence_criterion =

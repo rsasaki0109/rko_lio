@@ -679,6 +679,7 @@ LIO::LIO(const Config& config_)
                                          config.output_filter_bias_noise});
   // Per-voxel normals are only maintained when the localizability weighting can
   // consume them; the default path pays nothing.
+  map.set_compact_points(config.local_map_compact_points);
   map.set_maintain_normals(config.localizability_weighting ||
                            (config.close_scene_max_median_range > 0.0 && config.close_scene_localizability_boost > 0.0));
   if (config.gait_speed_prior) {
