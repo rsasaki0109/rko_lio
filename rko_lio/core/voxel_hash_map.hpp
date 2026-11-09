@@ -62,9 +62,17 @@ struct VoxelHashMap {
   }
   bool empty() const { return compact_points_ ? compact_map_.empty() : map_.empty(); }
   /** Keep the points as 32-bit offsets from their voxel's corner instead of 64-bit coordinates:
-   *  12 instead of 24 bytes a point, within about 1e-8 m of the point at a 0.25 m voxel. Set it
-   *  while the map is empty. */
-  void set_compact_points(bool compact) { compact_points_ = compact; }
+   *  12 instead of 24 bytes a point, within about 1e-8 m of the point at a 0.25 m voxel, in hash
+   *  tables filled to 0.9 instead of 0.5. Set it while the map is empty. */
+  void set_compact_points(bool compact) {
+    compact_points_ = compact;
+    // The compact map's hash tables are also filled further (0.9 instead of 0.5 of their buckets
+    // in use), about half the bucket memory; the default map's tables, and so its order, stay.
+    if (compact) {
+      compact_map_.max_load_factor(0.9f);
+      normal_map_.max_load_factor(0.9f);
+    }
+  }
   void update(const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& pose);
   void add_points(const std::vector<Eigen::Vector3d>& points);
   void remove_points_far_from_location(const Eigen::Vector3d& origin);
