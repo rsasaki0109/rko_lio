@@ -406,6 +406,10 @@ public:
      *  vehicle pulls the pitch by about 1 deg/s in tunnels and on bridges; the gyro holds
      *  it, and gravity_window_alignment corrects the absolute tilt. */
     double max_tilt_correction_deg = 0.0;
+    /** Largest correction (deg) per scan the registration may make to the gyro-predicted yaw (0: no
+     *  limit). In a stairwell or a narrow passage the scan can constrain the heading poorly, and a
+     *  registration that follows the walls turns the frame by degrees within a second. */
+    double max_yaw_correction_deg = 0.0;
     /** With max_tilt_correction_deg: the limit is at least this multiple of the median of the
      *  registration's roll/pitch corrections of the gyro prediction over every scan so far, taken
      *  before the limit (0: a fixed limit). A rig whose gyro prediction is routinely corrected by
@@ -1083,6 +1087,8 @@ public:
   StallGuard stall_guard;
   /** Scans whose roll/pitch correction hit max_tilt_correction_deg. */
   std::size_t tilt_correction_limited_count = 0;
+  /** Scans whose yaw correction hit max_yaw_correction_deg. */
+  std::size_t yaw_correction_limited_count = 0;
   /** Roll/pitch corrections before the limit (max_tilt_correction_median_factor), in bins of
    *  0.001 deg from 0 to 1 deg and one bin above; their count. */
   std::array<std::uint32_t, 1001> _tilt_correction_histogram{};

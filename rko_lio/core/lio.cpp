@@ -2438,6 +2438,12 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       optimized_pose.so3() = limit_tilt_correction(initial_guess.so3(), optimized_pose.so3(), tilt_limit, &limited);
       if (limited) ++tilt_correction_limited_count;
     }
+    if (config.max_yaw_correction_deg > 0.0) {
+      bool limited = false;
+      optimized_pose.so3() = limit_yaw_correction(initial_guess.so3(), optimized_pose.so3(),
+                                                  config.max_yaw_correction_deg * M_PI / 180.0, &limited);
+      if (limited) ++yaw_correction_limited_count;
+    }
     if (config.gyro_bias_time_constant_sec > 0.0) {
       // The kept correction of the gyro-predicted attitude, in the body frame, is the bias error
       // integrated over the interval (see gyro_bias_time_constant_sec).

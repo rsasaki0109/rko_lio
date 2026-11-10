@@ -798,6 +798,8 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   // ---- sliding-window absolute gravity alignment (fork addition; default-off) ----
   lio_config.max_tilt_correction_deg =
       node->declare_parameter<double>("max_tilt_correction_deg", lio_config.max_tilt_correction_deg);
+  lio_config.max_yaw_correction_deg =
+      node->declare_parameter<double>("max_yaw_correction_deg", lio_config.max_yaw_correction_deg);
   lio_config.max_tilt_correction_median_factor = node->declare_parameter<double>(
       "max_tilt_correction_median_factor", lio_config.max_tilt_correction_median_factor);
   lio_config.max_tilt_correction_median_min_scans = static_cast<int>(node->declare_parameter<int64_t>(
@@ -2035,6 +2037,9 @@ void BaseNode::dump_results_to_disk(const std::filesystem::path& results_dir, co
         std::cout << ", last limit " << lio->tilt_correction_last_limit_rad * 180.0 / M_PI << " deg";
       }
       std::cout << "\n";
+    }
+    if (lio->config.max_yaw_correction_deg > 0.0) {
+      std::cout << "Yaw correction limited on " << lio->yaw_correction_limited_count << " scans\n";
     }
     if (lio->config.gyro_bias_time_constant_sec > 0.0) {
       std::cout << "Gyro bias tracked on " << lio->gyro_bias_update_count << " scans, final "

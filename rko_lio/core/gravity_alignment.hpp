@@ -162,4 +162,17 @@ inline Sophus::SO3d limit_tilt_correction(const Sophus::SO3d& predicted, const S
   return Sophus::SO3d::exp(Eigen::Vector3d(tilt.x(), tilt.y(), correction.z())) * predicted;
 }
 
+/** Registered attitude with its yaw correction of the predicted attitude (the vertical part of the
+ *  world-frame correction) limited to cap_rad; roll and pitch are kept. Sets *limited when the cap
+ *  applied. */
+inline Sophus::SO3d limit_yaw_correction(const Sophus::SO3d& predicted, const Sophus::SO3d& registered,
+                                         const double cap_rad, bool* limited = nullptr) {
+  const Eigen::Vector3d correction = (registered * predicted.inverse()).log();
+  if (limited) *limited = false;
+  if (cap_rad <= 0.0 || std::abs(correction.z()) <= cap_rad) return registered;
+  if (limited) *limited = true;
+  return Sophus::SO3d::exp(Eigen::Vector3d(correction.x(), correction.y(), std::copysign(cap_rad, correction.z()))) *
+         predicted;
+}
+
 } // namespace rko_lio::core
