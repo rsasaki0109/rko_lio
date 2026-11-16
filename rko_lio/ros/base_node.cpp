@@ -41,39 +41,8 @@
 namespace {
 using namespace std::literals;
 
-// ============================================================================
-// [v0.8 Phase 1, diagnostic-only] anisotropic nav_msgs/Odometry.pose.covariance
-// fill, derived from LIO::State::icp_diagnostics (rko_lio/core/util.hpp).
-//
-// This does not change odom_msg.pose.pose or odom_msg.twist.twist in any way
-// -- those are still set exactly as before (see BaseNode::publish_odometry
-// below). Only the covariance field, which upstream leaves at its
-// message-default (all zeros), is filled here.
-//
-// Scale rationale: at a Gauss-Newton optimum, the accumulated Hessian `H`
-// (already averaged over correspondences by build_icp_linear_system, see
-// lio.cpp) is the standard asymptotic information matrix of the ICP solve;
-// its inverse is the corresponding pose-covariance approximation -- the same
-// H <-> information-matrix relationship Zhang & Singh ("On Degeneracy of
-// Optimization-based State Estimation Problems", ICRA 2016) use to define
-// per-direction degeneracy. `H`'s eigenvectors/eigenvalues are reused
-// directly from LocalizabilitySummary (already computed once in core, not
-// recomputed here) to build Cov = V * diag(1/lambda) * V^T.
-//
-// Near-exactly-degenerate directions (eigenvalue ~ 0) would blow up to +inf
-// under a literal inverse; each eigenvalue is floored at
-// max(kMinEigenvalueFloor, kRelativeEigenvalueFloor * lambda_max) before
-// inverting, so the reported covariance stays finite while still reporting a
-// very large (i.e. "not informative") uncertainty along that direction,
-// rather than a numerically meaningless inf/nan on the wire.
-constexpr double kMinEigenvalueFloor = 1e-9;
-constexpr double kRelativeEigenvalueFloor = 1e-6;
-// Fallback diagonal covariance (m^2 on the translation block, rad^2 on the
-// rotation block) used when no ICP solve happened for this scan (first
-// frame, a dropped scan, or a kidnap-recovery/local-reset scan): "no
-// information available", deliberately not "perfectly known" (which a
-// covariance of all zeros would imply to a consumer such as robot_localization).
-constexpr double kNoDiagnosticsFallbackVariance = 1e6;
+// The odometry pose covariance (driver::pose_covariance_from_state) lives in
+// rko_lio/driver/offline_driver.cpp, shared with the ROS-free driver.
 
 Sophus::SE3d desired_base_pose_from_monocular_relative(const Sophus::SE3d& world_T_previous_base,
                                                        const Sophus::SE3d& world_T_predicted_current_base,
@@ -90,34 +59,6 @@ Sophus::SE3d desired_base_pose_from_monocular_relative(const Sophus::SE3d& world
   return world_T_previous_camera * measured_current_T_previous_camera.inverse() * base_T_camera.inverse();
 }
 
-std::array<double, 36> pose_covariance_from_state(const rko_lio::core::State& state) {
-  std::array<double, 36> covariance{}; // zero-initialized
-  if (!state.icp_diagnostics.has_value()) {
-    for (int i = 0; i < 6; ++i) {
-      covariance[static_cast<size_t>(i * 6 + i)] = kNoDiagnosticsFallbackVariance;
-    }
-    return covariance;
-  }
-  const rko_lio::core::LocalizabilitySummary& localizability = state.icp_diagnostics->localizability;
-  const double lambda_max = localizability.eigenvalues.maxCoeff();
-  const double eigenvalue_floor = std::max(kMinEigenvalueFloor, kRelativeEigenvalueFloor * lambda_max);
-  Eigen::Vector6d inv_eigenvalues;
-  for (int i = 0; i < 6; ++i) {
-    inv_eigenvalues(i) = 1.0 / std::max(localizability.eigenvalues(i), eigenvalue_floor);
-  }
-  // Sophus::SE3d's se(3) tangent order (translation rho, then rotation phi) matches
-  // geometry_msgs/PoseWithCovariance's documented covariance order ([x, y, z, rot x, rot y,
-  // rot z]) exactly, so no axis permutation is needed between H's ordering and the wire
-  // covariance.
-  const Eigen::Matrix6d cov =
-      localizability.eigenvectors * inv_eigenvalues.asDiagonal() * localizability.eigenvectors.transpose();
-  for (int row = 0; row < 6; ++row) {
-    for (int col = 0; col < 6; ++col) {
-      covariance[static_cast<size_t>(row * 6 + col)] = cov(row, col);
-    }
-  }
-  return covariance;
-}
 } // namespace
 
 namespace rko_lio::core {
@@ -526,18 +467,76 @@ core::ImuControl BaseNode::imu_data_in_mps2(const sensor_msgs::msg::Imu& imu_msg
   return imu_data;
 }
 
+namespace {
+// rclcpp parameters behind the ROS-free driver::Parameters interface: each read declares the
+// parameter on the node, exactly as the node's constructor did before declare_driver_config.
+class RosParameters : public driver::Parameters {
+public:
+  explicit RosParameters(rclcpp::Node& node) : node_(node) {}
+  bool get_bool(const std::string& name, bool default_value) override {
+    return node_.declare_parameter<bool>(name, default_value);
+  }
+  int64_t get_int(const std::string& name, int64_t default_value) override {
+    return node_.declare_parameter<int64_t>(name, default_value);
+  }
+  double get_double(const std::string& name, double default_value) override {
+    return node_.declare_parameter<double>(name, default_value);
+  }
+  std::string get_string(const std::string& name, const std::string& default_value) override {
+    return node_.declare_parameter<std::string>(name, default_value);
+  }
+  std::vector<double> get_double_array(const std::string& name, const std::vector<double>& default_value) override {
+    return node_.declare_parameter<std::vector<double>>(name, default_value);
+  }
+  std::vector<int64_t> get_int_array(const std::string& name, const std::vector<int64_t>& default_value) override {
+    return node_.declare_parameter<std::vector<int64_t>>(name, default_value);
+  }
+  std::string get_required_string(const std::string& name) override {
+    return node_.declare_parameter<std::string>(name);
+  }
+  void info(const std::string& message) override { RCLCPP_INFO_STREAM(node_.get_logger(), message); }
+  void warn(const std::string& message) override { RCLCPP_WARN_STREAM(node_.get_logger(), message); }
+
+private:
+  rclcpp::Node& node_;
+};
+} // namespace
+
 BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& options) {
   node = rclcpp::Node::make_shared(node_name, options);
-  imu_topic = node->declare_parameter<std::string>("imu_topic");     // required
-  lidar_topic = node->declare_parameter<std::string>("lidar_topic"); // required
-  base_frame = node->declare_parameter<std::string>("base_frame");   // required
-  imu_frame = node->declare_parameter<std::string>("imu_frame", imu_frame);
-  lidar_frame = node->declare_parameter<std::string>("lidar_frame", lidar_frame);
-  odom_frame = node->declare_parameter<std::string>("odom_frame", odom_frame);
-  odom_topic = node->declare_parameter<std::string>("odom_topic", odom_topic);
+  RosParameters params(*node);
+  const driver::DriverConfig config = driver::declare_driver_config(params);
+  imu_topic = config.imu_topic;
+  lidar_topic = config.lidar_topic;
+  base_frame = config.base_frame;
+  imu_frame = config.imu_frame;
+  lidar_frame = config.lidar_frame;
+  odom_frame = config.odom_frame;
+  odom_topic = config.odom_topic;
+  invert_odom_tf = config.invert_odom_tf;
+  publish_lidar_acceleration = config.publish_lidar_acceleration;
+  imu_acceleration_unit = config.imu_acceleration_unit;
+  publish_deskewed_scan = config.publish_deskewed_scan;
+  deskewed_scan_topic = config.deskewed_scan_topic;
+  deskewed_scan_voxel_size = config.deskewed_scan_voxel_size;
+  publish_local_map = config.publish_local_map;
+  map_topic = config.map_topic;
+  publish_map_after = config.publish_map_after;
+  photometric_channel = config.photometric_channel;
+  direct_visual_frontend = config.direct_visual_frontend;
+  direct_visual_require_previous_weak_direction = config.direct_visual_require_previous_weak_direction;
+  radar_topic = config.radar_topic;
+  radar_ego_velocity_config = config.radar_ego_velocity_config;
+  radar_velocity_scale = config.radar_velocity_scale;
+  radar_sigma_forward_mps = config.radar_sigma_forward_mps;
+  radar_sigma_lateral_mps = config.radar_sigma_lateral_mps;
+  radar_sigma_vertical_mps = config.radar_sigma_vertical_mps;
+  timestamp_proc_config = config.timestamp_proc_config;
+  dump_results = config.dump_results;
+  results_dir = config.results_dir;
+  run_name = config.run_name;
 
   // tf
-  invert_odom_tf = node->declare_parameter<bool>("invert_odom_tf", invert_odom_tf);
   tf_buffer = std::make_shared<tf2_ros::Buffer>(node->get_clock());
   tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(*node);
 
@@ -549,646 +548,36 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
   const rclcpp::QoS publisher_qos(
       rclcpp::SystemDefaultsQoS().keep_last(static_cast<std::size_t>(publisher_queue_depth)).durability_volatile());
   odom_publisher = node->create_publisher<nav_msgs::msg::Odometry>(odom_topic, publisher_qos);
-
-  publish_lidar_acceleration = node->declare_parameter<bool>("publish_lidar_acceleration", publish_lidar_acceleration);
   if (publish_lidar_acceleration) {
     lidar_accel_publisher =
         node->create_publisher<geometry_msgs::msg::AccelStamped>("rko_lio/lidar_acceleration", publisher_qos);
   }
-
-  imu_acceleration_unit = node->declare_parameter<std::string>("imu_acceleration_unit", imu_acceleration_unit);
-  core::acceleration_scale(imu_acceleration_unit, 0.0); // reject an unknown unit at startup
-  publish_deskewed_scan = node->declare_parameter<bool>("publish_deskewed_scan", publish_deskewed_scan);
   if (publish_deskewed_scan) {
-    deskewed_scan_topic = node->declare_parameter<std::string>("deskewed_scan_topic", deskewed_scan_topic);
     frame_publisher = node->create_publisher<sensor_msgs::msg::PointCloud2>(deskewed_scan_topic, publisher_qos);
-    deskewed_scan_voxel_size =
-        node->declare_parameter<double>("deskewed_scan_voxel_size", deskewed_scan_voxel_size);
   }
-
-  publish_local_map = node->declare_parameter<bool>("publish_local_map", publish_local_map);
   if (publish_local_map) {
-    map_topic = node->declare_parameter<std::string>("map_topic", map_topic);
-    const double publish_map_after_seconds =
-        node->declare_parameter<double>("publish_map_after", core::to_seconds(publish_map_after));
-    publish_map_after = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::duration<double>(publish_map_after_seconds));
     map_publisher = node->create_publisher<sensor_msgs::msg::PointCloud2>(map_topic, publisher_qos);
     map_publish_thead = std::jthread([this]() { publish_map_loop(); });
   }
 
-  // lio params
-  core::LIO::Config lio_config{};
-  lio_config.deskew = node->declare_parameter<bool>("deskew", lio_config.deskew);
-  lio_config.max_iterations =
-      static_cast<size_t>(node->declare_parameter<int>("max_iterations", static_cast<int>(lio_config.max_iterations)));
-  lio_config.voxel_size = node->declare_parameter<double>("voxel_size", lio_config.voxel_size);
-  lio_config.max_points_per_voxel =
-      static_cast<int>(node->declare_parameter<int>("max_points_per_voxel", lio_config.max_points_per_voxel));
-  lio_config.local_map_compact_points =
-      node->declare_parameter<bool>("local_map_compact_points", lio_config.local_map_compact_points);
-  lio_config.max_range = node->declare_parameter<double>("max_range", lio_config.max_range);
-  lio_config.min_range = node->declare_parameter<double>("min_range", lio_config.min_range);
-  lio_config.convergence_criterion =
-      node->declare_parameter<double>("convergence_criterion", lio_config.convergence_criterion);
-  lio_config.max_correspondence_distance =
-      node->declare_parameter<double>("max_correspondence_distance", lio_config.max_correspondence_distance);
-  lio_config.start_standstill_radius =
-      node->declare_parameter<double>("start_standstill_radius", lio_config.start_standstill_radius);
-  lio_config.start_standstill_max_accel_std =
-      node->declare_parameter<double>("start_standstill_max_accel_std", lio_config.start_standstill_max_accel_std);
-  lio_config.start_standstill_hold =
-      node->declare_parameter<bool>("start_standstill_hold", lio_config.start_standstill_hold);
-  lio_config.start_standstill_max_gyro_rad_s = node->declare_parameter<double>(
-      "start_standstill_max_gyro_rad_s", lio_config.start_standstill_max_gyro_rad_s);
-  lio_config.start_standstill_max_sec =
-      node->declare_parameter<double>("start_standstill_max_sec", lio_config.start_standstill_max_sec);
-  lio_config.start_standstill_bias =
-      node->declare_parameter<std::string>("start_standstill_bias", lio_config.start_standstill_bias);
-  lio_config.start_standstill_hold_radius =
-      node->declare_parameter<double>("start_standstill_hold_radius", lio_config.start_standstill_hold_radius);
-  lio_config.start_standstill_moving_start_only = node->declare_parameter<bool>(
-      "start_standstill_moving_start_only", lio_config.start_standstill_moving_start_only);
-  if (lio_config.start_standstill_bias != "interval" && lio_config.start_standstill_bias != "average" &&
-      lio_config.start_standstill_bias != "none") {
-    throw std::invalid_argument("start_standstill_bias must be interval, average or none");
+  lio = std::make_unique<core::LIO>(config.lio);
+
+  // Extrinsics given as parameters; the rest come from TF on the first messages.
+  if (config.extrinsic_imu2base) {
+    extrinsic_imu2base = *config.extrinsic_imu2base;
   }
-  lio_config.close_scene_max_median_range =
-      node->declare_parameter<double>("close_scene_max_median_range", lio_config.close_scene_max_median_range);
-  lio_config.close_scene_max_correspondence_distance = node->declare_parameter<double>(
-      "close_scene_max_correspondence_distance", lio_config.close_scene_max_correspondence_distance);
-  lio_config.close_scene_localizability_boost =
-      node->declare_parameter<double>("close_scene_localizability_boost", lio_config.close_scene_localizability_boost);
-  lio_config.close_scene_localizability_normal_only = node->declare_parameter<bool>(
-      "close_scene_localizability_normal_only", lio_config.close_scene_localizability_normal_only);
-  lio_config.close_scene_min_inlier_fraction =
-      node->declare_parameter<double>("close_scene_min_inlier_fraction", lio_config.close_scene_min_inlier_fraction);
-  lio_config.max_num_threads =
-      static_cast<int>(node->declare_parameter<int>("max_num_threads", lio_config.max_num_threads));
-  lio_config.initialization_phase =
-      node->declare_parameter<bool>("initialization_phase", lio_config.initialization_phase);
-  lio_config.max_expected_jerk = node->declare_parameter<double>("max_expected_jerk", lio_config.max_expected_jerk);
-  lio_config.double_downsample = node->declare_parameter<bool>("double_downsample", lio_config.double_downsample);
-  lio_config.legacy_voxel_downsample =
-      node->declare_parameter<bool>("legacy_voxel_downsample", lio_config.legacy_voxel_downsample);
-  lio_config.samplewise_gyro_deskew =
-      node->declare_parameter<bool>("samplewise_gyro_deskew", lio_config.samplewise_gyro_deskew);
-  lio_config.min_beta = node->declare_parameter<double>("min_beta", lio_config.min_beta);
-  lio_config.gait_speed_prior = node->declare_parameter<bool>("gait_speed_prior", lio_config.gait_speed_prior);
-  lio_config.gait_window_sec = node->declare_parameter<double>("gait_window_sec", lio_config.gait_window_sec);
-  lio_config.gait_min_peak_fraction =
-      node->declare_parameter<double>("gait_min_peak_fraction", lio_config.gait_min_peak_fraction);
-  lio_config.gait_min_magnitude_std =
-      node->declare_parameter<double>("gait_min_magnitude_std", lio_config.gait_min_magnitude_std);
-  lio_config.gait_min_step_length =
-      node->declare_parameter<double>("gait_min_step_length", lio_config.gait_min_step_length);
-  lio_config.gait_default_step_length =
-      node->declare_parameter<double>("gait_default_step_length", lio_config.gait_default_step_length);
-  lio_config.gait_max_step_length =
-      node->declare_parameter<double>("gait_max_step_length", lio_config.gait_max_step_length);
-  lio_config.gait_min_direction_speed =
-      node->declare_parameter<double>("gait_min_direction_speed", lio_config.gait_min_direction_speed);
-  lio_config.gait_reversal_lookback_sec =
-      node->declare_parameter<double>("gait_reversal_lookback_sec", lio_config.gait_reversal_lookback_sec);
-  lio_config.gait_max_correction_m =
-      node->declare_parameter<double>("gait_max_correction_m", lio_config.gait_max_correction_m);
-  lio_config.gait_sets_speed = node->declare_parameter<bool>("gait_sets_speed", lio_config.gait_sets_speed);
-  lio_config.gait_hold_without_cadence =
-      node->declare_parameter<bool>("gait_hold_without_cadence", lio_config.gait_hold_without_cadence);
-  lio_config.gait_standing_accel_std =
-      node->declare_parameter<double>("gait_standing_accel_std", lio_config.gait_standing_accel_std);
-  lio_config.gait_correction_weak_ratio =
-      node->declare_parameter<double>("gait_correction_weak_ratio", lio_config.gait_correction_weak_ratio);
-  lio_config.icp_levenberg_marquardt =
-      node->declare_parameter<bool>("icp_levenberg_marquardt", lio_config.icp_levenberg_marquardt);
-  lio_config.icp_lm_initial_lambda_factor =
-      node->declare_parameter<double>("icp_lm_initial_lambda_factor", lio_config.icp_lm_initial_lambda_factor);
-  lio_config.icp_lm_max_attempts =
-      node->declare_parameter<int>("icp_lm_max_attempts", lio_config.icp_lm_max_attempts);
-  lio_config.velocity_window_sec =
-      node->declare_parameter<double>("velocity_window_sec", lio_config.velocity_window_sec);
-  lio_config.inertial_window = node->declare_parameter<bool>("inertial_window", lio_config.inertial_window);
-  lio_config.inertial_window_sec =
-      node->declare_parameter<double>("inertial_window_sec", lio_config.inertial_window_sec);
-  lio_config.inertial_window_min_intervals =
-      node->declare_parameter<int>("inertial_window_min_intervals", lio_config.inertial_window_min_intervals);
-  lio_config.inertial_window_rotation_weight = node->declare_parameter<double>(
-      "inertial_window_rotation_weight", lio_config.inertial_window_rotation_weight);
-  lio_config.inertial_window_velocity_weight = node->declare_parameter<double>(
-      "inertial_window_velocity_weight", lio_config.inertial_window_velocity_weight);
-  lio_config.inertial_window_position_weight = node->declare_parameter<double>(
-      "inertial_window_position_weight", lio_config.inertial_window_position_weight);
-  lio_config.inertial_window_accelerometer_bias_prior_weight = node->declare_parameter<double>(
-      "inertial_window_accelerometer_bias_prior_weight", lio_config.inertial_window_accelerometer_bias_prior_weight);
-  lio_config.inertial_window_gyroscope_bias_prior_weight = node->declare_parameter<double>(
-      "inertial_window_gyroscope_bias_prior_weight", lio_config.inertial_window_gyroscope_bias_prior_weight);
-  lio_config.skip_registration_after_gap_sec = node->declare_parameter<double>(
-      "skip_registration_after_gap_sec", lio_config.skip_registration_after_gap_sec);
-  lio_config.icp_keypoint_voxel_multiplier =
-      node->declare_parameter<double>("icp_keypoint_voxel_multiplier", lio_config.icp_keypoint_voxel_multiplier);
-  lio_config.min_icp_keypoints = static_cast<size_t>(std::max<int64_t>(
-      1, node->declare_parameter<int64_t>("min_icp_keypoints", static_cast<int64_t>(lio_config.min_icp_keypoints))));
-  lio_config.keypoint_shortfall_voxel_multiplier = node->declare_parameter<double>(
-      "keypoint_shortfall_voxel_multiplier", lio_config.keypoint_shortfall_voxel_multiplier);
-
-  // ---- degeneracy-aware ICP solve (fork addition; default-off) ----
-  lio_config.degeneracy_aware_solve =
-      node->declare_parameter<bool>("degeneracy_aware_solve", lio_config.degeneracy_aware_solve);
-  lio_config.degeneracy_well_conditioned_ratio = node->declare_parameter<double>(
-      "degeneracy_well_conditioned_ratio", lio_config.degeneracy_well_conditioned_ratio);
-  lio_config.degeneracy_multiplicity_relative_gap = node->declare_parameter<double>(
-      "degeneracy_multiplicity_relative_gap", lio_config.degeneracy_multiplicity_relative_gap);
-  lio_config.degeneracy_prior_weight =
-      node->declare_parameter<double>("degeneracy_prior_weight", lio_config.degeneracy_prior_weight);
-  lio_config.degeneracy_persistence_gate =
-      node->declare_parameter<bool>("degeneracy_persistence_gate", lio_config.degeneracy_persistence_gate);
-  const auto degeneracy_persistence_min_scans = node->declare_parameter<int>(
-      "degeneracy_persistence_min_scans", static_cast<int>(lio_config.degeneracy_persistence_min_scans));
-  lio_config.degeneracy_persistence_min_scans =
-      static_cast<size_t>(degeneracy_persistence_min_scans > 0 ? degeneracy_persistence_min_scans : 1);
-  lio_config.degeneracy_persistence_tracking_ratio = node->declare_parameter<double>(
-      "degeneracy_persistence_tracking_ratio", lio_config.degeneracy_persistence_tracking_ratio);
-  lio_config.degeneracy_persistence_min_absolute_cosine = node->declare_parameter<double>(
-      "degeneracy_persistence_min_absolute_cosine", lio_config.degeneracy_persistence_min_absolute_cosine);
-  lio_config.degeneracy_persistence_min_translation_fraction = node->declare_parameter<double>(
-      "degeneracy_persistence_min_translation_fraction", lio_config.degeneracy_persistence_min_translation_fraction);
-  lio_config.degeneracy_adaptive_iteration_budget = node->declare_parameter<bool>(
-      "degeneracy_adaptive_iteration_budget", lio_config.degeneracy_adaptive_iteration_budget);
-  const auto degeneracy_adaptive_max_iterations = node->declare_parameter<int>(
-      "degeneracy_adaptive_max_iterations", static_cast<int>(lio_config.degeneracy_adaptive_max_iterations));
-  lio_config.degeneracy_adaptive_max_iterations =
-      static_cast<size_t>(degeneracy_adaptive_max_iterations > 0 ? degeneracy_adaptive_max_iterations : 1);
-  lio_config.degeneracy_adaptive_iteration_ratio = node->declare_parameter<double>(
-      "degeneracy_adaptive_iteration_ratio", lio_config.degeneracy_adaptive_iteration_ratio);
-  const auto degeneracy_adaptive_hold_scans = node->declare_parameter<int>(
-      "degeneracy_adaptive_hold_scans", static_cast<int>(lio_config.degeneracy_adaptive_hold_scans));
-  lio_config.degeneracy_adaptive_hold_scans =
-      static_cast<size_t>(degeneracy_adaptive_hold_scans > 0 ? degeneracy_adaptive_hold_scans : 1);
-  lio_config.degeneracy_multiscan_observability_gate = node->declare_parameter<bool>(
-      "degeneracy_multiscan_observability_gate", lio_config.degeneracy_multiscan_observability_gate);
-  const auto degeneracy_observability_window_scans = node->declare_parameter<int>(
-      "degeneracy_observability_window_scans", static_cast<int>(lio_config.degeneracy_observability_window_scans));
-  lio_config.degeneracy_observability_window_scans =
-      static_cast<size_t>(degeneracy_observability_window_scans > 0 ? degeneracy_observability_window_scans : 1);
-  const auto degeneracy_observability_min_scans = node->declare_parameter<int>(
-      "degeneracy_observability_min_scans", static_cast<int>(lio_config.degeneracy_observability_min_scans));
-  lio_config.degeneracy_observability_min_scans =
-      static_cast<size_t>(degeneracy_observability_min_scans > 0 ? degeneracy_observability_min_scans : 1);
-  lio_config.degeneracy_observability_max_directional_ratio = node->declare_parameter<double>(
-      "degeneracy_observability_max_directional_ratio", lio_config.degeneracy_observability_max_directional_ratio);
-
-  // ---- selective visual fusion (fork addition; default-off) ----
-  lio_config.visual_fusion.enabled =
-      node->declare_parameter<bool>("selective_visual_fusion", lio_config.visual_fusion.enabled);
-  const auto visual_min_tracks =
-      node->declare_parameter<int>("visual_min_tracks", static_cast<int>(lio_config.visual_fusion.min_tracks));
-  lio_config.visual_fusion.min_tracks = static_cast<std::size_t>(visual_min_tracks > 0 ? visual_min_tracks : 1);
-  const auto visual_min_inliers =
-      node->declare_parameter<int>("visual_min_inliers", static_cast<int>(lio_config.visual_fusion.min_inliers));
-  lio_config.visual_fusion.min_inliers = static_cast<std::size_t>(visual_min_inliers > 0 ? visual_min_inliers : 1);
-  lio_config.visual_fusion.min_inlier_ratio =
-      node->declare_parameter<double>("visual_min_inlier_ratio", lio_config.visual_fusion.min_inlier_ratio);
-  lio_config.visual_fusion.max_rotation_error_deg = node->declare_parameter<double>(
-      "visual_max_rotation_error_deg", lio_config.visual_fusion.max_rotation_error_deg);
-  lio_config.visual_fusion.min_translation_cosine = node->declare_parameter<double>(
-      "visual_min_translation_cosine", lio_config.visual_fusion.min_translation_cosine);
-  lio_config.visual_fusion.min_baseline_m =
-      node->declare_parameter<double>("visual_min_baseline_m", lio_config.visual_fusion.min_baseline_m);
-  lio_config.visual_fusion.max_baseline_m =
-      node->declare_parameter<double>("visual_max_baseline_m", lio_config.visual_fusion.max_baseline_m);
-  lio_config.visual_fusion.weak_information_ratio = node->declare_parameter<double>(
-      "visual_weak_information_ratio", lio_config.visual_fusion.weak_information_ratio);
-  lio_config.visual_fusion.relative_information_weight = node->declare_parameter<double>(
-      "visual_relative_information_weight", lio_config.visual_fusion.relative_information_weight);
-  lio_config.visual_fusion.min_visual_directional_information_ratio =
-      node->declare_parameter<double>("visual_min_directional_information_ratio",
-                                      lio_config.visual_fusion.min_visual_directional_information_ratio);
-  const auto visual_max_weak_directions = node->declare_parameter<int>(
-      "visual_max_weak_directions", static_cast<int>(lio_config.visual_fusion.max_weak_directions));
-  lio_config.visual_fusion.max_weak_directions =
-      static_cast<std::size_t>(visual_max_weak_directions > 0 ? visual_max_weak_directions : 0);
-  lio_config.visual_fusion.max_translation_update_m = node->declare_parameter<double>(
-      "visual_max_translation_update_m", lio_config.visual_fusion.max_translation_update_m);
-  lio_config.visual_fusion.max_rotation_update_rad = node->declare_parameter<double>(
-      "visual_max_rotation_update_rad", lio_config.visual_fusion.max_rotation_update_rad);
-  lio_config.visual_prior_max_time_offset_sec = node->declare_parameter<double>(
-      "visual_prior_max_time_offset_sec", lio_config.visual_prior_max_time_offset_sec);
-
-  // ---- radar ego-velocity fusion (fork addition; default-off) ----
-  lio_config.radar_velocity_fusion =
-      node->declare_parameter<bool>("radar_velocity_fusion", lio_config.radar_velocity_fusion);
-  lio_config.radar_prior_max_time_offset_sec =
-      node->declare_parameter<double>("radar_prior_max_time_offset_sec", lio_config.radar_prior_max_time_offset_sec);
-  lio_config.radar_min_speed = node->declare_parameter<double>("radar_min_speed", lio_config.radar_min_speed);
-  lio_config.radar_disagreement_gate =
-      node->declare_parameter<bool>("radar_disagreement_gate", lio_config.radar_disagreement_gate);
-  lio_config.radar_disagreement_min_mps =
-      node->declare_parameter<double>("radar_disagreement_min_mps", lio_config.radar_disagreement_min_mps);
-  const auto radar_disagreement_min_scans = node->declare_parameter<int>(
-      "radar_disagreement_min_scans", static_cast<int>(lio_config.radar_disagreement_min_scans));
-  lio_config.radar_disagreement_min_scans =
-      static_cast<size_t>(radar_disagreement_min_scans > 0 ? radar_disagreement_min_scans : 1);
-  lio_config.radar_disagreement_weight =
-      node->declare_parameter<double>("radar_disagreement_weight", lio_config.radar_disagreement_weight);
-  lio_config.radar_velocity_continuous_fusion = node->declare_parameter<bool>(
-      "radar_velocity_continuous_fusion", lio_config.radar_velocity_continuous_fusion);
-  lio_config.radar_fusion_icp_information_scale = node->declare_parameter<double>(
-      "radar_fusion_icp_information_scale", lio_config.radar_fusion_icp_information_scale);
-
-  // ---- sliding-window absolute gravity alignment (fork addition; default-off) ----
-  lio_config.max_tilt_correction_deg =
-      node->declare_parameter<double>("max_tilt_correction_deg", lio_config.max_tilt_correction_deg);
-  lio_config.max_yaw_correction_deg =
-      node->declare_parameter<double>("max_yaw_correction_deg", lio_config.max_yaw_correction_deg);
-  lio_config.max_tilt_correction_median_factor = node->declare_parameter<double>(
-      "max_tilt_correction_median_factor", lio_config.max_tilt_correction_median_factor);
-  lio_config.max_tilt_correction_median_min_scans = static_cast<int>(node->declare_parameter<int64_t>(
-      "max_tilt_correction_median_min_scans", lio_config.max_tilt_correction_median_min_scans));
-  lio_config.gyro_bias_time_constant_sec =
-      node->declare_parameter<double>("gyro_bias_time_constant_sec", lio_config.gyro_bias_time_constant_sec);
-  lio_config.gyro_bias_max_correction_deg =
-      node->declare_parameter<double>("gyro_bias_max_correction_deg", lio_config.gyro_bias_max_correction_deg);
-  lio_config.gyro_bias_standstill_max_speed = node->declare_parameter<double>(
-      "gyro_bias_standstill_max_speed", lio_config.gyro_bias_standstill_max_speed);
-  lio_config.gyro_bias_standstill_max_rate_rad_s = node->declare_parameter<double>(
-      "gyro_bias_standstill_max_rate_rad_s", lio_config.gyro_bias_standstill_max_rate_rad_s);
-  lio_config.gyro_bias_start_sec =
-      node->declare_parameter<double>("gyro_bias_start_sec", lio_config.gyro_bias_start_sec);
-  lio_config.vehicle_stall_guard =
-      node->declare_parameter<bool>("vehicle_stall_guard", lio_config.vehicle_stall_guard);
-  lio_config.stall_guard.window_sec =
-      node->declare_parameter<double>("stall_guard.window_sec", lio_config.stall_guard.window_sec);
-  lio_config.stall_guard.min_drop_mps =
-      node->declare_parameter<double>("stall_guard.min_drop_mps", lio_config.stall_guard.min_drop_mps);
-  lio_config.stall_guard.max_speed_ratio =
-      node->declare_parameter<double>("stall_guard.max_speed_ratio", lio_config.stall_guard.max_speed_ratio);
-  lio_config.stall_guard.min_speed_mps =
-      node->declare_parameter<double>("stall_guard.min_speed_mps", lio_config.stall_guard.min_speed_mps);
-  lio_config.stall_guard.exit_agreement_mps = node->declare_parameter<double>(
-      "stall_guard.exit_agreement_mps", lio_config.stall_guard.exit_agreement_mps);
-  lio_config.stall_guard.exit_scans = static_cast<int>(
-      node->declare_parameter<int>("stall_guard.exit_scans", lio_config.stall_guard.exit_scans));
-  lio_config.stall_guard.max_hold_sec =
-      node->declare_parameter<double>("stall_guard.max_hold_sec", lio_config.stall_guard.max_hold_sec);
-  lio_config.initialization_max_gyro_rad_s =
-      node->declare_parameter<double>("initialization_max_gyro_rad_s", lio_config.initialization_max_gyro_rad_s);
-  lio_config.moving_start_gravity_window_sec = node->declare_parameter<double>(
-      "moving_start_gravity_window_sec", lio_config.moving_start_gravity_window_sec);
-  lio_config.moving_start_gravity_output_only = node->declare_parameter<bool>(
-      "moving_start_gravity_output_only", lio_config.moving_start_gravity_output_only);
-  lio_config.output_filter_position_sigma =
-      node->declare_parameter<double>("output_filter_position_sigma", lio_config.output_filter_position_sigma);
-  lio_config.output_filter_acceleration_noise = node->declare_parameter<double>(
-      "output_filter_acceleration_noise", lio_config.output_filter_acceleration_noise);
-  lio_config.output_filter_bias_noise =
-      node->declare_parameter<double>("output_filter_bias_noise", lio_config.output_filter_bias_noise);
-  lio_config.gravity_window_alignment =
-      node->declare_parameter<bool>("gravity_window_alignment", lio_config.gravity_window_alignment);
-  lio_config.gravity_window_sec = node->declare_parameter<double>("gravity_window_sec", lio_config.gravity_window_sec);
-  lio_config.gravity_alignment_gain =
-      node->declare_parameter<double>("gravity_alignment_gain", lio_config.gravity_alignment_gain);
-  lio_config.gravity_alignment_max_correction_rad = node->declare_parameter<double>(
-      "gravity_alignment_max_correction_rad", lio_config.gravity_alignment_max_correction_rad);
-  lio_config.gravity_alignment_max_magnitude_deviation = node->declare_parameter<double>(
-      "gravity_alignment_max_magnitude_deviation", lio_config.gravity_alignment_max_magnitude_deviation);
-  lio_config.gravity_alignment_max_plausible_tilt_rad = node->declare_parameter<double>(
-      "gravity_alignment_max_plausible_tilt_rad", lio_config.gravity_alignment_max_plausible_tilt_rad);
-  lio_config.gravity_alignment_max_yaw_rate_rad_s = node->declare_parameter<double>(
-      "gravity_alignment_max_yaw_rate_rad_s", lio_config.gravity_alignment_max_yaw_rate_rad_s);
-  lio_config.gravity_alignment_relevel_map =
-      node->declare_parameter<bool>("gravity_alignment_relevel_map", lio_config.gravity_alignment_relevel_map);
-  lio_config.gravity_alignment_relevel_min_tilt_rad = node->declare_parameter<double>(
-      "gravity_alignment_relevel_min_tilt_rad", lio_config.gravity_alignment_relevel_min_tilt_rad);
-
-  // ---- localizability-aware ICP weighting (fork addition; default-off) ----
-  lio_config.localizability_weighting =
-      node->declare_parameter<bool>("localizability_weighting", lio_config.localizability_weighting);
-  lio_config.localizability_boost =
-      node->declare_parameter<double>("localizability_boost", lio_config.localizability_boost);
-  lio_config.localizability_min_step_m =
-      node->declare_parameter<double>("localizability_min_step_m", lio_config.localizability_min_step_m);
-  lio_config.localizability_normal_only =
-      node->declare_parameter<bool>("localizability_normal_only", lio_config.localizability_normal_only);
-
-  // ---- accelerometer-consistency velocity gate (fork addition; default-off) ----
-  lio_config.kinematic_velocity_gate =
-      node->declare_parameter<bool>("kinematic_velocity_gate", lio_config.kinematic_velocity_gate);
-  lio_config.kinematic_gate_accel_margin =
-      node->declare_parameter<double>("kinematic_gate_accel_margin", lio_config.kinematic_gate_accel_margin);
-  lio_config.kinematic_gate_min_speed =
-      node->declare_parameter<double>("kinematic_gate_min_speed", lio_config.kinematic_gate_min_speed);
-  lio_config.kinematic_gate_weight =
-      node->declare_parameter<double>("kinematic_gate_weight", lio_config.kinematic_gate_weight);
-  lio_config.kinematic_gate_skip_map_update =
-      node->declare_parameter<bool>("kinematic_gate_skip_map_update", lio_config.kinematic_gate_skip_map_update);
-
-  // ---- anchor-decayed inertial velocity blend (fork addition; default-off) ----
-  lio_config.kinematic_velocity_blend =
-      node->declare_parameter<bool>("kinematic_velocity_blend", lio_config.kinematic_velocity_blend);
-  lio_config.kinematic_blend_icp_information_scale = node->declare_parameter<double>(
-      "kinematic_blend_icp_information_scale", lio_config.kinematic_blend_icp_information_scale);
-  lio_config.kinematic_blend_propagation_information_scale = node->declare_parameter<double>(
-      "kinematic_blend_propagation_information_scale", lio_config.kinematic_blend_propagation_information_scale);
-  lio_config.kinematic_blend_decay_time_sec = node->declare_parameter<double>(
-      "kinematic_blend_decay_time_sec", lio_config.kinematic_blend_decay_time_sec);
-  lio_config.kinematic_blend_anchor_agreement_mps = node->declare_parameter<double>(
-      "kinematic_blend_anchor_agreement_mps", lio_config.kinematic_blend_anchor_agreement_mps);
-  lio_config.kinematic_blend_max_icp_innovation_mps = node->declare_parameter<double>(
-      "kinematic_blend_max_icp_innovation_mps", lio_config.kinematic_blend_max_icp_innovation_mps);
-  lio_config.kinematic_blend_max_propagated_speed_mps = node->declare_parameter<double>(
-      "kinematic_blend_max_propagated_speed_mps", lio_config.kinematic_blend_max_propagated_speed_mps);
-  lio_config.kinematic_blend_max_activation_speed_mps = node->declare_parameter<double>(
-      "kinematic_blend_max_activation_speed_mps", lio_config.kinematic_blend_max_activation_speed_mps);
-  const auto kinematic_blend_speed_gate_min_scans = node->declare_parameter<int>(
-      "kinematic_blend_speed_gate_min_scans",
-      static_cast<int>(lio_config.kinematic_blend_speed_gate_min_scans));
-  lio_config.kinematic_blend_speed_gate_min_scans = static_cast<std::size_t>(
-      kinematic_blend_speed_gate_min_scans > 0 ? kinematic_blend_speed_gate_min_scans : 1);
-  lio_config.kinematic_blend_speed_reenable_delay_sec = node->declare_parameter<double>(
-      "kinematic_blend_speed_reenable_delay_sec",
-      lio_config.kinematic_blend_speed_reenable_delay_sec);
-  lio_config.kinematic_blend_min_speed =
-      node->declare_parameter<double>("kinematic_blend_min_speed", lio_config.kinematic_blend_min_speed);
-  lio_config.kinematic_blend_min_accel_magnitude_variance = node->declare_parameter<double>(
-      "kinematic_blend_min_accel_magnitude_variance",
-      lio_config.kinematic_blend_min_accel_magnitude_variance);
-  const auto kinematic_blend_inactivity_gate_min_scans =
-      node->declare_parameter<int>(
-          "kinematic_blend_inactivity_gate_min_scans",
-          static_cast<int>(
-              lio_config.kinematic_blend_inactivity_gate_min_scans));
-  lio_config.kinematic_blend_inactivity_gate_min_scans =
-      static_cast<std::size_t>(
-          kinematic_blend_inactivity_gate_min_scans > 0
-              ? kinematic_blend_inactivity_gate_min_scans
-              : 1);
-  lio_config.kinematic_blend_max_yaw_rate_rad_s = node->declare_parameter<double>(
-      "kinematic_blend_max_yaw_rate_rad_s", lio_config.kinematic_blend_max_yaw_rate_rad_s);
-  const auto kinematic_blend_yaw_gate_min_scans = node->declare_parameter<int>(
-      "kinematic_blend_yaw_gate_min_scans",
-      static_cast<int>(lio_config.kinematic_blend_yaw_gate_min_scans));
-  lio_config.kinematic_blend_yaw_gate_min_scans = static_cast<std::size_t>(
-      kinematic_blend_yaw_gate_min_scans > 0 ? kinematic_blend_yaw_gate_min_scans : 1);
-  lio_config.kinematic_blend_range_scene_gate = node->declare_parameter<bool>(
-      "kinematic_blend_range_scene_gate", lio_config.kinematic_blend_range_scene_gate);
-  lio_config.kinematic_blend_scene_near_range_m = node->declare_parameter<double>(
-      "kinematic_blend_scene_near_range_m", lio_config.kinematic_blend_scene_near_range_m);
-  lio_config.kinematic_blend_scene_max_near_fraction = node->declare_parameter<double>(
-      "kinematic_blend_scene_max_near_fraction", lio_config.kinematic_blend_scene_max_near_fraction);
-  lio_config.kinematic_blend_scene_far_range_m = node->declare_parameter<double>(
-      "kinematic_blend_scene_far_range_m", lio_config.kinematic_blend_scene_far_range_m);
-  lio_config.kinematic_blend_scene_min_far_fraction = node->declare_parameter<double>(
-      "kinematic_blend_scene_min_far_fraction", lio_config.kinematic_blend_scene_min_far_fraction);
-  const auto kinematic_blend_scene_min_valid_points = node->declare_parameter<int>(
-      "kinematic_blend_scene_min_valid_points",
-      static_cast<int>(lio_config.kinematic_blend_scene_min_valid_points));
-  lio_config.kinematic_blend_scene_min_valid_points = static_cast<std::size_t>(
-      kinematic_blend_scene_min_valid_points > 0 ? kinematic_blend_scene_min_valid_points : 1);
-  lio_config.kinematic_blend_scene_reenable_delay_sec = node->declare_parameter<double>(
-      "kinematic_blend_scene_reenable_delay_sec",
-      lio_config.kinematic_blend_scene_reenable_delay_sec);
-  lio_config.kinematic_blend_map_update_max_propagation_weight = node->declare_parameter<double>(
-      "kinematic_blend_map_update_max_propagation_weight",
-      lio_config.kinematic_blend_map_update_max_propagation_weight);
-  lio_config.kinematic_blend_map_update_min_fraction = node->declare_parameter<double>(
-      "kinematic_blend_map_update_min_fraction", lio_config.kinematic_blend_map_update_min_fraction);
-
-  // ---- intensity/reflectivity texture constraint (fork addition; default-off) ----
-  lio_config.intensity_constraint =
-      node->declare_parameter<bool>("intensity_constraint", lio_config.intensity_constraint);
-  lio_config.intensity_bin_size_m =
-      node->declare_parameter<double>("intensity_bin_size_m", lio_config.intensity_bin_size_m);
-  lio_config.intensity_profile_half_length_m = node->declare_parameter<double>(
-      "intensity_profile_half_length_m", lio_config.intensity_profile_half_length_m);
-  lio_config.intensity_max_shift_m =
-      node->declare_parameter<double>("intensity_max_shift_m", lio_config.intensity_max_shift_m);
-  lio_config.intensity_min_correlation =
-      node->declare_parameter<double>("intensity_min_correlation", lio_config.intensity_min_correlation);
-  lio_config.intensity_min_peak_margin =
-      node->declare_parameter<double>("intensity_min_peak_margin", lio_config.intensity_min_peak_margin);
-  const auto intensity_peak_exclusion_radius_bins = node->declare_parameter<int>(
-      "intensity_peak_exclusion_radius_bins",
-      static_cast<int>(lio_config.intensity_peak_exclusion_radius_bins));
-  lio_config.intensity_peak_exclusion_radius_bins = static_cast<size_t>(
-      intensity_peak_exclusion_radius_bins > 0
-          ? intensity_peak_exclusion_radius_bins
-          : 0);
-  const auto intensity_min_filled_bins = node->declare_parameter<int>(
-      "intensity_min_filled_bins", static_cast<int>(lio_config.intensity_min_filled_bins));
-  lio_config.intensity_min_filled_bins =
-      static_cast<size_t>(intensity_min_filled_bins > 0 ? intensity_min_filled_bins : 1);
-  lio_config.intensity_oriented_grid = node->declare_parameter<bool>(
-      "intensity_oriented_grid", lio_config.intensity_oriented_grid);
-  lio_config.intensity_grid_half_width_m = node->declare_parameter<double>(
-      "intensity_grid_half_width_m", lio_config.intensity_grid_half_width_m);
-  lio_config.intensity_grid_max_lateral_shift_m =
-      node->declare_parameter<double>(
-          "intensity_grid_max_lateral_shift_m",
-          lio_config.intensity_grid_max_lateral_shift_m);
-  lio_config.intensity_grid_height_weight = node->declare_parameter<double>(
-      "intensity_grid_height_weight",
-      lio_config.intensity_grid_height_weight);
-  lio_config.intensity_disagreement_gate =
-      node->declare_parameter<bool>("intensity_disagreement_gate", lio_config.intensity_disagreement_gate);
-  lio_config.intensity_disagreement_min_mps =
-      node->declare_parameter<double>("intensity_disagreement_min_mps", lio_config.intensity_disagreement_min_mps);
-  const auto intensity_disagreement_min_scans = node->declare_parameter<int>(
-      "intensity_disagreement_min_scans", static_cast<int>(lio_config.intensity_disagreement_min_scans));
-  lio_config.intensity_disagreement_min_scans =
-      static_cast<size_t>(intensity_disagreement_min_scans > 0 ? intensity_disagreement_min_scans : 1);
-  lio_config.intensity_disagreement_weight = node->declare_parameter<double>(
-      "intensity_disagreement_weight", lio_config.intensity_disagreement_weight);
-
-  // ---- photometric registration on LiDAR intensity images (fork addition, default off) ----
-  lio_config.photometric = node->declare_parameter<bool>("photometric", lio_config.photometric);
-  lio_config.photometric_scale = node->declare_parameter<double>("photometric_scale", lio_config.photometric_scale);
-  lio_config.photometric_free_weak_axis =
-      node->declare_parameter<bool>("photometric_free_weak_axis", lio_config.photometric_free_weak_axis);
-  lio_config.photometric_max_scan_interval_sec = node->declare_parameter<double>(
-      "photometric_max_scan_interval_sec", lio_config.photometric_max_scan_interval_sec);
-  lio_config.bump_image_registration =
-      node->declare_parameter<bool>("bump_image_registration", lio_config.bump_image_registration);
-  lio_config.bump_image_map.voxel_size =
-      node->declare_parameter<double>("bump_image_map.voxel_size", lio_config.bump_image_map.voxel_size);
-  lio_config.bump_image_map.pixel_size =
-      node->declare_parameter<double>("bump_image_map.pixel_size", lio_config.bump_image_map.pixel_size);
-  lio_config.bump_image_map.weighted =
-      node->declare_parameter<bool>("bump_image_map.weighted", lio_config.bump_image_map.weighted);
-  lio_config.bump_image_map.smooth =
-      node->declare_parameter<bool>("bump_image_map.smooth", lio_config.bump_image_map.smooth);
-  lio_config.bump_image_map.normal_tolerance_deg = node->declare_parameter<double>(
-      "bump_image_map.normal_tolerance_deg", lio_config.bump_image_map.normal_tolerance_deg);
-  lio_config.bump_image_map.max_voxels = static_cast<std::size_t>(node->declare_parameter<int>(
-      "bump_image_map.max_voxels", static_cast<int>(lio_config.bump_image_map.max_voxels)));
-  lio_config.bump_image_source_voxel_size = node->declare_parameter<double>(
-      "bump_image_source_voxel_size", lio_config.bump_image_source_voxel_size);
-  lio_config.bump_image_informed_voxels =
-      node->declare_parameter<int>("bump_image_informed_voxels", lio_config.bump_image_informed_voxels);
-  lio_config.bump_image_huber_delta =
-      node->declare_parameter<double>("bump_image_huber_delta", lio_config.bump_image_huber_delta);
-  lio_config.bump_image_point_to_point_weight = node->declare_parameter<double>(
-      "bump_image_point_to_point_weight", lio_config.bump_image_point_to_point_weight);
-  lio_config.bump_image_point_to_point_start_distance = node->declare_parameter<double>(
-      "bump_image_point_to_point_start_distance", lio_config.bump_image_point_to_point_start_distance);
-  lio_config.bump_image_max_rotation_correction_deg = node->declare_parameter<double>(
-      "bump_image_max_rotation_correction_deg", lio_config.bump_image_max_rotation_correction_deg);
-  lio_config.bump_image_rotation_fallback_window = node->declare_parameter<int>(
-      "bump_image_rotation_fallback_window", lio_config.bump_image_rotation_fallback_window);
-  lio_config.bump_image_rotation_fallback_min_count = node->declare_parameter<int>(
-      "bump_image_rotation_fallback_min_count", lio_config.bump_image_rotation_fallback_min_count);
-  lio_config.bump_image_rotation_hard_limit_deg = node->declare_parameter<double>(
-      "bump_image_rotation_hard_limit_deg", lio_config.bump_image_rotation_hard_limit_deg);
-  lio_config.photometric_weak_direction_min_contribution = node->declare_parameter<double>(
-      "photometric_weak_direction_min_contribution", lio_config.photometric_weak_direction_min_contribution);
-  lio_config.photometric_normal_row_step =
-      node->declare_parameter<int>("photometric_normal_row_step", lio_config.photometric_normal_row_step);
-  lio_config.photometric_normal_col_step =
-      node->declare_parameter<int>("photometric_normal_col_step", lio_config.photometric_normal_col_step);
-  photometric_channel = node->declare_parameter<std::string>("photometric_channel", photometric_channel);
-  {
-    // Beam geometry from the sensor metadata (Ouster: beam_altitude_angles, pixel_shift_by_row,
-    // lidar_origin_to_beam_origin_mm, columns_per_frame).
-    core::LidarImageModel& model = lio_config.photometric_model;
-    const auto altitudes_deg =
-        node->declare_parameter<std::vector<double>>("photometric_model.altitudes_deg", std::vector<double>{});
-    model.altitudes_rad.clear();
-    for (const double degrees : altitudes_deg) {
-      model.altitudes_rad.push_back(degrees * M_PI / 180.0);
-    }
-    const auto pixel_shift =
-        node->declare_parameter<std::vector<int64_t>>("photometric_model.pixel_shift_by_row", std::vector<int64_t>{});
-    model.pixel_shift_by_row.assign(pixel_shift.begin(), pixel_shift.end());
-    model.rows = static_cast<int>(model.altitudes_rad.size());
-    model.cols = static_cast<int>(node->declare_parameter<int>("photometric_model.columns", 1024));
-    model.beam_offset_m = node->declare_parameter<double>("photometric_model.beam_offset_mm", 0.0) * 1e-3;
-    model.u_shift = static_cast<int>(node->declare_parameter<int>("photometric_model.u_shift", 0));
-    model.cloud_to_lidar_z_m =
-        node->declare_parameter<double>("photometric_model.cloud_to_lidar_z_m", model.cloud_to_lidar_z_m);
-    if (lio_config.photometric && !model.valid()) {
-      RCLCPP_WARN(node->get_logger(),
-                  "photometric is enabled but photometric_model is incomplete (altitudes_deg, pixel_shift_by_row, "
-                  "columns); photometric terms will not be used.");
-    }
-
-    core::IntensityImageConfig& image = lio_config.photometric_image;
-    image.intensity_scale = node->declare_parameter<double>("photometric_image.intensity_scale", image.intensity_scale);
-    image.line_removal = node->declare_parameter<bool>("photometric_image.line_removal", image.line_removal);
-    image.line_highpass =
-        node->declare_parameter<std::vector<double>>("photometric_image.line_highpass", std::vector<double>{});
-    image.line_lowpass =
-        node->declare_parameter<std::vector<double>>("photometric_image.line_lowpass", std::vector<double>{});
-    image.brightness_filter =
-        node->declare_parameter<bool>("photometric_image.brightness_filter", image.brightness_filter);
-    image.brightness_window_cols =
-        node->declare_parameter<int>("photometric_image.brightness_window_cols", image.brightness_window_cols);
-    image.brightness_window_rows =
-        node->declare_parameter<int>("photometric_image.brightness_window_rows", image.brightness_window_rows);
-    image.blur = node->declare_parameter<bool>("photometric_image.blur", image.blur);
-    image.min_range_m = node->declare_parameter<double>("photometric_image.min_range_m", image.min_range_m);
-    image.max_range_m = node->declare_parameter<double>("photometric_image.max_range_m", image.max_range_m);
-    image.erosion_margin = node->declare_parameter<int>("photometric_image.erosion_margin", image.erosion_margin);
-    const auto masks =
-        node->declare_parameter<std::vector<int64_t>>("photometric_image.masks", std::vector<int64_t>{});
-    image.masks.clear();
-    for (std::size_t i = 0; i + 3 < masks.size(); i += 4) {
-      image.masks.push_back({static_cast<int>(masks[i]), static_cast<int>(masks[i + 1]),
-                             static_cast<int>(masks[i + 2]), static_cast<int>(masks[i + 3])});
-    }
-
-    core::PhotometricFeatureConfig& features = lio_config.photometric_features;
-    features.patch_size = node->declare_parameter<int>("photometric_features.patch_size", features.patch_size);
-    features.num_features = node->declare_parameter<int>("photometric_features.num_features", features.num_features);
-    features.max_lifetime = node->declare_parameter<int>("photometric_features.max_lifetime", features.max_lifetime);
-    features.margin = node->declare_parameter<int>("photometric_features.margin", features.margin);
-    features.suppression_radius =
-        node->declare_parameter<int>("photometric_features.suppression_radius", features.suppression_radius);
-    features.grad_min = node->declare_parameter<double>("photometric_features.grad_min", features.grad_min);
-    features.ncc_threshold =
-        node->declare_parameter<double>("photometric_features.ncc_threshold", features.ncc_threshold);
-    features.range_threshold_m =
-        node->declare_parameter<double>("photometric_features.range_threshold_m", features.range_threshold_m);
-    features.min_range_m = image.min_range_m;
-    features.max_range_m = image.max_range_m;
-    image.patch_size = features.patch_size;
+  if (config.extrinsic_lidar2base) {
+    extrinsic_lidar2base = *config.extrinsic_lidar2base;
   }
-
-  // ---- scan-gap re-anchor + kidnap relocalization (fork addition; default preserves legacy
-  // behavior for max_scan_delta_sec, kidnap features themselves default-off) ----
-  lio_config.max_scan_delta_sec =
-      node->declare_parameter<double>("max_scan_delta_sec", lio_config.max_scan_delta_sec);
-  lio_config.enable_kidnap_relocalization =
-      node->declare_parameter<bool>("enable_kidnap_relocalization", lio_config.enable_kidnap_relocalization);
-  lio_config.reset_on_registration_failure =
-      node->declare_parameter<bool>("reset_on_registration_failure", lio_config.reset_on_registration_failure);
-  lio_config.recovery_min_failures =
-      node->declare_parameter<int>("recovery_min_failures", lio_config.recovery_min_failures);
-  lio_config.relocalize_after_scan_gap =
-      node->declare_parameter<bool>("relocalize_after_scan_gap", lio_config.relocalize_after_scan_gap);
-  lio_config.relocalization_min_correspondences = node->declare_parameter<int>(
-      "relocalization_min_correspondences", lio_config.relocalization_min_correspondences);
-  lio_config.relocalization_min_inlier_ratio =
-      node->declare_parameter<double>("relocalization_min_inlier_ratio", lio_config.relocalization_min_inlier_ratio);
-  lio_config.relocalization_max_mean_error =
-      node->declare_parameter<double>("relocalization_max_mean_error", lio_config.relocalization_max_mean_error);
-  lio_config.relocalization_max_correspondence_distance = node->declare_parameter<double>(
-      "relocalization_max_correspondence_distance", lio_config.relocalization_max_correspondence_distance);
-  lio_config.relocalization_yaw_samples =
-      node->declare_parameter<int>("relocalization_yaw_samples", lio_config.relocalization_yaw_samples);
-  lio_config.relocalization_pose_stride =
-      node->declare_parameter<int>("relocalization_pose_stride", lio_config.relocalization_pose_stride);
-  lio_config.relocalization_min_pose_separation = node->declare_parameter<int>(
-      "relocalization_min_pose_separation", lio_config.relocalization_min_pose_separation);
-  lio_config.relocalization_max_iterations =
-      node->declare_parameter<int>("relocalization_max_iterations", lio_config.relocalization_max_iterations);
-
-  lio = std::make_unique<core::LIO>(lio_config);
-
-  // ---- direct visual odometry frontend params (fork addition; default-off) ----
-  direct_visual_frontend = node->declare_parameter<bool>("direct_visual_frontend", direct_visual_frontend);
-  direct_visual_require_previous_weak_direction = node->declare_parameter<bool>(
-      "direct_visual_require_previous_weak_direction", direct_visual_require_previous_weak_direction);
-
-  // ---- radar topic + ego-velocity estimator params (fork addition; default-off) ----
-  radar_topic = node->declare_parameter<std::string>("radar_topic", radar_topic);
-  if (!radar_topic.empty()) {
-    radar_ego_velocity_config.doppler_sign =
-        node->declare_parameter<double>("radar_doppler_sign", radar_ego_velocity_config.doppler_sign);
-    radar_ego_velocity_config.ransac_inlier_threshold = node->declare_parameter<double>(
-        "radar_ransac_inlier_threshold", radar_ego_velocity_config.ransac_inlier_threshold);
-    const auto radar_ransac_iterations = node->declare_parameter<int>(
-        "radar_ransac_iterations", static_cast<int>(radar_ego_velocity_config.ransac_iterations));
-    radar_ego_velocity_config.ransac_iterations =
-        static_cast<std::size_t>(radar_ransac_iterations > 0 ? radar_ransac_iterations : 1);
-    const auto radar_min_inliers = node->declare_parameter<int>(
-        "radar_min_inliers", static_cast<int>(radar_ego_velocity_config.min_inliers));
-    radar_ego_velocity_config.min_inliers = static_cast<std::size_t>(radar_min_inliers > 0 ? radar_min_inliers : 1);
-    radar_velocity_scale = node->declare_parameter<double>("radar_velocity_scale", radar_velocity_scale);
-    // Per-axis radar velocity sigmas (radar sensor frame: forward/lateral/vertical), used only
-    // by lio_config.radar_velocity_continuous_fusion to build each prior's info_base (see
-    // RadarVelocityPrior::info_base and BaseNode::radar_callback). Declared unconditionally
-    // whenever a radar topic is configured -- harmless when continuous fusion is off. Defaults
-    // reflect the fog validation: near-unbiased forward-velocity estimate, weak lateral/vertical
-    // (narrow-FOV radar, limited direction diversity).
-    radar_sigma_forward_mps = node->declare_parameter<double>("radar_sigma_forward_mps", radar_sigma_forward_mps);
-    radar_sigma_lateral_mps = node->declare_parameter<double>("radar_sigma_lateral_mps", radar_sigma_lateral_mps);
-    radar_sigma_vertical_mps = node->declare_parameter<double>("radar_sigma_vertical_mps", radar_sigma_vertical_mps);
+  if (config.extrinsic_cam2base) {
+    extrinsic_cam2base = *config.extrinsic_cam2base;
+    visual_extrinsic_set = true;
   }
-
-  // Lidar per-point timestamp processing params, namespaced under lidar_timestamps.*
-  timestamp_proc_config.multiplier_to_seconds = node->declare_parameter<double>(
-      "lidar_timestamps.multiplier_to_seconds", timestamp_proc_config.multiplier_to_seconds);
-  timestamp_proc_config.offset_seconds =
-      node->declare_parameter<double>("lidar_timestamps.offset_seconds", timestamp_proc_config.offset_seconds);
-  timestamp_proc_config.force_absolute =
-      node->declare_parameter<bool>("lidar_timestamps.force_absolute", timestamp_proc_config.force_absolute);
-  timestamp_proc_config.force_relative =
-      node->declare_parameter<bool>("lidar_timestamps.force_relative", timestamp_proc_config.force_relative);
-
-  // manually, if, define extrinsics
-  parse_cli_extrinsics();
-  // Fork addition: listen to TF only when the extrinsics must come from it. On Humble, destroying a
-  // TransformListener shortly after constructing it can hang in its destructor (its spin thread may
-  // start after the cancel and then never stop).
+  if (config.extrinsic_radar2base) {
+    extrinsic_radar2base = *config.extrinsic_radar2base;
+    radar_extrinsic_set = true;
+  }
+  extrinsics_set = config.extrinsic_imu2base.has_value() && config.extrinsic_lidar2base.has_value();
   if (!extrinsics_set) {
     tf_listener = std::make_shared<tf2_ros::TransformListener>(*tf_buffer);
   }
@@ -1204,7 +593,7 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
                      "Subscribed to IMU: "
                          << imu_topic << (!imu_frame.empty() ? " (frame " + imu_frame + ")" : "") << " and LiDAR: "
                          << lidar_topic << (!lidar_frame.empty() ? " (frame " + lidar_frame + ")" : "")
-                         << ". Max number of threads: " << lio_config.max_num_threads << ". Publishing odometry to "
+                         << ". Max number of threads: " << config.lio.max_num_threads << ". Publishing odometry to "
                          << odom_topic << " ( " << odom_frame
                          << " ) and acceleration "
                             "estimates to rko_lio/lidar_acceleration. Deskewing is "
@@ -1212,58 +601,13 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
                          << (publish_deskewed_scan ? (" Publishing deskewed_cloud to " + deskewed_scan_topic + ".")
                                                    : ""));
 
-  // disk logging
-  dump_results = node->declare_parameter<bool>("dump_results", dump_results);
-  results_dir = node->declare_parameter<std::string>("results_dir", results_dir);
-  run_name = node->declare_parameter<std::string>("run_name", run_name);
   shutdown_callback_handle = node->get_node_base_interface()->get_context()->add_on_shutdown_callback([this]() {
     if (dump_results) {
-      // it is probably still a veery good idea to make dump_results_to_disk noexcept
       dump_results_to_disk(results_dir, run_name);
     }
   });
 
   RCLCPP_INFO(node->get_logger(), "RKO LIO Node is up!");
-}
-
-void BaseNode::parse_cli_extrinsics() {
-  auto parse_extrinsic = [this](const std::string& name, Sophus::SE3d& extrinsic) {
-    const std::string param_name = "extrinsic_" + name + "2base_quat_xyzw_xyz";
-    const std::vector<double> vec = node->declare_parameter<std::vector<double>>(param_name, std::vector<double>{});
-
-    if (vec.size() != 7) {
-      if (!vec.empty()) {
-        RCLCPP_WARN_STREAM(node->get_logger(),
-                           "Parameter 'extrinsic_"
-                               << name << "2base_quat_xyzw_xyz' is set but has wrong size: " << vec.size()
-                               << ". Expected 7 (qx, qy, qz, qw, x, y, z). check the value: "
-                               << Eigen::Map<const Eigen::VectorXd>(vec.data(), vec.size()).transpose());
-      }
-      return false;
-    }
-    Eigen::Quaterniond q(vec[3], vec[0], vec[1], vec[2]); // qw, qx, qy, qz
-    if (q.norm() < 1e-6) {
-      throw std::runtime_error(name + " extrinsic quaternion has zero norm");
-    }
-    extrinsic = Sophus::SE3d(q, Eigen::Vector3d(vec[4], vec[5], vec[6]));
-    RCLCPP_INFO_STREAM(node->get_logger(), "Parsed " << name << " extrinsic as: " << extrinsic.log().transpose());
-    return true;
-  };
-  const bool imu_ok = parse_extrinsic("imu", extrinsic_imu2base);
-  const bool lidar_ok = parse_extrinsic("lidar", extrinsic_lidar2base);
-  if (lio->config.visual_fusion.enabled) {
-    visual_extrinsic_set = parse_extrinsic("cam", extrinsic_cam2base);
-  }
-  if (lio->config.radar_velocity_fusion || lio->config.radar_velocity_continuous_fusion) {
-    radar_extrinsic_set = parse_extrinsic("radar", extrinsic_radar2base);
-    if (!radar_extrinsic_set) {
-      RCLCPP_WARN_STREAM(node->get_logger(),
-                         "radar_velocity_fusion/radar_velocity_continuous_fusion is enabled but "
-                         "extrinsic_radar2base_quat_xyzw_xyz was not set; assuming identity rotation between "
-                         "radar and base.");
-    }
-  }
-  extrinsics_set = imu_ok && lidar_ok;
 }
 
 bool BaseNode::ensure_frame_and_extrinsics(std::string& target_frame,
@@ -1302,18 +646,12 @@ bool BaseNode::check_and_set_extrinsics() {
 std::tuple<core::Timestamps, core::Vector3dVector>
 BaseNode::process_lidar_msg(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& lidar_msg) const {
   const core::Nsec header_stamp = utils::to_ns(lidar_msg->header.stamp);
-  if (lio->config.deskew) {
-    const auto& [scan, raw_timestamps] = utils::point_cloud2_to_eigen_with_timestamps(lidar_msg);
-    const core::Timestamps& timestamps = core::process_timestamps(raw_timestamps, header_stamp, timestamp_proc_config);
-    return {timestamps, scan};
+  if (!lio->config.deskew) {
+    RCLCPP_WARN_STREAM_ONCE(node->get_logger(),
+                            "Deskewing is disabled. Populating timestamps with static header time.");
   }
-  RCLCPP_WARN_STREAM_ONCE(node->get_logger(), "Deskewing is disabled. Populating timestamps with static header time.");
-  const core::Vector3dVector scan = utils::point_cloud2_to_eigen(lidar_msg);
-  const core::Nsec corrected_stamp =
-      header_stamp + std::chrono::duration_cast<core::Nsec>(std::chrono::duration<double>(
-                         timestamp_proc_config.offset_seconds));
-  return {{.min = corrected_stamp, .max = corrected_stamp, .times = core::TimestampVector(scan.size(), corrected_stamp)},
-          scan};
+  return driver::process_lidar_frame(utils::point_cloud_view(*lidar_msg), header_stamp, lio->config.deskew,
+                                     timestamp_proc_config);
 }
 
 std::vector<float>
@@ -1388,7 +726,7 @@ void BaseNode::publish_odometry(const core::State& state,
   // [v0.8 Phase 1, diagnostic-only] anisotropic covariance from the final ICP Hessian; see
   // pose_covariance_from_state's doc comment above. Only this field is new -- pose.pose and
   // twist.twist are set exactly as before.
-  odom_msg.pose.covariance = pose_covariance_from_state(state);
+  odom_msg.pose.covariance = driver::pose_covariance_from_state(state);
   utils::eigen_vector3d_to_ros_xyz(state.velocity, odom_msg.twist.twist.linear);
   utils::eigen_vector3d_to_ros_xyz(state.angular_velocity, odom_msg.twist.twist.angular);
   publisher->publish(odom_msg);

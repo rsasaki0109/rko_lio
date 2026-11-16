@@ -27,6 +27,8 @@
 #include "rko_lio/core/lio.hpp"
 #include "rko_lio/core/process_timestamps.hpp"
 #include "rko_lio/core/radar_ego_velocity.hpp"
+#include "rko_lio/driver/driver_config.hpp"
+#include "rko_lio/driver/offline_driver.hpp"
 // stl
 #include <atomic>
 #include <deque>
@@ -214,7 +216,6 @@ public:
   BaseNode() = delete;
   BaseNode(const std::string& node_name, const rclcpp::NodeOptions& options);
 
-  void parse_cli_extrinsics();
   bool check_and_set_extrinsics();
 
   // Parse the message's frame_id into target_frame on first sight, throw if neither header nor static extrinsics

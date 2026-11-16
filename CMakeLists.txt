@@ -48,6 +48,7 @@ find_package(TBB REQUIRED CONFIG)
 find_package(tsl-robin-map REQUIRED CONFIG)
 
 add_subdirectory(rko_lio/core)
+add_subdirectory(rko_lio/driver)
 
 if(NOT RKO_LIO_BUILD_ROS)
   message(STATUS "RKO_LIO_BUILD_ROS is OFF. Skipping ROS Build.")
@@ -87,6 +88,10 @@ else()
     ament_add_gtest(test_imu_acceleration_unit test/test_imu_acceleration_unit.cpp)
     if(TARGET test_imu_acceleration_unit)
       target_link_libraries(test_imu_acceleration_unit rko_lio::core)
+    endif()
+    ament_add_gtest(test_driver_point_cloud test/test_driver_point_cloud.cpp)
+    if(TARGET test_driver_point_cloud)
+      target_link_libraries(test_driver_point_cloud rko_lio::ros::utils rko_lio::driver)
     endif()
     ament_add_gtest(test_latest_pending test/test_latest_pending.cpp)
     if(TARGET test_latest_pending)
@@ -175,7 +180,7 @@ else()
 
   if(NOT RKO_LIO_FETCH_CONTENT_DEPS AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.23")
     install(
-      TARGETS rko_lio.core rko_lio.ros rko_lio.ros.utils
+      TARGETS rko_lio.core rko_lio.driver rko_lio.ros rko_lio.ros.utils
       EXPORT rko_lioTargets
       FILE_SET HEADERS)
 

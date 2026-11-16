@@ -23,150 +23,39 @@
  */
 
 #include "point_cloud_read.hpp"
-// stl
-#include <algorithm>
-#include <cstddef>
-#include <functional>
-#include <stdexcept>
 
 namespace rko_lio::ros::utils {
 using Vector3dVector = std::vector<Eigen::Vector3d>;
 using PointCloud2 = sensor_msgs::msg::PointCloud2;
-using PointField = sensor_msgs::msg::PointField;
 
-Vector3dVector point_cloud2_to_eigen(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg) {
-  const size_t point_count = static_cast<size_t>(msg->height) * msg->width;
-  Vector3dVector points;
-  points.reserve(point_count);
-  sensor_msgs::PointCloud2ConstIterator<float> msg_x(*msg, "x");
-  sensor_msgs::PointCloud2ConstIterator<float> msg_y(*msg, "y");
-  sensor_msgs::PointCloud2ConstIterator<float> msg_z(*msg, "z");
-  for (size_t i = 0; i < point_count; ++i, ++msg_x, ++msg_y, ++msg_z) {
-    points.emplace_back(*msg_x, *msg_y, *msg_z);
+driver::PointCloudView point_cloud_view(const PointCloud2& msg) {
+  driver::PointCloudView view;
+  view.height = msg.height;
+  view.width = msg.width;
+  view.point_step = msg.point_step;
+  view.fields.reserve(msg.fields.size());
+  for (const auto& field : msg.fields) {
+    view.fields.push_back({field.name, field.offset, field.datatype, field.count});
   }
-  return points;
+  view.data = msg.data.data();
+  view.data_size = msg.data.size();
+  return view;
 }
 
-std::tuple<Vector3dVector, std::vector<double>>
-point_cloud2_to_eigen_with_timestamps(const PointCloud2::ConstSharedPtr& msg) {
-  using sensor_msgs::PointCloud2ConstIterator;
-  // getting points and time in a single cycle loop
-  const size_t point_count = static_cast<size_t>(msg->height) * msg->width;
-  Vector3dVector points;
-  points.reserve(point_count);
-  PointCloud2ConstIterator<float> msg_x(*msg, "x");
-  PointCloud2ConstIterator<float> msg_y(*msg, "y");
-  PointCloud2ConstIterator<float> msg_z(*msg, "z");
+Vector3dVector point_cloud2_to_eigen(const PointCloud2::ConstSharedPtr& msg) {
+  return driver::point_cloud_to_eigen(point_cloud_view(*msg));
+}
 
-  std::vector<double> raw_timestamps;
-  raw_timestamps.reserve(point_count);
-
-  const auto& timestamp_field = std::invoke([&msg]() -> PointField {
-    for (const PointField& field : msg->fields) {
-      // offset_time: Livox ROS driver (uint32 nanoseconds from the scan header stamp)
-      if ((field.name == "t" || field.name == "timestamp" || field.name == "time" || field.name == "stamps" ||
-           field.name == "offset_time")) {
-        if (field.count != 0U) {
-          return field;
-        }
-      }
-    }
-    throw std::invalid_argument("Point cloud needs timestamps for deskewing");
-  });
-
-  // templated lambda (auto) ftw
-  auto extract_points_and_timestamps = [&](auto&& time_iter) {
-    for (size_t i = 0; i < point_count; ++i, ++msg_x, ++msg_y, ++msg_z, ++time_iter) {
-      points.emplace_back(*msg_x, *msg_y, *msg_z);
-      raw_timestamps.emplace_back(static_cast<double>(*time_iter));
-    }
-  };
-
-  switch (timestamp_field.datatype) {
-  case PointField::UINT32: {
-    PointCloud2ConstIterator<uint32_t> msg_time(*msg, timestamp_field.name);
-    extract_points_and_timestamps(msg_time);
-    break;
-  }
-  case PointField::FLOAT32: {
-    PointCloud2ConstIterator<float> msg_time(*msg, timestamp_field.name);
-    extract_points_and_timestamps(msg_time);
-    break;
-  }
-  case PointField::FLOAT64: {
-    PointCloud2ConstIterator<double> msg_time(*msg, timestamp_field.name);
-    extract_points_and_timestamps(msg_time);
-    break;
-  }
-  default:
-    throw std::invalid_argument("Unsupported timestamp field datatype. Please open an issue.");
-  }
-
-  return {points, raw_timestamps};
+std::tuple<Vector3dVector, std::vector<double>> point_cloud2_to_eigen_with_timestamps(
+    const PointCloud2::ConstSharedPtr& msg) {
+  return driver::point_cloud_to_eigen_with_timestamps(point_cloud_view(*msg));
 }
 
 std::vector<float> point_cloud2_to_intensity(const PointCloud2::ConstSharedPtr& msg) {
-  using sensor_msgs::PointCloud2ConstIterator;
-  const size_t point_count = static_cast<size_t>(msg->height) * msg->width;
-
-  const PointField* reflectivity_field = nullptr;
-  const PointField* intensity_field = nullptr;
-  for (const PointField& field : msg->fields) {
-    if (field.name == "reflectivity") {
-      reflectivity_field = &field;
-    } else if (field.name == "intensity") {
-      intensity_field = &field;
-    }
-  }
-
-  std::vector<float> intensities;
-  if (reflectivity_field != nullptr && reflectivity_field->datatype == PointField::UINT16) {
-    intensities.reserve(point_count);
-    PointCloud2ConstIterator<uint16_t> msg_reflectivity(*msg, "reflectivity");
-    for (size_t i = 0; i < point_count; ++i, ++msg_reflectivity) {
-      intensities.push_back(static_cast<float>(*msg_reflectivity));
-    }
-    return intensities;
-  }
-  if (intensity_field != nullptr && intensity_field->datatype == PointField::FLOAT32) {
-    intensities.reserve(point_count);
-    PointCloud2ConstIterator<float> msg_intensity(*msg, "intensity");
-    for (size_t i = 0; i < point_count; ++i, ++msg_intensity) {
-      intensities.push_back(*msg_intensity);
-    }
-    return intensities;
-  }
-  // Neither a uint16 "reflectivity" nor a float32 "intensity" field: intensity unavailable.
-  return {};
+  return driver::point_cloud_to_intensity(point_cloud_view(*msg));
 }
 
 std::vector<float> point_cloud2_field_as_float(const PointCloud2::ConstSharedPtr& msg, const std::string& field_name) {
-  using sensor_msgs::PointCloud2ConstIterator;
-  const size_t point_count = static_cast<size_t>(msg->height) * msg->width;
-  const auto field = std::find_if(msg->fields.cbegin(), msg->fields.cend(),
-                                  [&](const PointField& f) { return f.name == field_name; });
-  if (field == msg->fields.cend()) {
-    return {};
-  }
-  std::vector<float> values;
-  values.reserve(point_count);
-  auto read = [&](auto tag) {
-    PointCloud2ConstIterator<decltype(tag)> it(*msg, field_name);
-    for (size_t i = 0; i < point_count; ++i, ++it) {
-      values.push_back(static_cast<float>(*it));
-    }
-  };
-  switch (field->datatype) {
-  case PointField::FLOAT32: read(float{}); break;
-  case PointField::FLOAT64: read(double{}); break;
-  case PointField::UINT8: read(uint8_t{}); break;
-  case PointField::UINT16: read(uint16_t{}); break;
-  case PointField::UINT32: read(uint32_t{}); break;
-  case PointField::INT8: read(int8_t{}); break;
-  case PointField::INT16: read(int16_t{}); break;
-  case PointField::INT32: read(int32_t{}); break;
-  default: return {};
-  }
-  return values;
+  return driver::point_cloud_field_as_float(point_cloud_view(*msg), field_name);
 }
 } // namespace rko_lio::ros::utils

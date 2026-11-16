@@ -23,6 +23,7 @@
  */
 
 #pragma once
+#include "rko_lio/driver/point_cloud.hpp"
 #include <Eigen/Core>
 #include <sophus/se3.hpp>
 // ros
@@ -32,7 +33,12 @@
 #include <string>
 #include <vector>
 
+// The readers below are the ROS-free ones of rko_lio/driver/point_cloud.hpp applied to a view of
+// the message, so the ROS 2 node and the ROS-free driver read point clouds identically.
 namespace rko_lio::ros::utils {
+// Borrows msg.data; keep the message alive while the view is used.
+driver::PointCloudView point_cloud_view(const sensor_msgs::msg::PointCloud2& msg);
+
 std::vector<Eigen::Vector3d> point_cloud2_to_eigen(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg);
 
 std::tuple<std::vector<Eigen::Vector3d>, std::vector<double>>
