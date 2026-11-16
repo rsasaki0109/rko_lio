@@ -577,7 +577,7 @@ BaseNode::BaseNode(const std::string& node_name, const rclcpp::NodeOptions& opti
     extrinsic_radar2base = *config.extrinsic_radar2base;
     radar_extrinsic_set = true;
   }
-  extrinsics_set = config.extrinsic_imu2base.has_value() && config.extrinsic_lidar2base.has_value();
+  extrinsics_set = static_cast<bool>(config.extrinsic_imu2base) && static_cast<bool>(config.extrinsic_lidar2base);
   if (!extrinsics_set) {
     tf_listener = std::make_shared<tf2_ros::TransformListener>(*tf_buffer);
   }

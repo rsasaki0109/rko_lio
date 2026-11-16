@@ -36,7 +36,7 @@
 namespace rko_lio::driver {
 
 namespace {
-std::optional<Sophus::SE3d> parse_extrinsic(Parameters& params, const std::string& name) {
+Extrinsic parse_extrinsic(Parameters& params, const std::string& name) {
   const std::string param_name = "extrinsic_" + name + "2base_quat_xyzw_xyz";
   const std::vector<double> vec = params.declare<std::vector<double>>(param_name, std::vector<double>{});
 
@@ -48,7 +48,7 @@ std::optional<Sophus::SE3d> parse_extrinsic(Parameters& params, const std::strin
               << Eigen::Map<const Eigen::VectorXd>(vec.data(), static_cast<Eigen::Index>(vec.size())).transpose();
       params.warn(message.str());
     }
-    return std::nullopt;
+    return {};
   }
   Eigen::Quaterniond q(vec[3], vec[0], vec[1], vec[2]); // qw, qx, qy, qz
   if (q.norm() < 1e-6) {
@@ -58,7 +58,7 @@ std::optional<Sophus::SE3d> parse_extrinsic(Parameters& params, const std::strin
   std::ostringstream message;
   message << "Parsed " << name << " extrinsic as: " << extrinsic.log().transpose();
   params.info(message.str());
-  return extrinsic;
+  return {true, extrinsic};
 }
 } // namespace
 

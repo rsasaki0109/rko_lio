@@ -33,10 +33,18 @@
 #include "rko_lio/core/radar_ego_velocity.hpp"
 #include "rko_lio/driver/parameters.hpp"
 #include <chrono>
-#include <optional>
 #include <string>
 
 namespace rko_lio::driver {
+
+// An extrinsic that may be unset. (Not std::optional<Sophus::SE3d>: GCC 13 rejects the implicitly
+// generated move constructor of that optional inside DriverConfig in some builds.)
+struct Extrinsic {
+  bool set = false;
+  Sophus::SE3d pose;
+  explicit operator bool() const { return set; }
+  const Sophus::SE3d& operator*() const { return pose; }
+};
 
 struct DriverConfig {
   // Sensors and frames.
@@ -82,10 +90,10 @@ struct DriverConfig {
 
   // Extrinsics given as parameters (extrinsic_<name>2base_quat_xyzw_xyz). Unset ones come from
   // TF in the ROS 2 node; the ROS-free driver requires the IMU and LiDAR ones.
-  std::optional<Sophus::SE3d> extrinsic_imu2base;
-  std::optional<Sophus::SE3d> extrinsic_lidar2base;
-  std::optional<Sophus::SE3d> extrinsic_cam2base;   // read only with visual fusion on
-  std::optional<Sophus::SE3d> extrinsic_radar2base; // read only with radar fusion on
+  Extrinsic extrinsic_imu2base;
+  Extrinsic extrinsic_lidar2base;
+  Extrinsic extrinsic_cam2base;   // read only with visual fusion on
+  Extrinsic extrinsic_radar2base; // read only with radar fusion on
 };
 
 // Reads every parameter above, in the ROS 2 node's names, types and defaults. Throws
