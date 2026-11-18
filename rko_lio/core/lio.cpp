@@ -1265,7 +1265,10 @@ Vector3dVector LIO::register_scan(const Vector3dVector& scan,
       ? gyro_deskew_history.at(lidar_state.time).value() : Sophus::SO3d();
 
   // Keep the existing translation curve and prediction; replace only deskew rotation.
-  auto relative_pose_at_time = [&](const Nsec time) -> Sophus::SE3d {
+  // The structured bindings are copied in explicitly: capturing them by reference needs a
+  // C++20 compiler that implements P1091 (clang 16+), and the WebAssembly build uses clang 15.
+  auto relative_pose_at_time = [&, avg_body_accel = avg_body_accel,
+                                avg_ang_vel = avg_ang_vel](const Nsec time) -> Sophus::SE3d {
     const double dt = to_seconds(time - lidar_state.time);
     Eigen::Vector6d tau;
     tau.head<3>() = lidar_state.velocity * dt + (avg_body_accel * square(dt) / 2);
